@@ -4398,16 +4398,16 @@ function updateSyncBanner(state, detail) {
             '<b>No Google Sheets connection</b> — records save locally. <u style="cursor:pointer" onclick="nav(\'settings\')">Set up sync</u>'],
     load:  ['rgba(74,154,106,.07)','rgba(74,154,106,.2)','#4a9a6a','&#x21bb; Loading from Google Sheets…'],
     sync:  ['rgba(74,154,106,.07)','rgba(74,154,106,.2)','#4a9a6a','&#x21bb; Saving to Google Sheets…'],
-    ok:    ['rgba(74,154,106,.07)','rgba(74,154,106,.2)','#4a9a6a','&#9679; Google Sheets connected' + (detail ? ' · ' + new Date(detail).toLocaleTimeString() : '')],
+    ok:    ['rgba(74,154,106,.07)','rgba(74,154,106,.2)','#4a9a6a','&#9679; Google Sheets connected' + (detail ? ' · ' + (isNaN(Date.parse(detail)) ? detail : new Date(detail).toLocaleTimeString()) : '')],
     error: ['rgba(192,80,74,.08)','rgba(192,80,74,.3)','var(--red)','&#9888; ' + (detail || 'error')],
     local: ['rgba(201,168,76,.1)','rgba(201,168,76,.3)','#c9a84c','&#9888; ' + (detail || 1) + ' record(s) not yet in Google Sheets']
   };
   const m = S[state] || S.none;
   bar.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:7px 18px;font-size:12px;background:' + m[0] + ';border-bottom:1px solid ' + m[1] + ';color:' + m[2];
-  // Show sync button if connected (and not currently syncing)
-  const showBtn = GSHEETS_URL && state !== 'load' && state !== 'sync';
+  // Show sync button if either backend is connected (and not currently syncing)
+  const showBtn = (GSHEETS_URL || (SB_URL && SB_KEY)) && state !== 'load' && state !== 'sync' && state !== 'syncing';
   const btn = showBtn
-    ? '<button onclick="manualSyncNow()" style="background:transparent;border:1px solid currentColor;color:inherit;padding:3px 12px;border-radius:4px;font-size:11px;cursor:pointer;font-weight:600;letter-spacing:.04em;text-transform:uppercase;flex-shrink:0;margin-left:14px" title="Reload all data from Google Sheets">&#x21bb; Sync Now</button>'
+    ? '<button onclick="manualSyncNow()" style="background:transparent;border:1px solid currentColor;color:inherit;padding:3px 12px;border-radius:4px;font-size:11px;cursor:pointer;font-weight:600;letter-spacing:.04em;text-transform:uppercase;flex-shrink:0;margin-left:14px" title="Sync to Supabase + Google Sheets">&#x21bb; Sync Now</button>'
     : '';
   bar.innerHTML = '<span style="flex:1">' + m[3] + '</span>' + btn;
 }
@@ -4483,21 +4483,61 @@ function clearStuckEdits() {
 // clearLabelsFromSheet removed — label queue is in-app only.
 
 async function manualSyncNow() {
-  if (!GSHEETS_URL) {
-    alert('Google Sheets is not connected. Open Settings to configure.');
+  const hasSB    = !!(SB_URL && SB_KEY);
+  const hasSheets = !!GSHEETS_URL;
+
+  if (!hasSB && !hasSheets) {
+    alert('No sync configured. Open Settings to connect Supabase or Google Sheets.');
     return;
   }
-  updateSyncBanner('sync');
-  const synced = await retryPendingSync();
-  await loadFromSheets(GSHEETS_URL);
-  // Show summary if anything was retried
-  if (synced.total > 0) {
-    let msg = '✓ Sync complete\n';
-    if (synced.edits > 0)   msg += '  ' + synced.edits + ' edit(s) synced\n';
-    if (synced.adds > 0)    msg += '  ' + synced.adds + ' new record(s) synced\n';
-    if (synced.deletes > 0) msg += '  ' + synced.deletes + ' delete(s) synced\n';
+
+  updateSyncBanner('syncing', 'Syncing…');
+
+  const results = { sb: null, sheets: null };
+
+  // ── Push any pending local edits to both backends ─────────────────────────
+  // Supabase: pending edits are written immediately on each change, so a
+  // reload is sufficient to confirm the state is current.
+  if (hasSB) {
+    try {
+      await loadFromSupabase();
+      results.sb = 'ok';
+    } catch(e) {
+      results.sb = 'error: ' + e.message;
+      console.error('[Sync] Supabase error:', e);
+    }
+  }
+
+  // Google Sheets: retry any operations that didn't make it
+  if (hasSheets) {
+    try {
+      const synced = await retryPendingSync();
+      await loadFromSheets(GSHEETS_URL);
+      results.sheets = synced.total > 0
+        ? synced.edits + ' edit(s), ' + synced.adds + ' add(s), ' + synced.deletes + ' delete(s) synced'
+        : 'ok';
+    } catch(e) {
+      results.sheets = 'error: ' + e.message;
+      console.error('[Sync] Sheets error:', e);
+    }
+  }
+
+  // ── Banner & summary ───────────────────────────────────────────────────────
+  const parts = [];
+  if (hasSB)     parts.push('Supabase: ' + (results.sb    === 'ok' ? '✓' : results.sb));
+  if (hasSheets) parts.push('Sheets: '   + (results.sheets === 'ok' ? '✓' : results.sheets));
+
+  const allOk = (!hasSB || results.sb === 'ok') && (!hasSheets || results.sheets.startsWith('ok') || !results.sheets.startsWith('error'));
+  updateSyncBanner(allOk ? 'ok' : 'error', parts.join(' · '));
+
+  // Show detail only if something interesting happened or there were errors
+  const hasDetail = (results.sheets && results.sheets !== 'ok') || (!allOk);
+  if (hasDetail) {
+    let msg = 'Sync complete\n\n';
+    if (hasSB)     msg += 'Supabase: '        + (results.sb    || '—') + '\n';
+    if (hasSheets) msg += 'Google Sheets: '   + (results.sheets || '—') + '\n';
     const remaining = Object.keys(PENDING_EDITS).length + NEW_RECORDS.length + PENDING_DELETES.length;
-    if (remaining > 0) msg += '\n⚠ ' + remaining + ' operation(s) still pending — check Apps Script deployment';
+    if (remaining > 0) msg += '\n⚠ ' + remaining + ' operation(s) still pending';
     alert(msg);
   }
 }
@@ -4567,7 +4607,7 @@ async function loadFromSheets(url){
     else if (ST.view === 'dups')   renderDups();
     else if (ST.view === 'breakdown') renderBreakdown();
     else if (ST.view === 'settings') renderSettings();
-    updateSyncBanner('ok', new Date().toLocaleTimeString());
+    updateSyncBanner('ok', new Date().toISOString());
     loadSpotPrices();
   }catch(e){updateSyncBanner('error',e.message);if(!SHEETS_LIVE)loadSpotPrices();}
 }
