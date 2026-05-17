@@ -2146,23 +2146,40 @@ async function sbFetch(path, opts = {}) {
   return body ? JSON.parse(body) : null;
 }
 
-/** Load all records from Supabase and rebuild D / ALL_ITEMS. */
+/** Load all records from Supabase and rebuild D / ALL_ITEMS.
+ *  Paginates in batches of 1000 to get past Supabase's default row limit. */
 async function loadFromSupabase() {
   if (!SB_URL || !SB_KEY) return false;
   updateSyncBanner('syncing', 'Loading from Supabase…');
   try {
-    const rows = await sbFetch('/' + SB_TABLE + '?select=id,sheet,data&order=id.asc');
-    if (!Array.isArray(rows)) throw new Error('Unexpected Supabase response');
+    const PAGE = 1000;
+    let allRows = [], offset = 0, page;
+
+    // Fetch pages until we get a partial page (no more data)
+    do {
+      page = await sbFetch(
+        '/' + SB_TABLE +
+        '?select=id,sheet,data' +
+        '&order=id.asc' +
+        '&limit=' + PAGE +
+        '&offset=' + offset,
+        { headers: { 'Range-Unit': 'items', 'Range': offset + '-' + (offset + PAGE - 1) } }
+      );
+      if (!Array.isArray(page)) break;
+      allRows = allRows.concat(page);
+      offset += PAGE;
+    } while (page.length === PAGE);
+
     const newD = {};
     Object.keys(SHEET_MAP).forEach(k => newD[k] = []);
-    for (const row of rows) {
+    for (const row of allRows) {
       if (newD[row.sheet]) newD[row.sheet].push({ ...row.data, id: row.id });
     }
     Object.assign(D, newD);
     buildFlat();
     if (typeof renderDash === 'function') renderDash();
     if (ST && ST.view === 'inv') renderInv();
-    updateSyncBanner('ok', 'Supabase · ' + rows.length + ' records · ' + new Date().toLocaleTimeString());
+    updateSyncBanner('ok', 'Supabase · ' + allRows.length + ' records · ' + new Date().toLocaleTimeString());
     return true;
   } catch(err) {
     const m = err.message || '';
@@ -2204,6 +2221,47 @@ async function deleteFromSupabase(sheetKey, id) {
 }
 
 /** One-time migration: upload embedded D snapshot to Supabase. */
+
+/** Load fresh from Google Sheets then push everything to Supabase in one step. */
+async function migrateFromSheetsToSupabase() {
+  if (!SB_URL || !SB_KEY) { alert('Configure Supabase credentials first, then try again.'); return; }
+  if (!GSHEETS_URL) { alert('Paste your Google Apps Script URL in the Google Apps Script section first.'); return; }
+
+  if (!confirm('This will:\n1. Load all records from Google Sheets\n2. Upload them to Supabase\n\nProceed?')) return;
+
+  // Step 1: load fresh from GAS
+  updateSyncBanner('syncing', 'Loading from Google Sheets…');
+  try {
+    await loadFromSheets(GSHEETS_URL);
+  } catch(e) {
+    alert('Could not load from Google Sheets: ' + e.message);
+    return;
+  }
+
+  const total = Object.values(D).reduce((s, a) => s + a.length, 0);
+  if (!total) { alert('No records loaded from Google Sheets.'); return; }
+
+  // Step 2: push to Supabase
+  updateSyncBanner('syncing', 'Uploading ' + total + ' records to Supabase…');
+  let done = 0, errs = 0;
+  for (const [sheet, records] of Object.entries(D)) {
+    for (const rec of records) {
+      try {
+        const { id, ...data } = rec;
+        await sbFetch('/' + SB_TABLE, {
+          method: 'POST',
+          headers: { 'Prefer': 'resolution=merge-duplicates,return=minimal' },
+          body: JSON.stringify({ id: String(id), sheet, data })
+        });
+        done++;
+      } catch(e) { errs++; console.error('Migration error', sheet, rec.id, e.message); }
+    }
+  }
+
+  alert('Done! ' + done + ' records uploaded to Supabase.' + (errs ? ' (' + errs + ' errors — check console)' : ''));
+  await loadFromSupabase();
+}
+
 async function migrateToSupabase() {
   if (!SB_URL || !SB_KEY) { alert('Configure Supabase first in Settings.'); return; }
   const total = Object.values(D).reduce((s, a) => s + a.length, 0);
@@ -4641,7 +4699,7 @@ function renderSettings(){
      +'<div style="font-size:11px;color:var(--muted);word-break:break-all;margin-bottom:10px">'+SB_URL+'</div>'
      +'<div style="display:flex;gap:8px;flex-wrap:wrap">'
      +'<button class="bp green" onclick="loadFromSupabase()">Reload Data</button>'
-     +'<button class="bg" onclick="migrateToSupabase()" style="font-size:12px">⬆ Re-import embedded data</button>'
+     +'<button class="bg" onclick="migrateToSupabase()" style="font-size:12px">⬆ Re-import embedded data</button>'+'<button class="bg" onclick="migrateFromSheetsToSupabase()" style="font-size:12px;border-color:rgba(0,154,68,.4);color:#4caf7d">⬆ Migrate from Google Sheets</button>'
      +'<button class="bg" style="color:var(--red)" onclick="SB_URL=\'\';SB_KEY=\'\';localStorage.removeItem(\'cv_sb_url\');localStorage.removeItem(\'cv_sb_key\');renderSettings();">Disconnect</button>'
      +'</div>';
   }else{
@@ -4656,7 +4714,7 @@ function renderSettings(){
      +'</div>'
      +'<div style="display:flex;gap:8px;margin-bottom:8px">'
      +'<button class="bp" onclick="saveSupabaseConfig()" style="flex:1">Save & Connect</button>'
-     +'<button class="bg" onclick="migrateToSupabase()" style="flex:1;font-size:12px">⬆ Migrate data</button>'
+     +'<button class="bg" onclick="migrateFromSheetsToSupabase()" style="flex:1;font-size:12px;border-color:rgba(0,154,68,.4);color:#4caf7d">⬆ Migrate from Google Sheets</button>'
      +'</div>';
   }
 
