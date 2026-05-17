@@ -2165,7 +2165,16 @@ async function loadFromSupabase() {
     updateSyncBanner('ok', 'Supabase · ' + rows.length + ' records · ' + new Date().toLocaleTimeString());
     return true;
   } catch(err) {
-    updateSyncBanner('error', 'Supabase load failed: ' + err.message);
+    const m = err.message || '';
+    const hint = (m.includes('PGRST125') || m.includes('Invalid path'))
+      ? 'Table not found — run the migration SQL in Supabase SQL Editor first.'
+      : m.includes('401') || m.includes('Invalid API key')
+      ? 'Invalid Anon Key — re-check your key in Settings.'
+      : m.includes('Failed to fetch') || m.includes('NetworkError')
+      ? 'Cannot reach Supabase — check your Project URL.'
+      : 'Supabase load failed: ' + m;
+    updateSyncBanner('error', hint);
+    console.error('[Supabase] load error:', err);
     return false;
   }
 }
@@ -4500,14 +4509,13 @@ async function loadFromSheets(url){
     else if (ST.view === 'dups')   renderDups();
     else if (ST.view === 'breakdown') renderBreakdown();
     else if (ST.view === 'settings') renderSettings();
-    updateSyncBanner('ok', d._ts);
+    updateSyncBanner('ok', new Date().toLocaleTimeString());
     loadSpotPrices();
   }catch(e){updateSyncBanner('error',e.message);if(!SHEETS_LIVE)loadSpotPrices();}
 }
 
 async function syncRecordToSheets(sheetKey, record) {
-  if (SB_URL && SB_KEY) { try { await insertInSupabase(sheetKey, record); } catch(e) { console.error('[SB insert]', e); } }
-  if (SB_URL && SB_KEY) { try { await insertInSupabase(sheetKey, record); return; } catch(e) { console.error('SB insert:', e); } }
+  if (SB_URL && SB_KEY) { try { await insertInSupabase(sheetKey, record); return; } catch(e) { console.error('[SB insert]', e); } }
   if (!GSHEETS_URL) return null;
   updateSyncBanner('sync');
   try {
@@ -4771,18 +4779,16 @@ document.body.classList.add(localStorage.getItem('cv_theme')||'dark');
 updateBadges();
 renderDash();
 refreshSidebarTotal();
-if (GSHEETS_URL) {
+if (SB_URL && SB_KEY) {
+  // Supabase is configured — use it as primary database
+  loadFromSupabase();
+} else if (GSHEETS_URL) {
+  // Fall back to Google Sheets if Supabase not yet configured
   loadFromSheets(GSHEETS_URL).then(async () => {
-    // Auto-retry any pending operations from previous sessions
     const pendCount = Object.keys(PENDING_EDITS).length + NEW_RECORDS.length + PENDING_DELETES.length;
     if (pendCount > 0) {
-      console.log('[Init] Auto-retrying ' + pendCount + ' pending operation(s)...');
       const synced = await retryPendingSync();
-      if (synced.total > 0) {
-        console.log('[Init] Auto-sync result: ' + JSON.stringify(synced));
-        // Reload one more time to see the latest state
-        await loadFromSheets(GSHEETS_URL);
-      }
+      if (synced.total > 0) await loadFromSheets(GSHEETS_URL);
     }
   });
 } else {
