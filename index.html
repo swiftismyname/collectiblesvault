@@ -699,7 +699,7 @@ function buildFlat() {
   //   serial ↔ denomination (e.g. denomination="880925.69/42624647")
   const _graderPat = /^(PCGS|NGC|ANACS|ICG|PMG|CGC|CAC|CACG|SEGS|PCI|NCS|National|Self|ACE|HGA)$/i;
   const _gradePat  = /^(MS|VF|XF|EF|AU|PR|PF|SP|BU|UNC|Genuine|F\s*\d)/i;
-  const _pcgsSerPat = /^\d{4,6}\.\d{1,2}\/\d+/;
+  const _pcgsSerPat = /^\d{3,}\.\d{1,2}\/\d+/;
   for (const key of Object.keys(D)) {
     if (!Array.isArray(D[key])) continue;
     D[key].forEach(r => {
@@ -2366,7 +2366,7 @@ function _parsePCGSSerial(serial) {
   const s = String(serial || '').trim();
   if (!s) return null;
   // Strict PCGS format: digits.digits/digits
-  const m = s.match(/^(\d{4,6})\.(\d{2})\/(\d{6,8})$/);
+  const m = s.match(/^(\d{3,})\.(\d{1,2})\/(\d{5,})$/);
   if (m) return { pcgsNo: m[1], gradeNo: m[2], certNo: m[3] };
   return null; // not a PCGS-format serial
 }
