@@ -4877,22 +4877,35 @@ document.body.classList.add(localStorage.getItem('cv_theme')||'dark');
 updateBadges();
 renderDash();
 refreshSidebarTotal();
-if (SB_URL && SB_KEY) {
-  // Supabase is configured — use it as primary database
-  loadFromSupabase();
-} else if (GSHEETS_URL) {
-  // Fall back to Google Sheets if Supabase not yet configured
-  loadFromSheets(GSHEETS_URL).then(async () => {
-    const pendCount = Object.keys(PENDING_EDITS).length + NEW_RECORDS.length + PENDING_DELETES.length;
-    if (pendCount > 0) {
-      const synced = await retryPendingSync();
-      if (synced.total > 0) await loadFromSheets(GSHEETS_URL);
-    }
-  });
-} else {
-  checkSyncState();
-  loadSpotPrices();
-}
+
+// ── Auto-sync both backends on every load ────────────────────────────────────
+(async function bootSync() {
+  const hasSB     = !!(SB_URL && SB_KEY);
+  const hasSheets = !!GSHEETS_URL;
+
+  if (hasSB) {
+    // Primary: load fresh data from Supabase
+    await loadFromSupabase();
+  }
+
+  if (hasSheets) {
+    // Parallel: flush any pending edits to Google Sheets and pull latest
+    retryPendingSync().then(async synced => {
+      await loadFromSheets(GSHEETS_URL);
+      // If Supabase is also connected, update banner to show both are synced
+      if (hasSB) {
+        updateSyncBanner('ok', 'Supabase ✓ · Sheets ✓ · ' + new Date().toLocaleTimeString());
+      }
+    }).catch(err => {
+      console.warn('[Boot] Sheets sync failed:', err.message);
+    });
+  }
+
+  if (!hasSB && !hasSheets) {
+    checkSyncState();
+    loadSpotPrices();
+  }
+})();
 
 // ── Item detail & edit from duplicates ───────────────────────────────────────
 function openItemDetail(row) {
