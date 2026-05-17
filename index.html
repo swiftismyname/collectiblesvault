@@ -1684,7 +1684,7 @@ function renderInv(){
             <div style="display:flex;gap:3px;justify-content:center;align-items:center">
               <button onclick="toggleLabelQueue('${item.sheet}','${item.id}',event)" title="${inQ?'Remove from label queue':'Add to label print queue'}" style="background:${inQ?'var(--gold2)':'transparent'};border:1px solid ${inQ?'var(--gold)':'var(--border)'};color:${inQ?'var(--gold)':'var(--dim)'};border-radius:4px;width:26px;height:24px;cursor:pointer;font-size:13px;line-height:1;padding:0">${inQ?'\u2713':'+'}</button>
               ${(item.raw.type||item.raw.series||['gradedUS','rawUS'].includes(item.sheet))?`<button onclick="event.stopPropagation();lookupRecord(ALL_ITEMS[${ALL_ITEMS.indexOf(item)}])" title="Lookup in US Coin Reference" class="lookup-btn" id="lookup-btn-${cn(item.id)}" style="padding:2px 5px;font-size:10px">🔍</button>`:''}
-              ${['gradedUS','gradedSilver'].includes(item.sheet)&&isPCGSGraded(item.raw.gradingAuth)?`<button onclick="event.stopPropagation();lookupPCGS(ALL_ITEMS[${ALL_ITEMS.indexOf(item)}])" title="Look up on PCGS CoinFacts" class="lookup-btn" id="pcgs-btn-${cn(item.id)}" style="padding:2px 5px;font-size:10px;background:rgba(212,175,55,.12);border-color:rgba(212,175,55,.45);color:#d4af37">🏆</button>`:''}
+              ${['gradedUS','gradedSilver'].includes(item.sheet)?`<button onclick="event.stopPropagation();lookupPCGS(ALL_ITEMS[${ALL_ITEMS.indexOf(item)}])" title="Look up on PCGS CoinFacts" class="lookup-btn" id="pcgs-btn-${cn(item.id)}" style="padding:2px 5px;font-size:10px;${isPCGSGraded(item.raw.gradingAuth)?'background:rgba(212,175,55,.12);border-color:rgba(212,175,55,.45);color:#d4af37':'border-color:rgba(255,200,50,.25);color:rgba(212,175,55,.45)'}">🏆</button>`:''}
               ${['gradedUS','rawUS','gradedSilver','rawSilver'].includes(item.sheet)?`<button onclick="event.stopPropagation();lookupNGC(ALL_ITEMS[${ALL_ITEMS.indexOf(item)}])" title="NGC Price Guide &amp; Cert Lookup" class="lookup-btn" id="ngc-btn-${cn(item.id)}" style="padding:2px 5px;font-size:10px;background:rgba(0,154,68,.1);border-color:rgba(0,154,68,.35);color:#4caf7d">📗</button>`:''}
             </div>
           </td>
@@ -1861,10 +1861,10 @@ function showDetail(item){
       pcgsBtn.className = 'lookup-btn';
       pcgsBtn.id = 'pcgs-btn-' + cn(item.id);
       pcgsBtn.textContent = '🏆 PCGS';
-      pcgsBtn.title = pcgsIs ? 'Look up on PCGS CoinFacts' : 'Look up on PCGS CoinFacts (set Grading Auth to PCGS for auto cert lookup)';
+      pcgsBtn.title = 'Look up on PCGS CoinFacts' + (pcgsIs ? '' : ' (Grading Auth: ' + (item.raw.gradingAuth||'not set') + ')');
       pcgsBtn.style.cssText = pcgsIs
         ? 'background:rgba(212,175,55,.12);border-color:rgba(212,175,55,.45);color:#d4af37'
-        : 'background:transparent;border-color:rgba(255,255,255,.2);color:var(--dim)';
+        : 'border-color:rgba(255,200,50,.25);color:rgba(212,175,55,.45)';
       pcgsBtn.onclick = () => lookupPCGS(item);
       actions.appendChild(pcgsBtn);
     }
@@ -2371,11 +2371,9 @@ async function lookupPCGS(item) {
   const raw = item.raw;
   const btn = document.getElementById('pcgs-btn-' + cn(item.id));
 
-  // Only process PCGS-graded records
-  if (!isPCGSGraded(raw.gradingAuth)) {
-    showPCGSModal(item, null, 'NOT_PCGS', null);
-    return;
-  }
+  // Warn if not confirmed PCGS but still allow lookup
+  // (gradingAuth may be missing from Supabase due to column mapping)
+  const warnNotPCGS = raw.gradingAuth && !isPCGSGraded(raw.gradingAuth);
 
   if (!GSHEETS_URL) {
     showPCGSModal(item, null, 'NO_GAS', null);
