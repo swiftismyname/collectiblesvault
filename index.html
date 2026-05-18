@@ -1761,6 +1761,17 @@ function showDetail(item){
     v!==null && v!=='' && v!==undefined && k!=='id' && !_hiddenFields.has(k)
   ).map(([k,v])=>{
     let lbl=k.replace(/([A-Z])/g,' $1').replace(/^./,s=>s.toUpperCase());
+
+    // Rename 'weight' based on sheet context
+    if (k === 'weight') {
+      const _metalSheets = new Set(['gold','silver','copper','platinum','palladium','gradedSilver','rawSilver']);
+      lbl = _metalSheets.has(item.sheet)
+        ? 'Precious Metal Content (troy oz)'
+        : 'Weight';
+    }
+    // Rename 'coinWeightG' always
+    if (k === 'coinWeightG') lbl = 'Coin Weight (g)';
+
     // Make silverContent label context-aware — "Silver Content" only if it's actually silver
     if (k === 'silverContent') {
       const comp = String(raw.composition || raw.type || raw.category || '').toLowerCase();
@@ -2527,7 +2538,13 @@ function _pcgsFieldRows(data, raw) {
   if (price && parseFloat(price) > 0)
     add('value',     'PCGS Price Guide',       parseFloat(price).toFixed(2),                             raw.value);
   add('composition', 'Composition',            g(data,'Composition','Metal','Alloy'),                    raw.composition);
-  add('weight',      'Weight',                 g(data,'Weight','WeightGrams','WeightOz'),                raw.weight);
+  // PCGS weight = total coin weight (grams usually) — stored as coinWeightG to
+  // avoid overwriting precious metal content (troy oz) on silver/gold records
+  const _pcgsWt = g(data,'Weight','WeightGrams','WeightOz');
+  if (_pcgsWt) {
+    const _metalSh = new Set(['gold','silver','copper','platinum','palladium','gradedSilver','rawSilver']);
+    add('coinWeightG', 'Coin Weight (g)', _pcgsWt, raw.coinWeightG);
+  }
   add('diameter',    'Diameter',               g(data,'Diameter','DiameterMM','Size'),                   raw.diameter);
   add('edge',        'Edge',                   g(data,'Edge','EdgeType','EdgeDescription'),              raw.edge);
   add('designer',    'Designer',               g(data,'Designer','Engraver','Artist','ObverseDesigner'),  raw.designer);
@@ -2843,7 +2860,8 @@ function _numistaCards(types) {
 }
 
 /** Fetch full type and render field checkboxes for phase 2. */
-async function _numistaFieldRows(type, raw) {
+async function _numistaFieldRows(type, raw, rawSheet) {
+  rawSheet = rawSheet || '';
   // type may be a search-result stub; fetch full details
   let full = type;
   if (!full.composition && !full.weight) {
@@ -2856,12 +2874,17 @@ async function _numistaFieldRows(type, raw) {
   const compText = full.composition && full.composition.text ? full.composition.text : null;
   if (compText) fields.push({ field:'composition', label:'Composition', refVal: compText, curVal: raw.composition||'' });
 
-  // Weight — Numista gives grams; our record uses oz for silver/coins
+  // Coin weight from Numista (total physical weight in grams) → stored as coinWeightG
+  // This is DIFFERENT from 'weight' on precious metal records which = troy oz of metal content
   if (full.weight) {
-    const oz = (full.weight / 31.1035).toFixed(4);
-    const display = full.weight + ' g (' + oz + ' oz)';
-    const isEmpty = !raw.weight || parseFloat(raw.weight) === 0;
-    fields.push({ field:'weight', label:'Weight', refVal: parseFloat(oz), refDisplay: display, curVal: raw.weight||'', isEmpty });
+    const _metalSheets = new Set(['gold','silver','copper','platinum','palladium','gradedSilver','rawSilver']);
+    if (_metalSheets.has(rawSheet)) {
+      // Precious metal record: store as coinWeightG to avoid overwriting metal content weight
+      fields.push({ field:'coinWeightG', label:'Coin Weight (g)', refVal: full.weight, curVal: raw.coinWeightG||'', isEmpty: !raw.coinWeightG });
+    } else {
+      // Non-precious-metal record: store as coinWeightG (still labeled clearly)
+      fields.push({ field:'coinWeightG', label:'Coin Weight (g)', refVal: full.weight, curVal: raw.coinWeightG||'', isEmpty: !raw.coinWeightG });
+    }
   }
 
   // Diameter (Numista: size in mm)
@@ -2964,7 +2987,7 @@ function showNumistaModal(item, types, corsErr, errMsg) {
     selIdx = idx;
     phase = 'loading';
     _renderNumi();
-    const html = await _numistaFieldRows(_numistaModalTypes[idx], item.raw);
+    const html = await _numistaFieldRows(_numistaModalTypes[idx], item.raw, item.sheet);
     phase = 'fields';
     _renderNumi(html);
   };
