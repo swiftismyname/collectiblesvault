@@ -157,6 +157,54 @@ tbody tr.sel td{background:rgba(201,168,76,.06)}
 .ref-field-label{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);flex-shrink:0;width:110px}
 .ref-field-old{font-size:12px;color:var(--dim);flex:1;text-align:center}
 .ref-field-new{font-size:12px;color:var(--green);font-weight:600;flex:1;text-align:right}
+
+/* ── THEMES ──────────────────────────────────────────────────────────────────
+   Theme 1: Dark Gold (default) — warm dark, gold accents
+   Theme 2: Antiquity           — warm parchment light, aged manuscript
+   Theme 3: Steel Vault         — cool dark charcoal, steel-blue accents
+   Theme 4: Emerald             — deep green dark, emerald accents
+──────────────────────────────────────────────────────────────────────────── */
+
+/* Antiquity — light parchment */
+body.theme-antiquity{
+  --bg:#f7f0de;--bg2:#ede4ca;--bg3:#fdfaf0;--bg4:#e5dcc6;
+  --gold:#8b5e14;--gold2:rgba(139,94,20,.15);--gold3:rgba(139,94,20,.28);
+  --text:#1e140a;--muted:#7a6040;--dim:#b8a878;
+  --border:#cdc0a0;--green:#2d6e40;--red:#962820;
+}
+body.theme-antiquity #sb{background:#ede4ca;border-right:1px solid #cdc0a0}
+body.theme-antiquity input,body.theme-antiquity select,body.theme-antiquity textarea{background:#fdfaf0;color:#1e140a;border-color:#cdc0a0}
+body.theme-antiquity select option{background:#fdfaf0}
+body.theme-antiquity .dp-header{background:#ede4ca;border-bottom:1px solid #cdc0a0}
+body.theme-antiquity #sync-banner{font-family:'Cormorant Garamond',serif;letter-spacing:.03em}
+
+/* Steel Vault — cool dark, steel blue */
+body.theme-steel{
+  --bg:#090c12;--bg2:#0f1420;--bg3:#131928;--bg4:#192030;
+  --gold:#4a88c8;--gold2:rgba(74,136,200,.14);--gold3:rgba(74,136,200,.28);
+  --text:#b8cce0;--muted:#506880;--dim:#283850;
+  --border:#1e2c40;--green:#2a9060;--red:#c84040;
+}
+body.theme-steel #sb{background:#0d1420}
+body.theme-steel input,body.theme-steel select,body.theme-steel textarea{background:#131928;color:#b8cce0;border-color:#1e2c40}
+body.theme-steel select option{background:#131928}
+body.theme-steel .ni.on,.theme-steel .ni:hover{background:rgba(74,136,200,.15)!important}
+body.theme-steel .nbadge{background:rgba(74,136,200,.2)!important;color:#4a88c8!important}
+body.theme-steel #sync-banner{font-family:'Karla',sans-serif;letter-spacing:.05em;text-transform:uppercase;font-size:11px}
+
+/* Emerald — deep forest dark, emerald accents */
+body.theme-emerald{
+  --bg:#060e08;--bg2:#0a1a0e;--bg3:#0e2014;--bg4:#122818;
+  --gold:#3ab868;--gold2:rgba(58,184,104,.13);--gold3:rgba(58,184,104,.26);
+  --text:#c0e0c8;--muted:#50806a;--dim:#254830;
+  --border:#183824;--green:#38b060;--red:#c04848;
+}
+body.theme-emerald #sb{background:#0a1a0e}
+body.theme-emerald input,body.theme-emerald select,body.theme-emerald textarea{background:#0e2014;color:#c0e0c8;border-color:#183824}
+body.theme-emerald select option{background:#0e2014}
+body.theme-emerald .ni.on,.theme-emerald .ni:hover{background:rgba(58,184,104,.15)!important}
+body.theme-emerald .nbadge{background:rgba(58,184,104,.2)!important;color:#3ab868!important}
+
 body.light{--bg:#f5f0e3;--bg2:#ebe6d6;--bg3:#fffcf3;--bg4:#f0ebd9;--text:#2a2418;--muted:#6a5f4a;--dim:#9a8e74;--border:#d8d0bc}
 body.light #sb{background:#ebe5d3}
 body.light input,body.light select,body.light textarea{background:#fff;color:#2a2418}
@@ -5048,7 +5096,17 @@ function setFont(key) {
 // Apply saved font on load
 applyFont(localStorage.getItem('cv_font') || 'vault');
 
-function setTheme(t){document.body.classList.remove('light','dark');document.body.classList.add(t);localStorage.setItem('cv_theme',t);if(ST&&ST.view==='settings')renderSettings();}
+function setTheme(t){
+  document.body.classList.remove('light','dark','theme-antiquity','theme-steel','theme-emerald');
+  // Map legacy light/dark to theme names; also accept new theme names
+  if (t === 'light') document.body.classList.add('light');
+  else if (t === 'theme-antiquity') document.body.classList.add('theme-antiquity');
+  else if (t === 'theme-steel')     document.body.classList.add('theme-steel');
+  else if (t === 'theme-emerald')   document.body.classList.add('theme-emerald');
+  else document.body.classList.add('dark');  // default dark gold
+  localStorage.setItem('cv_theme', t);
+  if (ST && ST.view === 'settings') renderSettings();
+}
 
 
 function saveSupabaseConfig() {
@@ -5130,7 +5188,43 @@ function renderSettings(){
     +'<div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:10px;text-transform:uppercase;letter-spacing:.06em">Google Apps Script</div>'
     +g+'</div>',
     '<div class="stt">Appearance</div>',
-    '<div style="background:var(--bg3);border:1px solid var(--border);border-radius:7px;padding:18px;margin-bottom:24px"><div style="display:flex;gap:10px">'+tb('dark','&#127769;','Dark')+tb('light','&#9728;','Light')+'</div></div>',
+    '<div style="background:var(--bg3);border:1px solid var(--border);border-radius:7px;padding:18px;margin-bottom:24px">'
+    +'<div style="font-size:11px;color:var(--dim);margin-bottom:12px">Click a theme to switch instantly. Your choice is saved.</div>'
+    +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">'
+
+    // Dark Gold
+    +'<div onclick="setTheme(\'dark\')" style="cursor:pointer;border-radius:7px;overflow:hidden;border:2px solid '+(theme==='dark'?'var(--gold)':'var(--border)')+';transition:border-color .2s">'
+    +'<div style="background:#0b0a08;padding:10px 12px">'
+    +'<div style="display:flex;gap:5px;margin-bottom:7px"><div style="width:8px;height:8px;border-radius:50%;background:#c9a84c"></div><div style="width:8px;height:8px;border-radius:50%;background:#4a4030"></div><div style="width:8px;height:8px;border-radius:50%;background:#252018"></div></div>'
+    +'<div style="font-size:11px;color:#8a7f6a;font-family:Karla,sans-serif">Dark Gold '+(theme==='dark'?'<span style="color:#c9a84c">✓</span>':'')+'</div>'
+    +'<div style="font-size:9px;color:#4a4030;margin-top:2px">Default · warm &amp; rich</div>'
+    +'</div></div>'
+
+    // Antiquity
+    +'<div onclick="setTheme(\'theme-antiquity\')" style="cursor:pointer;border-radius:7px;overflow:hidden;border:2px solid '+(theme==='theme-antiquity'?'#8b5e14':'#cdc0a0')+';transition:border-color .2s">'
+    +'<div style="background:#f7f0de;padding:10px 12px">'
+    +'<div style="display:flex;gap:5px;margin-bottom:7px"><div style="width:8px;height:8px;border-radius:50%;background:#8b5e14"></div><div style="width:8px;height:8px;border-radius:50%;background:#b8a878"></div><div style="width:8px;height:8px;border-radius:50%;background:#cdc0a0"></div></div>'
+    +'<div style="font-size:11px;color:#7a6040;font-family:\'Cormorant Garamond\',serif">Antiquity '+(theme==='theme-antiquity'?'<span style="color:#8b5e14">✓</span>':'')+'</div>'
+    +'<div style="font-size:9px;color:#b8a878;margin-top:2px">Light · parchment &amp; aged</div>'
+    +'</div></div>'
+
+    // Steel Vault
+    +'<div onclick="setTheme(\'theme-steel\')" style="cursor:pointer;border-radius:7px;overflow:hidden;border:2px solid '+(theme==='theme-steel'?'#4a88c8':'#1e2c40')+';transition:border-color .2s">'
+    +'<div style="background:#090c12;padding:10px 12px">'
+    +'<div style="display:flex;gap:5px;margin-bottom:7px"><div style="width:8px;height:8px;border-radius:50%;background:#4a88c8"></div><div style="width:8px;height:8px;border-radius:50%;background:#283850"></div><div style="width:8px;height:8px;border-radius:50%;background:#1e2c40"></div></div>'
+    +'<div style="font-size:11px;color:#506880;font-family:Karla,sans-serif;letter-spacing:.05em">Steel Vault '+(theme==='theme-steel'?'<span style="color:#4a88c8">✓</span>':'')+'</div>'
+    +'<div style="font-size:9px;color:#283850;margin-top:2px">Dark · cool &amp; metallic</div>'
+    +'</div></div>'
+
+    // Emerald
+    +'<div onclick="setTheme(\'theme-emerald\')" style="cursor:pointer;border-radius:7px;overflow:hidden;border:2px solid '+(theme==='theme-emerald'?'#3ab868':'#183824')+';transition:border-color .2s">'
+    +'<div style="background:#060e08;padding:10px 12px">'
+    +'<div style="display:flex;gap:5px;margin-bottom:7px"><div style="width:8px;height:8px;border-radius:50%;background:#3ab868"></div><div style="width:8px;height:8px;border-radius:50%;background:#254830"></div><div style="width:8px;height:8px;border-radius:50%;background:#183824"></div></div>'
+    +'<div style="font-size:11px;color:#50806a;font-family:Karla,sans-serif">Emerald '+(theme==='theme-emerald'?'<span style="color:#3ab868">✓</span>':'')+'</div>'
+    +'<div style="font-size:9px;color:#254830;margin-top:2px">Dark · forest &amp; deep</div>'
+    +'</div></div>'
+
+    +'</div></div>',
     '<div class="stt">Typography</div>',
     (function(){
       const activeFont = localStorage.getItem('cv_font') || 'vault';
@@ -5211,7 +5305,7 @@ function renderSettings(){
   ].join('\n');
 }
 
-document.body.classList.add(localStorage.getItem('cv_theme')||'dark');
+setTheme(localStorage.getItem('cv_theme') || 'dark');
 updateBadges();
 renderDash();
 refreshSidebarTotal();
