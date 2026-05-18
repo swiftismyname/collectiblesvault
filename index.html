@@ -2168,21 +2168,34 @@ async function loadFromSupabase() {
   updateSyncBanner('syncing', 'Loading from Supabase…');
   try {
     const PAGE = 1000;
-    let allRows = [], offset = 0, page;
+    let allRows = [], offset = 0, total = null;
 
-    // Paginate through all records — Supabase caps at 1000 rows per request by default
+    // Paginate through all records using count=exact to verify we got everything
     do {
-      page = await sbFetch(
-        '/' + SB_TABLE +
-        '?select=id,sheet,data' +
-        '&order=id.asc' +
-        '&limit=' + PAGE +
-        '&offset=' + offset
+      const resp = await fetch(
+        SB_URL.replace(/\/+$/, '') + '/rest/v1/' + SB_TABLE +
+        '?select=id,sheet,data&order=sheet.asc,id.asc&limit=' + PAGE + '&offset=' + offset,
+        {
+          headers: {
+            'apikey': SB_KEY,
+            'Authorization': 'Bearer ' + SB_KEY,
+            'Content-Type': 'application/json',
+            'Prefer': 'count=exact'   // Supabase returns Content-Range with total
+          }
+        }
       );
-      if (!Array.isArray(page)) break;
+      if (!resp.ok) { const t = await resp.text(); throw new Error('Supabase ' + resp.status + ': ' + t.slice(0,200)); }
+      // Extract total count from Content-Range header e.g. "0-999/2576"
+      if (total === null) {
+        const cr = resp.headers.get('Content-Range') || '';
+        const m  = cr.match(/\/(\d+)/);
+        if (m) total = parseInt(m[1]);
+      }
+      const page = await resp.json();
+      if (!Array.isArray(page) || page.length === 0) break;
       allRows = allRows.concat(page);
       offset += PAGE;
-    } while (page.length === PAGE);
+    } while (allRows.length < (total || Infinity) && offset < (total || 999999));
 
     const newD = {};
     Object.keys(SHEET_MAP).forEach(k => newD[k] = []);
@@ -2214,8 +2227,7 @@ async function loadFromSupabase() {
     if (ST && ST.view === 'inv') renderInv();
     loadSpotPrices();          // refresh metal spot prices for accurate value
     const loadedCount = allRows.length;
-    const matchedCount = allRows.length - unknownCount;
-    const bannerDetail = loadedCount + ' records' + (unknownCount > 0 ? ' (' + unknownCount + ' unmatched — check console)' : '') + ' · ' + new Date().toLocaleTimeString();
+    const bannerDetail = loadedCount + (total && total !== loadedCount ? ' of ' + total : '') + ' records · ' + new Date().toLocaleTimeString();
     updateSyncBanner('ok', bannerDetail);
     return true;
   } catch(err) {
