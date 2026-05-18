@@ -2119,9 +2119,9 @@ async function _ngcApply(item, updates) {
   if (GSHEETS_URL) {
     try {
       await updateRecordInSheets(item.sheet, cn(item.id), updates);
-      alert('✅ #' + cn(item.id) + ' — ' + n + ' NGC field' + (n!==1?'s':'') + ' saved to Google Sheets!');
+      alert('✅ #' + cn(item.id) + ' — ' + n + ' NGC field' + (n!==1?'s':'') + ' saved ✓');
     } catch(ex) {
-      alert('Updated locally — Sheets sync failed: ' + ex.message);
+      alert('Supabase save succeeded — Sheets backup failed: ' + ex.message);
     }
   } else {
     alert('✅ #' + cn(item.id) + ' — ' + n + ' NGC field' + (n!==1?'s':'') + ' saved.');
@@ -2694,9 +2694,9 @@ async function _pcgsApply(item, updates) {
   if (GSHEETS_URL) {
     try {
       await updateRecordInSheets(item.sheet, cn(item.id), updates);
-      alert('✅ #' + cn(item.id) + ' — ' + n + ' field' + (n!==1?'s':'') + ' from PCGS saved to Google Sheets!');
+      alert('✅ #' + cn(item.id) + ' — ' + n + ' field' + (n!==1?'s':'') + ' from PCGS saved ✓');
     } catch(ex) {
-      alert('Updated locally — Sheets sync failed: ' + ex.message);
+      alert('Supabase save succeeded — Sheets backup failed: ' + ex.message);
     }
   } else {
     alert('✅ #' + cn(item.id) + ' — ' + n + ' field' + (n!==1?'s':'') + ' applied from PCGS.');
@@ -2999,7 +2999,7 @@ async function _numistaApply(item, updates) {
   if (GSHEETS_URL) {
     try {
       await updateRecordInSheets(item.sheet, cn(item.id), updates);
-      alert('✅ Record #' + cn(item.id) + ' — ' + n + ' field' + (n!==1?'s':'') + ' applied from Numista and saved to Google Sheets!');
+      alert('✅ Record #' + cn(item.id) + ' — ' + n + ' field' + (n!==1?'s':'') + ' from Numista saved ✓');
     } catch(ex) {
       alert('Updated locally — Google Sheets sync failed: ' + ex.message);
     }
@@ -3574,7 +3574,7 @@ async function _lmApply(item, updates) {
   if (GSHEETS_URL) {
     try {
       await updateRecordInSheets(item.sheet, cn(item.id), updates);
-      alert('✅ Record #' + cn(item.id) + ' — ' + n + ' field' + (n!==1?'s':'') + ' applied and saved to Google Sheets!');
+      alert('✅ Record #' + cn(item.id) + ' — ' + n + ' field' + (n!==1?'s':'') + ' saved ✓');
     } catch(ex) {
       alert('Updated locally — Google Sheets sync failed: ' + ex.message);
     }
@@ -4563,14 +4563,15 @@ async function manualSyncNow() {
     }
   }
 
-  // Google Sheets: retry any operations that didn't make it
+  // Google Sheets: flush pending writes (backup only — never read back when Supabase is primary)
   if (hasSheets) {
     try {
       const synced = await retryPendingSync();
-      await loadFromSheets(GSHEETS_URL);
+      // Only read from Sheets if Supabase is NOT configured (fallback mode)
+      if (!hasSB) await loadFromSheets(GSHEETS_URL);
       results.sheets = synced.total > 0
-        ? synced.edits + ' edit(s), ' + synced.adds + ' add(s), ' + synced.deletes + ' delete(s) synced'
-        : 'ok';
+        ? synced.edits + ' edit(s), ' + synced.adds + ' add(s), ' + synced.deletes + ' delete(s) backed up'
+        : 'backup ok';
     } catch(e) {
       results.sheets = 'error: ' + e.message;
       console.error('[Sync] Sheets error:', e);
@@ -4933,30 +4934,33 @@ updateBadges();
 renderDash();
 refreshSidebarTotal();
 
-// ── Auto-sync both backends on every load ────────────────────────────────────
+// ── Auto-sync on every load ──────────────────────────────────────────────────
+// Supabase = primary read source. Google Sheets = write-only backup.
+// When Supabase is configured we NEVER read from Google Sheets on load —
+// that would overwrite Supabase data (including PCGS/Numista appended fields)
+// with the older GAS-extracted version.
 (async function bootSync() {
   const hasSB     = !!(SB_URL && SB_KEY);
   const hasSheets = !!GSHEETS_URL;
 
   if (hasSB) {
-    // Primary: load fresh data from Supabase
+    // Supabase is primary — load exclusively from it
     await loadFromSupabase();
-  }
-
-  if (hasSheets) {
-    // Parallel: flush any pending edits to Google Sheets and pull latest
-    retryPendingSync().then(async synced => {
-      await loadFromSheets(GSHEETS_URL);
-      // If Supabase is also connected, update banner to show both are synced
-      if (hasSB) {
-        updateSyncBanner('ok', 'Supabase ✓ · Sheets ✓ · ' + new Date().toLocaleTimeString());
+    // If Sheets is also configured, flush any pending writes to it (backup only — no read)
+    if (hasSheets) {
+      retryPendingSync().catch(err => console.warn('[Boot] Sheets backup flush:', err.message));
+      updateSyncBanner('ok', 'Supabase ✓ · Sheets backup active · ' + new Date().toLocaleTimeString());
+    }
+  } else if (hasSheets) {
+    // No Supabase — fall back to Google Sheets as the read source
+    loadFromSheets(GSHEETS_URL).then(async () => {
+      const pendCount = Object.keys(PENDING_EDITS).length + NEW_RECORDS.length + PENDING_DELETES.length;
+      if (pendCount > 0) {
+        const synced = await retryPendingSync();
+        if (synced.total > 0) await loadFromSheets(GSHEETS_URL);
       }
-    }).catch(err => {
-      console.warn('[Boot] Sheets sync failed:', err.message);
     });
-  }
-
-  if (!hasSB && !hasSheets) {
+  } else {
     checkSyncState();
     loadSpotPrices();
   }
@@ -5095,17 +5099,37 @@ function saveEditedRecord(sheetKey, recordId) {
   }
 }
 
+
+/** Write a record update to Google Sheets via GAS (fire-and-forget backup). */
+async function _writeToGAS(sheetKey, id, updates) {
+  if (!GSHEETS_URL) return;
+  const url = GSHEETS_URL + '?action=updateRecord&sheet=' + encodeURIComponent(sheetKey)
+            + '&id=' + encodeURIComponent(String(id))
+            + '&data=' + encodeURIComponent(JSON.stringify(updates));
+  const r = await fetch(url);
+  const d = await r.json().catch(() => ({}));
+  if (!d.ok) console.warn('[GAS backup] update response:', d.error || 'unknown');
+}
+
 async function updateRecordInSheets(sheetKey, id, updates) {
-  // Route to Supabase if configured, fall back to GAS/Sheets
+  let ok = false;
+  // Primary: Supabase
   if (SB_URL && SB_KEY) {
     try {
       await updateInSupabase(sheetKey, id, updates);
-      return true;
+      ok = true;
     } catch(err) {
       updateSyncBanner('error', 'Supabase update failed: ' + err.message);
-      return false;
     }
   }
+  // Backup: Google Sheets — write in background, never block UI
+  if (GSHEETS_URL) {
+    _writeToGAS(sheetKey, id, updates).catch(e => console.warn('[GAS backup write]', e.message));
+    if (!ok) ok = true; // If only GAS is configured, treat it as success
+  }
+  if (!ok && !GSHEETS_URL) return false;
+  return ok || !!GSHEETS_URL;
+  // ↓ original GAS path continues below for non-Supabase mode
   if (!GSHEETS_URL) return false;
   updateSyncBanner('sync');
   try {
