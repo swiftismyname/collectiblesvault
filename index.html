@@ -1683,9 +1683,6 @@ function renderInv(){
   </div>
   <div style="display:flex;gap:8px">
     <button class="bg" onclick="exportCSV()">&#8595; ${(ST.search||ST.filterGroup!=='all'||ST.filterSheet!=='all')?'Filtered ('+total.toLocaleString()+')':'All ('+ALL_ITEMS.length.toLocaleString()+')'} CSV</button>
-    ${(['gradedUS','rawUS'].includes(ST.filterSheet) || ST.filterGroup === 'Coins' || ST.filterGroup === 'all')
-      ? `<button class="lookup-btn" id="bulk-lookup-btn" onclick="bulkLookupUSCoins()" title="Cross-reference visible US coin records against the US Coin Reference sheet and fill missing fields">🔍 Lookup US Coins</button>`
-      : ''}
   </div>
 </div>
 <div class="fb">
