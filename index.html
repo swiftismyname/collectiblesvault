@@ -2160,15 +2160,14 @@ async function loadFromSupabase() {
     const PAGE = 1000;
     let allRows = [], offset = 0, page;
 
-    // Fetch pages until we get a partial page (no more data)
+    // Paginate through all records — Supabase caps at 1000 rows per request by default
     do {
       page = await sbFetch(
         '/' + SB_TABLE +
         '?select=id,sheet,data' +
         '&order=id.asc' +
         '&limit=' + PAGE +
-        '&offset=' + offset,
-        { headers: { 'Range-Unit': 'items', 'Range': offset + '-' + (offset + PAGE - 1) } }
+        '&offset=' + offset
       );
       if (!Array.isArray(page)) break;
       allRows = allRows.concat(page);
