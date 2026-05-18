@@ -1701,7 +1701,7 @@ function renderInv(){
               ${['gradedUS','gradedSilver','gradedForeign'].includes(item.sheet)&&isPCGSGraded(item.raw.gradingAuth)?`<button onclick="event.stopPropagation();lookupPCGS(ALL_ITEMS[${ALL_ITEMS.indexOf(item)}])" title="Look up on PCGS CoinFacts" class="lookup-btn" id="pcgs-btn-${cn(item.id)}" style="padding:2px 5px;font-size:10px;background:rgba(212,175,55,.12);border-color:rgba(212,175,55,.45);color:#d4af37">🏆</button>`:''}
               ${['gradedUS','gradedSilver','gradedForeign'].includes(item.sheet)&&/^icg$/i.test(String(item.raw.gradingAuth||'').trim())?`<button onclick="event.stopPropagation();lookupICG(ALL_ITEMS[${ALL_ITEMS.indexOf(item)}])" title="Look up on ICG Verification" class="lookup-btn" id="icg-btn-${cn(item.id)}" style="padding:2px 5px;font-size:10px;background:rgba(74,144,226,.12);border-color:rgba(74,144,226,.45);color:#6ab0ff">🔵</button>`:''}
               ${['gradedUS','rawUS','gradedSilver','rawSilver'].includes(item.sheet)?`<button onclick="event.stopPropagation();lookupNGC(ALL_ITEMS[${ALL_ITEMS.indexOf(item)}])" title="NGC Price Guide &amp; Cert Lookup" class="lookup-btn" id="ngc-btn-${cn(item.id)}" style="padding:2px 5px;font-size:10px;background:rgba(0,154,68,.1);border-color:rgba(0,154,68,.35);color:#4caf7d">📗</button>`:''}
-              ${['gradedUS','gradedSilver','gradedForeign'].includes(item.sheet)&&/^icg$/i.test(String(item.raw.gradingAuth||'').trim())?`<button onclick="event.stopPropagation();lookupICG(ALL_ITEMS[${ALL_ITEMS.indexOf(item)}])" title="ICG Verification Lookup" class="lookup-btn" id="icg-btn-${cn(item.id)}" style="padding:2px 5px;font-size:10px;background:rgba(30,144,255,.1);border-color:rgba(30,144,255,.35);color:#4d9fff">🔵</button>`:''}
+
             </div>
           </td>
         </tr>`;
@@ -1903,18 +1903,6 @@ function showDetail(item){
       ngcBtn.style.cssText = 'background:rgba(0,154,68,.12);border-color:rgba(0,154,68,.4);color:#4caf7d';
       ngcBtn.onclick = () => lookupNGC(item);
       actions.appendChild(ngcBtn);
-    }
-    // ICG Verification button — only for ICG-graded records on graded sheets
-    const icgSheets = ['gradedUS','gradedSilver','gradedForeign'];
-    if (icgSheets.includes(item.sheet) && /^icg$/i.test(String(item.raw.gradingAuth||'').trim())) {
-      const icgBtn = document.createElement('button');
-      icgBtn.className = 'lookup-btn';
-      icgBtn.id = 'icg-btn-' + cn(item.id);
-      icgBtn.textContent = '🔵 ICG';
-      icgBtn.title = 'Look up on ICG Coin Verification';
-      icgBtn.style.cssText = 'background:rgba(30,144,255,.12);border-color:rgba(30,144,255,.4);color:#4d9fff';
-      icgBtn.onclick = () => lookupICG(item);
-      actions.appendChild(icgBtn);
     }
     // PCGS button — show for all graded sheets; gold when officially PCGS-graded
     const gradedSheets   = ['gradedUS','gradedSilver','gradedForeign'];
