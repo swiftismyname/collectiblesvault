@@ -2184,7 +2184,7 @@ async function loadFromSupabase() {
     buildFlat();
     if (typeof renderDash === 'function') renderDash();
     if (ST && ST.view === 'inv') renderInv();
-    updateSyncBanner('ok', 'Supabase · ' + allRows.length + ' records · ' + new Date().toLocaleTimeString());
+    updateSyncBanner('ok', allRows.length + ' records · ' + new Date().toLocaleTimeString());
     return true;
   } catch(err) {
     const m = err.message || '';
@@ -4448,14 +4448,17 @@ function exportCSV(){
 function updateSyncBanner(state, detail) {
   const bar = document.getElementById('sync-bar');
   if (!bar) return;
+  const _sbActive = !!(SB_URL && SB_KEY);
+  const _dbLabel  = _sbActive ? 'Supabase' : 'Google Sheets';
   const S = {
     none:  ['rgba(201,168,76,.1)','rgba(201,168,76,.3)','#c9a84c',
-            '<b>No Google Sheets connection</b> — records save locally. <u style="cursor:pointer" onclick="nav(\'settings\')">Set up sync</u>'],
-    load:  ['rgba(74,154,106,.07)','rgba(74,154,106,.2)','#4a9a6a','&#x21bb; Loading from Google Sheets…'],
-    sync:  ['rgba(74,154,106,.07)','rgba(74,154,106,.2)','#4a9a6a','&#x21bb; Saving to Google Sheets…'],
-    ok:    ['rgba(74,154,106,.07)','rgba(74,154,106,.2)','#4a9a6a','&#9679; Google Sheets connected' + (detail ? ' · ' + (isNaN(Date.parse(detail)) ? detail : new Date(detail).toLocaleTimeString()) : '')],
+            '<b>No database connected</b> — records save locally. <u style="cursor:pointer" onclick="nav(\'settings\')">Set up sync</u>'],
+    load:  ['rgba(74,154,106,.07)','rgba(74,154,106,.2)','#4a9a6a','&#x21bb; Loading from ' + _dbLabel + '…'],
+    syncing:['rgba(74,154,106,.07)','rgba(74,154,106,.2)','#4a9a6a','&#x21bb; Syncing…'],
+    sync:  ['rgba(74,154,106,.07)','rgba(74,154,106,.2)','#4a9a6a','&#x21bb; Saving…'],
+    ok:    ['rgba(74,154,106,.07)','rgba(74,154,106,.2)','#4a9a6a','&#9679; ' + _dbLabel + (detail ? ' · ' + (isNaN(Date.parse(detail)) ? detail : new Date(detail).toLocaleTimeString()) : ' connected')],
     error: ['rgba(192,80,74,.08)','rgba(192,80,74,.3)','var(--red)','&#9888; ' + (detail || 'error')],
-    local: ['rgba(201,168,76,.1)','rgba(201,168,76,.3)','#c9a84c','&#9888; ' + (detail || 1) + ' record(s) not yet in Google Sheets']
+    local: ['rgba(201,168,76,.1)','rgba(201,168,76,.3)','#c9a84c','&#9888; ' + (detail || 1) + ' record(s) pending sync']
   };
   const m = S[state] || S.none;
   bar.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:7px 18px;font-size:12px;background:' + m[0] + ';border-bottom:1px solid ' + m[1] + ';color:' + m[2];
@@ -4949,7 +4952,7 @@ refreshSidebarTotal();
     // If Sheets is also configured, flush any pending writes to it (backup only — no read)
     if (hasSheets) {
       retryPendingSync().catch(err => console.warn('[Boot] Sheets backup flush:', err.message));
-      updateSyncBanner('ok', 'Supabase ✓ · Sheets backup active · ' + new Date().toLocaleTimeString());
+      updateSyncBanner('ok', 'primary · Sheets backup writing…');
     }
   } else if (hasSheets) {
     // No Supabase — fall back to Google Sheets as the read source
@@ -5109,6 +5112,7 @@ async function _writeToGAS(sheetKey, id, updates) {
   const r = await fetch(url);
   const d = await r.json().catch(() => ({}));
   if (!d.ok) console.warn('[GAS backup] update response:', d.error || 'unknown');
+  else updateSyncBanner('ok', 'primary · Sheets backup ✓ ' + new Date().toLocaleTimeString());
 }
 
 async function updateRecordInSheets(sheetKey, id, updates) {
