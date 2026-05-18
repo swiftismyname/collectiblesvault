@@ -1699,8 +1699,9 @@ function renderInv(){
               <button onclick="toggleLabelQueue('${item.sheet}','${item.id}',event)" title="${inQ?'Remove from label queue':'Add to label print queue'}" style="background:${inQ?'var(--gold2)':'transparent'};border:1px solid ${inQ?'var(--gold)':'var(--border)'};color:${inQ?'var(--gold)':'var(--dim)'};border-radius:4px;width:26px;height:24px;cursor:pointer;font-size:13px;line-height:1;padding:0">${inQ?'\u2713':'+'}</button>
               ${(item.raw.type||item.raw.series||['gradedUS','rawUS'].includes(item.sheet))?`<button onclick="event.stopPropagation();lookupRecord(ALL_ITEMS[${ALL_ITEMS.indexOf(item)}])" title="Lookup in US Coin Reference" class="lookup-btn" id="lookup-btn-${cn(item.id)}" style="padding:2px 5px;font-size:10px">🔍</button>`:''}
               ${['gradedUS','gradedSilver','gradedForeign'].includes(item.sheet)&&isPCGSGraded(item.raw.gradingAuth)?`<button onclick="event.stopPropagation();lookupPCGS(ALL_ITEMS[${ALL_ITEMS.indexOf(item)}])" title="Look up on PCGS CoinFacts" class="lookup-btn" id="pcgs-btn-${cn(item.id)}" style="padding:2px 5px;font-size:10px;background:rgba(212,175,55,.12);border-color:rgba(212,175,55,.45);color:#d4af37">🏆</button>`:''}
-              ${/^icg$/i.test(String(item.raw.gradingAuth||'').trim())?`<button onclick="event.stopPropagation();lookupICG(ALL_ITEMS[${ALL_ITEMS.indexOf(item)}])" title="ICG Verification — cert #${e(String(item.raw.serial||''))}" class="lookup-btn" id="icg-btn-${cn(item.id)}" style="padding:2px 4px;font-size:10px;background:rgba(74,144,226,.12);border-color:rgba(74,144,226,.45);color:#6ab0ff;display:inline-flex;align-items:center;gap:3px"><img src="https://www.google.com/s2/favicons?domain=icgcoin.com&sz=16" width="13" height="13" style="border-radius:2px;vertical-align:middle" onerror="this.style.display='none'"> ICG</button>`:''}
+              ${['gradedUS','gradedSilver','gradedForeign'].includes(item.sheet)&&/^icg$/i.test(String(item.raw.gradingAuth||'').trim())?`<button onclick="event.stopPropagation();lookupICG(ALL_ITEMS[${ALL_ITEMS.indexOf(item)}])" title="Look up on ICG Verification" class="lookup-btn" id="icg-btn-${cn(item.id)}" style="padding:2px 5px;font-size:10px;background:rgba(74,144,226,.12);border-color:rgba(74,144,226,.45);color:#6ab0ff">🔵</button>`:''}
               ${['gradedUS','rawUS','gradedSilver','rawSilver'].includes(item.sheet)?`<button onclick="event.stopPropagation();lookupNGC(ALL_ITEMS[${ALL_ITEMS.indexOf(item)}])" title="NGC Price Guide &amp; Cert Lookup" class="lookup-btn" id="ngc-btn-${cn(item.id)}" style="padding:2px 5px;font-size:10px;background:rgba(0,154,68,.1);border-color:rgba(0,154,68,.35);color:#4caf7d">📗</button>`:''}
+              ${['gradedUS','gradedSilver','gradedForeign'].includes(item.sheet)&&/^icg$/i.test(String(item.raw.gradingAuth||'').trim())?`<button onclick="event.stopPropagation();lookupICG(ALL_ITEMS[${ALL_ITEMS.indexOf(item)}])" title="ICG Verification Lookup" class="lookup-btn" id="icg-btn-${cn(item.id)}" style="padding:2px 5px;font-size:10px;background:rgba(30,144,255,.1);border-color:rgba(30,144,255,.35);color:#4d9fff">🔵</button>`:''}
             </div>
           </td>
         </tr>`;
@@ -1903,6 +1904,18 @@ function showDetail(item){
       ngcBtn.onclick = () => lookupNGC(item);
       actions.appendChild(ngcBtn);
     }
+    // ICG Verification button — only for ICG-graded records on graded sheets
+    const icgSheets = ['gradedUS','gradedSilver','gradedForeign'];
+    if (icgSheets.includes(item.sheet) && /^icg$/i.test(String(item.raw.gradingAuth||'').trim())) {
+      const icgBtn = document.createElement('button');
+      icgBtn.className = 'lookup-btn';
+      icgBtn.id = 'icg-btn-' + cn(item.id);
+      icgBtn.textContent = '🔵 ICG';
+      icgBtn.title = 'Look up on ICG Coin Verification';
+      icgBtn.style.cssText = 'background:rgba(30,144,255,.12);border-color:rgba(30,144,255,.4);color:#4d9fff';
+      icgBtn.onclick = () => lookupICG(item);
+      actions.appendChild(icgBtn);
+    }
     // PCGS button — show for all graded sheets; gold when officially PCGS-graded
     const gradedSheets   = ['gradedUS','gradedSilver','gradedForeign'];
     if (gradedSheets.includes(item.sheet) && isPCGSGraded(item.raw.gradingAuth)) {
@@ -1916,14 +1929,14 @@ function showDetail(item){
       pcgsBtn.onclick = () => lookupPCGS(item);
       actions.appendChild(pcgsBtn);
     }
-    // ICG button — show for any ICG-graded record regardless of sheet
-    if (/^icg$/i.test(String(item.raw.gradingAuth||'').trim())) {
+    // ICG button — show for ICG-graded records on graded sheets
+    if (gradedSheets.includes(item.sheet) && /^icg$/i.test(String(item.raw.gradingAuth||'').trim())) {
       const icgBtn = document.createElement('button');
       icgBtn.className = 'lookup-btn';
       icgBtn.id = 'icg-btn-' + cn(item.id);
-      icgBtn.style.cssText = 'background:rgba(74,144,226,.12);border-color:rgba(74,144,226,.45);color:#6ab0ff;display:inline-flex;align-items:center;gap:5px';
-      icgBtn.innerHTML = '<img src="https://www.google.com/s2/favicons?domain=icgcoin.com&sz=16" width="14" height="14" style="border-radius:2px;flex-shrink:0" onerror="this.style.display=\'none\'"> ICG Verify';
+      icgBtn.textContent = '🔵 ICG';
       icgBtn.title = 'Look up on ICG Verification';
+      icgBtn.style.cssText = 'background:rgba(74,144,226,.12);border-color:rgba(74,144,226,.45);color:#6ab0ff';
       icgBtn.onclick = () => lookupICG(item);
       actions.appendChild(icgBtn);
     }
@@ -2114,6 +2127,173 @@ async function _icgApply(item, updates) {
   if (!arr) return;
   const idx = arr.findIndex(r => String(r.id) === String(item.id));
   if (idx < 0) return;
+  Object.assign(arr[idx], updates);
+  Object.assign(item.raw, updates);
+  buildFlat();
+  if (ST.view === 'inv') renderInv();
+  if (ST.selItem === item) showDetail(item);
+  const n = Object.keys(updates).length;
+  if (GSHEETS_URL || (SB_URL && SB_KEY)) {
+    try {
+      await updateRecordInSheets(item.sheet, cn(item.id), updates);
+      alert('✅ #' + cn(item.id) + ' — ' + n + ' ICG field' + (n!==1?'s':'') + ' saved ✓');
+    } catch(ex) {
+      alert('Updated locally — sync failed: ' + ex.message);
+    }
+  } else {
+    alert('✅ #' + cn(item.id) + ' — ' + n + ' ICG field' + (n!==1?'s':'') + ' saved.');
+  }
+}
+
+// ── ICG VERIFICATION LOOKUP ──────────────────────────────────────────────────
+// ICG blocks all server-side requests (403). Workflow: open the ICG verification
+// page in a new tab with the cert number, then enter what you see in the form.
+// ICG verification URL: https://www.icgcoin.com/verification/
+// Fields returned by ICG: Coin Date, Denomination, Coin CTN (cert), Grade,
+// Description, Population, Variety, Estimated Price
+
+function isICGGraded(auth) {
+  return /^icg$/i.test(String(auth || '').trim());
+}
+
+/** Build the ICG verification URL — try common URL patterns. */
+function _icgVerifyUrl(serial) {
+  const cert = String(serial || '').trim();
+  // Try both query param and path patterns
+  if (cert) return 'https://www.icgcoin.com/verification/?sn=' + encodeURIComponent(cert);
+  return 'https://www.icgcoin.com/verification/';
+}
+
+function lookupICG(item) { showICGModal(item); }
+
+function showICGModal(item) {
+  const existing = document.getElementById('icg-modal');
+  if (existing) existing.remove();
+
+  const modal = document.createElement('div');
+  modal.id = 'icg-modal';
+  modal.className = 'ref-modal';
+  modal.onclick = ev => { if (ev.target === modal) modal.remove(); };
+  document.body.appendChild(modal);
+
+  const raw    = item.raw;
+  const serial = String(raw.serial || '').trim();
+  const grade  = String(raw.grade  || '').trim();
+  const verUrl = _icgVerifyUrl(serial);
+
+  window._icg_apply = () => {
+    const fields = [
+      { id:'icg-date',   field:'series',      num:false },
+      { id:'icg-denom',  field:'denomination', num:false },
+      { id:'icg-grade',  field:'grade',        num:false },
+      { id:'icg-desc',   field:'type',         num:false },
+      { id:'icg-variety',field:'variety',      num:false },
+      { id:'icg-pop',    field:'popReport',    num:false },
+      { id:'icg-price',  field:'value',        num:true  },
+      { id:'icg-imgurl', field:'icgImageUrl',  num:false },
+    ];
+    const updates = {};
+    fields.forEach(({id, field, num}) => {
+      const el  = modal.querySelector('#' + id);
+      const val = el ? el.value.trim() : '';
+      if (!val) return;
+      updates[field] = num && !isNaN(parseFloat(val)) ? parseFloat(val) : val;
+    });
+    if (!Object.keys(updates).length) { alert('Enter at least one value from the ICG results.'); return; }
+    modal.remove();
+    _icgApply(item, updates);
+  };
+
+  modal.innerHTML = `
+    <div class="ref-modal-box" style="width:min(680px,96vw);max-height:90vh">
+      <div class="ref-modal-head">
+        <div>
+          <div style="font-family:'Cormorant Garamond',serif;font-size:17px;font-weight:600">ICG Verification — #${cn(item.id)}</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:2px">${e(raw.type||raw.category||'')}${grade?' · '+e(grade):''}</div>
+        </div>
+        <button class="rb" onclick="document.getElementById('icg-modal').remove()" style="font-size:18px">✕</button>
+      </div>
+      <div class="ref-modal-body" style="overflow-y:auto;max-height:calc(90vh - 130px)">
+
+        <!-- Step 1: Open verification page -->
+        <div style="background:rgba(30,144,255,.06);border:1px solid rgba(30,144,255,.2);border-radius:6px;padding:12px 14px;margin-bottom:14px">
+          <div style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin-bottom:6px">Step 1 — Open ICG Verification</div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <code style="font-size:12px;color:#4d9fff;flex:1">${e(serial||'(no serial on record)')}</code>
+            <a href="${e(verUrl)}" target="_blank" rel="noopener">
+              <button class="bp" style="background:rgba(30,144,255,.15);border-color:rgba(30,144,255,.4);color:#4d9fff;height:30px;font-size:12px">
+                Open ICG Lookup ↗
+              </button>
+            </a>
+          </div>
+          <div style="font-size:11px;color:var(--dim);margin-top:5px">
+            Opens icgcoin.com/verification — paste the cert number if not auto-filled.
+          </div>
+        </div>
+
+        <!-- Step 2: Enter results -->
+        <div style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin-bottom:8px">Step 2 — Enter what ICG shows</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+          <div>
+            <div style="font-size:10px;color:var(--dim);margin-bottom:3px">Coin Date</div>
+            <input id="icg-date" type="text" placeholder="e.g. 2024" value="${e(raw.series||'')}"
+              style="width:100%;box-sizing:border-box;padding:7px 9px;background:var(--bg4);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:13px">
+          </div>
+          <div>
+            <div style="font-size:10px;color:var(--dim);margin-bottom:3px">Denomination</div>
+            <input id="icg-denom" type="text" placeholder="e.g. Round" value="${e(raw.denomination||'')}"
+              style="width:100%;box-sizing:border-box;padding:7px 9px;background:var(--bg4);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:13px">
+          </div>
+          <div>
+            <div style="font-size:10px;color:var(--dim);margin-bottom:3px">Grade</div>
+            <input id="icg-grade" type="text" placeholder="e.g. MS-69" value="${e(raw.grade||'')}"
+              style="width:100%;box-sizing:border-box;padding:7px 9px;background:var(--bg4);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:13px">
+          </div>
+          <div>
+            <div style="font-size:10px;color:var(--dim);margin-bottom:3px">Description (Coin Name)</div>
+            <input id="icg-desc" type="text" placeholder="e.g. American Silver Eagle"
+              style="width:100%;box-sizing:border-box;padding:7px 9px;background:var(--bg4);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:13px">
+          </div>
+          <div>
+            <div style="font-size:10px;color:var(--dim);margin-bottom:3px">Variety</div>
+            <input id="icg-variety" type="text" placeholder="e.g. .999 Silver"
+              style="width:100%;box-sizing:border-box;padding:7px 9px;background:var(--bg4);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:13px">
+          </div>
+          <div>
+            <div style="font-size:10px;color:var(--dim);margin-bottom:3px">Population</div>
+            <input id="icg-pop" type="text" placeholder="e.g. 1,234 graded"
+              style="width:100%;box-sizing:border-box;padding:7px 9px;background:var(--bg4);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:13px">
+          </div>
+          <div>
+            <div style="font-size:10px;color:var(--dim);margin-bottom:3px">Estimated Price ($)</div>
+            <input id="icg-price" type="number" step="0.01" placeholder="e.g. 45.00"
+              style="width:100%;box-sizing:border-box;padding:7px 9px;background:var(--bg4);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:13px">
+          </div>
+          <div>
+            <div style="font-size:10px;color:var(--dim);margin-bottom:3px">Image URL (right-click → copy image address)</div>
+            <input id="icg-imgurl" type="url" placeholder="https://..."
+              style="width:100%;box-sizing:border-box;padding:7px 9px;background:var(--bg4);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:13px">
+          </div>
+        </div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);cursor:pointer">
+          <input type="checkbox" id="icg-use-as-value" style="accent-color:#4d9fff">
+          Also update record Value with Estimated Price
+        </label>
+      </div>
+      <div style="padding:12px 20px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end">
+        <button class="bg" onclick="document.getElementById('icg-modal').remove()">Cancel</button>
+        <button class="bp" style="background:rgba(30,144,255,.15);border-color:rgba(30,144,255,.4);color:#4d9fff" onclick="window._icg_apply()">Save to Record</button>
+      </div>
+    </div>`;
+}
+
+async function _icgApply(item, updates) {
+  const arr = D[item.sheet];
+  if (!arr) return;
+  const idx = arr.findIndex(r => String(r.id) === String(item.id));
+  if (idx < 0) return;
+  const usePrice = document.getElementById('icg-use-as-value');
+  if (usePrice && usePrice.checked && updates.value) updates.value = updates.value;
   Object.assign(arr[idx], updates);
   Object.assign(item.raw, updates);
   buildFlat();
