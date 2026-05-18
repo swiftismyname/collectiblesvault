@@ -583,15 +583,12 @@ function updateBadges(){
   // (avoids showing false duplicates from the stale embedded snapshot data)
   const dupBadge = document.getElementById('b-dups');
   if (dupBadge) {
-    if (!GSHEETS_URL || SHEETS_LIVE) {
-      const dupCount = countDupGroups();
-      dupBadge.textContent = dupCount;
-      dupBadge.style.display = dupCount > 0 ? '' : 'none';
-    } else {
-      dupBadge.style.display = 'none'; // hide until live Sheets data arrives
-    }
+    const dupCount = countDupGroups();
+    dupBadge.textContent = dupCount;
+    dupBadge.style.display = dupCount > 0 ? '' : 'none';
   }
-  checkSyncState();
+  // Note: checkSyncState() intentionally NOT called here.
+  // Badges reflect local UI state only. Connection status is managed by the sync banner.
 }
 
 
