@@ -4653,6 +4653,14 @@ function checkSyncState() {
     ? Object.keys(PENDING_EDITS).filter(k => (PENDING_EDIT_RETRIES[k] || 0) >= MAX_EDIT_RETRIES).length
     : 0;
   const totalUnsynced = pendEdits + pendAdds + pendDels;
+
+  // If Supabase is configured it is the primary — never show "connection lost" for Sheets
+  if (SB_URL && SB_KEY) {
+    if (totalUnsynced > 0) updateSyncBanner('local', totalUnsynced + ' change(s) pending');
+    else updateSyncBanner('ok', 'primary');
+    return;
+  }
+
   if (!GSHEETS_URL) {
     if (totalUnsynced > 0) updateSyncBanner('local', totalUnsynced + ' change(s)');
     else updateSyncBanner('none');
