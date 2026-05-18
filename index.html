@@ -2176,14 +2176,34 @@ async function loadFromSupabase() {
 
     const newD = {};
     Object.keys(SHEET_MAP).forEach(k => newD[k] = []);
+
+    const unrecognized = {};
     for (const row of allRows) {
-      if (newD[row.sheet]) newD[row.sheet].push({ ...row.data, id: row.id });
+      if (newD[row.sheet] !== undefined) {
+        newD[row.sheet].push({ ...row.data, id: row.id });
+      } else {
+        // Sheet name in Supabase doesn't match any SHEET_MAP key — collect for diagnosis
+        unrecognized[row.sheet] = (unrecognized[row.sheet] || 0) + 1;
+        // Store in 'other' as a fallback so no records are lost
+        if (!newD._unknown) newD._unknown = [];
+        newD._unknown.push({ ...row.data, id: row.id, _supabaseSheet: row.sheet });
+      }
     }
+
+    const unknownCount = Object.values(unrecognized).reduce((s, n) => s + n, 0);
+    if (unknownCount > 0) {
+      console.warn('[Supabase] ' + unknownCount + ' records have unrecognized sheet names:', unrecognized);
+      console.warn('Known sheet keys:', Object.keys(SHEET_MAP).join(', '));
+    }
+
     Object.assign(D, newD);
     buildFlat();
     if (typeof renderDash === 'function') renderDash();
     if (ST && ST.view === 'inv') renderInv();
-    updateSyncBanner('ok', allRows.length + ' records · ' + new Date().toLocaleTimeString());
+    const loadedCount = allRows.length;
+    const matchedCount = allRows.length - unknownCount;
+    const bannerDetail = loadedCount + ' records' + (unknownCount > 0 ? ' (' + unknownCount + ' unmatched — check console)' : '') + ' · ' + new Date().toLocaleTimeString();
+    updateSyncBanner('ok', bannerDetail);
     return true;
   } catch(err) {
     const m = err.message || '';
