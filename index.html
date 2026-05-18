@@ -1743,7 +1743,23 @@ function showDetail(item){
   document.getElementById('dp-title').textContent=SHEET_MAP[item.sheet].label+' #'+cn(item.id);
   
   const raw=item.raw;
-  const rows=Object.entries(raw).filter(([k,v])=>v!==null&&v!==''&&v!==undefined&&k!=='id').map(([k,v])=>{
+
+  // Fields that don't apply to certain sheet types — hide them from the detail view
+  // (they may exist in the record from a previous lookup but aren't meaningful here)
+  const _noWeightSheets = new Set(['gradedUS','rawUS','gradedForeign','rawForeign','ancient',
+                                    'usNotes','confederate','obsolete','foreignNotes','fractional','mintSets','other']);
+  const _hiddenFields = new Set(['_supabaseSheet']);
+  if (_noWeightSheets.has(item.sheet)) {
+    _hiddenFields.add('weight');
+    _hiddenFields.add('weightG');
+    _hiddenFields.add('silverContent');
+    _hiddenFields.add('silverFineness');
+    _hiddenFields.add('oz');
+  }
+
+  const rows=Object.entries(raw).filter(([k,v])=>
+    v!==null && v!=='' && v!==undefined && k!=='id' && !_hiddenFields.has(k)
+  ).map(([k,v])=>{
     let lbl=k.replace(/([A-Z])/g,' $1').replace(/^./,s=>s.toUpperCase());
     // Make silverContent label context-aware — "Silver Content" only if it's actually silver
     if (k === 'silverContent') {
