@@ -1472,7 +1472,7 @@ function renderInv(){
             <div style="display:flex;gap:3px;justify-content:center;align-items:center">
               <button onclick="toggleLabelQueue('${item.sheet}','${item.id}',event)" title="${inQ?'Remove from label queue':'Add to label print queue'}" style="background:${inQ?'var(--gold2)':'transparent'};border:1px solid ${inQ?'var(--gold)':'var(--border)'};color:${inQ?'var(--gold)':'var(--dim)'};border-radius:4px;width:26px;height:24px;cursor:pointer;font-size:13px;line-height:1;padding:0">${inQ?'\u2713':'+'}</button>
               ${(item.raw.type||item.raw.series||['gradedUS','rawUS'].includes(item.sheet))?`<button onclick="event.stopPropagation();lookupRecord(ALL_ITEMS[${ALL_ITEMS.indexOf(item)}])" title="Lookup in US Coin Reference" class="lookup-btn" id="lookup-btn-${cn(item.id)}" style="padding:2px 5px;font-size:10px">🔍</button>`:''}
-              ${isICGRecord(item)&&item.raw.serial?`<button onclick="event.stopPropagation();lookupICGVerification(ALL_ITEMS[${ALL_ITEMS.indexOf(item)}])" title="Verify with ICG (cert #${e(String(item.raw.serial||''))})" class="icg-btn" id="icg-btn-row-${cn(item.id)}" style="padding:2px 5px;font-size:10px">🏅</button>`:''}
+              ${isICGRecord(item)?`<button onclick="event.stopPropagation();lookupICGVerification(ALL_ITEMS[${ALL_ITEMS.indexOf(item)}])" title="Verify with ICG${item.raw.serial?' (cert #'+e(String(item.raw.serial))+')'':''}" class="icg-btn" id="icg-btn-row-${cn(item.id)}" style="padding:2px 4px;font-size:10px;display:inline-flex;align-items:center;gap:3px"><img src="https://www.google.com/s2/favicons?domain=icgcoin.com&sz=16" width="13" height="13" style="border-radius:2px;vertical-align:middle" onerror="this.style.display='none'"> ICG</button>`:''}
             </div>
           </td>
         </tr>`;
@@ -1598,7 +1598,8 @@ function showDetail(item){
       const icgBtn = document.createElement('button');
       icgBtn.className = 'icg-btn';
       icgBtn.id = 'icg-btn-' + cn(item.id);
-      icgBtn.textContent = '🏅 Verify ICG';
+      icgBtn.style.cssText = 'display:inline-flex;align-items:center;gap:5px';
+      icgBtn.innerHTML = '<img src="https://www.google.com/s2/favicons?domain=icgcoin.com&sz=16" width="14" height="14" style="border-radius:2px;flex-shrink:0" onerror="this.style.display=\'none\'"> Verify ICG';
       icgBtn.title = 'Verify certification with ICG (International Coin Grading) database';
       icgBtn.onclick = () => lookupICGVerification(item);
       actions.appendChild(icgBtn);
@@ -2119,8 +2120,16 @@ function closeDetail(){
 
 /** Returns true if this record's grading authority is ICG. */
 function isICGRecord(item) {
-  const auth = String(item.raw.gradingAuth || item.raw.gradingAuthority || item.raw.gradingauth || '').toUpperCase();
-  return auth.includes('ICG');
+  const raw = item.raw || {};
+  // Check common field names first
+  const auth = String(raw.gradingAuth || raw.gradingAuthority || raw.gradingauth || raw.authority || raw.grader || '').toUpperCase();
+  if (auth.includes('ICG')) return true;
+  // Fallback: scan all raw fields for any that look like a grading authority and contain ICG
+  for (const key of Object.keys(raw)) {
+    const k = key.toLowerCase();
+    if ((k.includes('grad') || k.includes('auth') || k.includes('certif')) && String(raw[key]).toUpperCase().includes('ICG')) return true;
+  }
+  return false;
 }
 
 /** Main entry point — fetch ICG verification data and display the modal. */
@@ -2134,7 +2143,7 @@ async function lookupICGVerification(item) {
   // Disable any trigger button while loading
   ['icg-btn-' + cn(item.id), 'icg-btn-row-' + cn(item.id)].forEach(id => {
     const b = document.getElementById(id);
-    if (b) { b.disabled = true; b.textContent = '⏳'; }
+    if (b) { b.disabled = true; b.innerHTML = '⏳'; }
   });
 
   // Show loading modal immediately
@@ -2183,7 +2192,13 @@ async function lookupICGVerification(item) {
     // Re-enable buttons
     ['icg-btn-' + cn(item.id), 'icg-btn-row-' + cn(item.id)].forEach(id => {
       const b = document.getElementById(id);
-      if (b) { b.disabled = false; b.textContent = b.id.startsWith('icg-btn-row') ? '🏅' : '🏅 Verify ICG'; }
+      if (!b) return;
+      b.disabled = false;
+      if (id.startsWith('icg-btn-row')) {
+        b.innerHTML = '<img src="https://www.google.com/s2/favicons?domain=icgcoin.com&sz=16" width="13" height="13" style="border-radius:2px;vertical-align:middle" onerror="this.style.display=\'none\'"> ICG';
+      } else {
+        b.innerHTML = '<img src="https://www.google.com/s2/favicons?domain=icgcoin.com&sz=16" width="14" height="14" style="border-radius:2px;flex-shrink:0" onerror="this.style.display=\'none\'"> Verify ICG';
+      }
     });
   }
 }
