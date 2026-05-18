@@ -1235,6 +1235,16 @@ function computeTotals() {
   const totCost = Object.values(gstats).reduce((s,g) => s + g.cost, 0);
   const totCount = Object.values(gstats).reduce((s,g) => s + g.count, 0);
 
+  // Also count records in Supabase with unrecognized sheet names (_unknown)
+  // so they contribute to totals even if they can't be categorized yet
+  const unknownArr = D._unknown || [];
+  const unknownVal  = unknownArr.reduce((s,r) => s + Math.max(nv(r.value), nv(r.cost)), 0);
+  const unknownCost = unknownArr.reduce((s,r) => s + nv(r.cost), 0);
+  const unknownCount = unknownArr.length;
+  const adjTotVal   = totVal   + unknownVal;
+  const adjTotCost  = totCost  + unknownCost;
+  const adjTotCount = totCount + unknownCount;
+
   // ── Oz totals for the metals dashboard ────────────────────────────────
   // Helper: scale PRECOMPUTED oz by (live record count / snapshot count)
   // so newly added records are reflected even when weights don't load.
@@ -1282,7 +1292,7 @@ function computeTotals() {
     gstats['Precious Metals'].melt  = totPreciousMelt;
   }
 
-  return { totVal, totCost, totCount, gstats,
+  return { totVal: adjTotVal, totCost: adjTotCost, totCount: adjTotCount, gstats,
            silverOz, silverBulOz, silverGradOz, silverRawOz,
            goldOzPure, platOz, pallOz, copperLb,
            goldMelt, silverMelt, platMelt, pallMelt, copperMelt, totMelt,
@@ -2198,8 +2208,11 @@ async function loadFromSupabase() {
 
     Object.assign(D, newD);
     buildFlat();
+    updateBadges();            // updates the inventory count badge
+    refreshSidebarTotal();     // updates sidebar value total
     if (typeof renderDash === 'function') renderDash();
     if (ST && ST.view === 'inv') renderInv();
+    loadSpotPrices();          // refresh metal spot prices for accurate value
     const loadedCount = allRows.length;
     const matchedCount = allRows.length - unknownCount;
     const bannerDetail = loadedCount + ' records' + (unknownCount > 0 ? ' (' + unknownCount + ' unmatched — check console)' : '') + ' · ' + new Date().toLocaleTimeString();
