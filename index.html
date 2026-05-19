@@ -5387,6 +5387,9 @@ function renderSettings(){
             + '<li>Click <strong>Deploy &rarr; Manage Deployments</strong> &rarr; pencil icon on your active deployment &rarr; <strong>Version: New Version</strong> &rarr; Deploy</li>'
             + '<li>Return here and click <strong>Reload from Sheets</strong></li>'
             + '</ol>';
+        } else if (SB_URL && SB_KEY) {
+          msg = '<span style="color:var(--green)">&#9679; Data loaded from Supabase</span> — Google Sheets is a write-only backup. Per-sheet counts come from Supabase.'
+              + '<br><br>To see the GAS sheet-level diagnostic, click <em>Reload from Sheets</em> above (optional — data is already live from Supabase).';
         } else {
           msg = 'Loading data from Google Sheets&hellip; If this persists, click <em>Reload from Sheets</em> in the Google Sheets section above.';
         }
