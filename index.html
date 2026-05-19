@@ -5182,6 +5182,30 @@ function setTheme(t){
 
 
 
+
+/** Returns backup status HTML for the Settings panel — called from renderSettings. */
+function _sheetsBackupStatusHTML() {
+  const lastOk  = localStorage.getItem('cv_sheets_backup_ok');
+  const fails   = parseInt(localStorage.getItem('cv_sheets_backup_fails') || '0');
+  const lastErr = localStorage.getItem('cv_sheets_backup_last_err');
+  const errTs   = localStorage.getItem('cv_sheets_backup_last_err_ts');
+  let html = '<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">'
+           + '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--dim);margin-bottom:6px">Sheets Backup Status</div>';
+  if (fails >= 3) {
+    html += '<div style="color:var(--red);font-size:12px">&#9888; Backup failing (' + fails + 'x in a row)</div>';
+    if (lastErr) html += '<div style="font-size:11px;color:var(--muted);margin-top:3px">Error: ' + e(lastErr) + '</div>';
+    if (errTs)   html += '<div style="font-size:11px;color:var(--dim)">Last attempt: ' + new Date(errTs).toLocaleString() + '</div>';
+  } else if (lastOk) {
+    html += '<div style="color:var(--green);font-size:12px">&#9679; Last backup: ' + new Date(lastOk).toLocaleString() + '</div>';
+    if (fails > 0) html += '<div style="font-size:11px;color:var(--muted)">(' + fails + ' recent blip — not critical)</div>';
+  } else {
+    html += '<div style="font-size:12px;color:var(--muted)">No backup recorded yet — updates after next change</div>';
+  }
+  html += '<button class="bg" onclick="testSheetsBackup()" style="margin-top:8px;font-size:12px">Test Backup Now</button>';
+  html += '</div>';
+  return html;
+}
+
 /** Manually test the Google Sheets backup connection. */
 async function testSheetsBackup() {
   if (!GSHEETS_URL) { alert('No Google Apps Script URL configured.'); return; }
@@ -5283,28 +5307,8 @@ function renderSettings(){
     '<div style="background:var(--bg3);border:1px solid '+cb+';border-radius:7px;padding:18px;margin-bottom:24px">'
     +'<div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:10px;text-transform:uppercase;letter-spacing:.06em">Google Apps Script (Sheets Backup)</div>'
     +g
-    +(isConn ? (() => {
-        const lastOk  = localStorage.getItem(\'cv_sheets_backup_ok\');
-        const fails   = parseInt(localStorage.getItem(\'cv_sheets_backup_fails\') || \'0\');
-        const lastErr = localStorage.getItem(\'cv_sheets_backup_last_err\');
-        const errTs   = localStorage.getItem(\'cv_sheets_backup_last_err_ts\');
-        let html = \'<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">\'
-                 + \'<div style="font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--dim);margin-bottom:6px">Backup Status</div>\';
-        if (fails >= 3) {
-          html += \'<div style="color:var(--red);font-size:12px">⚠ Backup failing (\'+ fails +\'x in a row)</div>\';
-          if (lastErr) html += \'<div style="font-size:11px;color:var(--muted);margin-top:3px">Error: \'+ e(lastErr) +\'</div>\';
-          if (errTs)   html += \'<div style="font-size:11px;color:var(--dim)">Last attempt: \' + new Date(errTs).toLocaleString() + \'</div>\';
-        } else if (lastOk) {
-          html += \'<div style="color:var(--green);font-size:12px">✓ Last backup: \' + new Date(lastOk).toLocaleString() + \'</div>\';
-          if (fails > 0) html += \'<div style="font-size:11px;color:var(--muted);">(\'+ fails +\' recent failure(s) — not critical)</div>\';
-        } else {
-          html += \'<div style="font-size:12px;color:var(--muted)">No backup recorded yet — will update after next change</div>\';
-        }
-        html += \'<button class="bg" onclick="testSheetsBackup()" style="margin-top:8px;font-size:12px">Test Backup Now</button>\';
-        html += \'</div>\';
-        return html;
-      })() : \'\')
-    +\'</div>\',
+    +(isConn ? _sheetsBackupStatusHTML() : '')
+    +'</div>',
     '<div class="stt">Appearance</div>',
     '<div style="background:var(--bg3);border:1px solid var(--border);border-radius:7px;padding:18px;margin-bottom:24px">'
     +'<div style="font-size:11px;color:var(--dim);margin-bottom:12px">Click a theme to switch instantly. Your choice is saved.</div>'
