@@ -4111,27 +4111,37 @@ function renderLabels(){
   //   MANUAL_LABELS — records manually flagged for reprint from inventory
   const newRecLabels = (NEW_RECORDS || [])
     .filter(r => !labelsPrinted.has(String(r.id)))
-    .map(r => ({
-      source: 'new', id: cn(r.id), raw_id: String(r.id),
-      sheet: SHEET_LABELS[r.sheet] || r.sheet,
-      sheetKey: r.sheet,
-      series: cn(r.series || r.year || ''),
-      ...(() => { const f=_fixLabelFields(r); return {grade:f.grade,gradingAuth:f.gradingAuth,serial:f.serial,denomination:f.denom}; })(),
-      cost: r.cost,
-    }));
+    .map(r => {
+      const f = _fixLabelFields(r);
+      return {
+        source: 'new', id: cn(r.id), raw_id: String(r.id),
+        sheet: SHEET_LABELS[r.sheet] || r.sheet,
+        sheetKey: r.sheet,
+        series:      cn(r.series || r.year || ''),
+        grade:       f.grade,
+        gradingAuth: f.gradingAuth,
+        serial:      f.serial,
+        denomination:f.denom,
+        cost: r.cost
+      };
+    });
 
   const manualLabels = [...(MANUAL_LABELS || [])].map(key => {
     const [sheet, id] = key.split('|');
     const item = ALL_ITEMS.find(i => i.sheet === sheet && cn(i.id) === id);
     if (!item) return null;
     const r = item.raw || {};
+    const f = _fixLabelFields(r);
     return {
       source: 'manual', id: cn(item.id), raw_id: String(item.id),
       sheet: SHEET_MAP[sheet] ? SHEET_MAP[sheet].label : sheet,
       sheetKey: sheet,
-      series: cn(r.series || r.year || ''),
-      ...(() => { const f=_fixLabelFields(r); return {grade:f.grade,gradingAuth:f.gradingAuth,serial:f.serial,denomination:f.denom}; })(),
-      cost: r.cost,
+      series:      cn(r.series || r.year || ''),
+      grade:       f.grade,
+      gradingAuth: f.gradingAuth,
+      serial:      f.serial,
+      denomination:f.denom,
+      cost: r.cost
     };
   }).filter(Boolean);
 
