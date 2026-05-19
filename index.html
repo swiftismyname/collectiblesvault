@@ -4195,7 +4195,16 @@ function renderLabels(){
       + '<td style="font-size:11px;color:var(--muted)">' + e(l.gradingAuth || '—') + '</td>'
       + '<td class="r mono">' + (l.cost != null ? fmt$(l.cost) : '—') + '</td>'
       + '<td style="font-size:11px;color:var(--muted)">' + e(l.serial || '—') + '</td>'
-      + '<td style="font-size:12px">' + (l.denomination ? (/^\d/.test(l.denomination) ? '$' + parseFloat(l.denomination).toFixed(2) : e(l.denomination)) : '—') + '</td>'
+      + '<td style="font-size:12px">' + (function(){
+          const d = String(l.denomination || '').trim();
+          if (!d) return '—';
+          // If denomination contains a numismatic grade value, it's a leftover from
+          // a column-mapping issue — show as — until data is re-migrated
+          if (/^(ms|pf|pr|vf|ef|xf|au|sp|bu|unc|f|vg|ag|fr|po)\s*[\-–]?\s*\d*$/i.test(d)) return '—';
+          // Format bare numbers as currency
+          if (/^\d/.test(d)) return '$' + parseFloat(d).toFixed(2);
+          return e(d);
+        })() + '</td>'
       + '<td style="font-size:11px;color:var(--muted)">' + e(l.sheet || '—') + '</td>'
       + '<td>' + tag + '</td>'
       + '<td style="text-align:center"><button class="rm-lbl-btn" ' + removeAttr + ' title="Remove from label queue" style="background:transparent;border:1px solid var(--border);color:var(--red);width:24px;height:24px;border-radius:4px;cursor:pointer;font-size:14px;line-height:1;padding:0">&times;</button></td>'
