@@ -4076,26 +4076,27 @@ async function markAllPrinted() {
 
 
   // Smart field correction for labels queue.
-  // Supabase data for some sheets has grade/gradingAuth/denomination/serial shifted
-  // due to legacy column-order issues. Detect and auto-correct for display.
+  // Supabase data for some sheets has grade/gradingAuth/denomination/serial shifted.
   function _fixLabelFields(r) {
-    const _authPat  = /^(pcgs|ngc|anacs|icg|pmg|cgc|cac|segs|self|raw|herit|heritage|pci|ncs|ace|hga)$/i;
-    const _gradePat = /^(ms|pf|pr|vf|ef|xf|au|sp|bu|unc|ch|f|g|vg|ag|fr|po)\s*[\-\u2013]?\s*\d*/i;
+    // Matches grading authority names — use /^pat/i (prefix) so "Herit Coin" matches "herit"
+    const _isAuth = s => /^(pcgs|ngc|anacs|icg|pmg|cgc|cac|segs|self|raw|herit|heritage|pci|ncs|ace|hga)/i.test(s);
+    // Matches numismatic grade values: F, VF 20, MS 65, PF 63, EF 40, AU 58, etc.
+    const _isGrade = s => /^(ms|pf|pr|vf|ef|xf|au|sp|bu|unc|ch|f\b|g\b|vg|ag|fr|po)/i.test(s);
 
     let grade      = String(r.grade       || '').trim();
     let gradingAuth= String(r.gradingAuth || '').trim();
     let denom      = String(r.denomination|| '').trim();
     let serial     = String(r.serial      || '').trim();
 
-    // If grade looks like a grading authority and denomination looks like a grade → swapped
-    if (_authPat.test(grade) && _gradePat.test(denom)) {
+    // If grade field holds a grading authority AND denomination field holds a grade → swap
+    if (_isAuth(grade) && _isGrade(denom)) {
       const tmpAuth = grade;
-      grade     = denom;           // denomination was actually the grade
-      gradingAuth = tmpAuth;       // grade was actually the grading authority
-      denom     = '';              // real denomination not captured by extractor
+      grade       = denom;   // denomination was actually the grade
+      gradingAuth = tmpAuth; // grade was actually the grading authority
+      denom       = '';      // real denomination not in the record
     }
 
-    // If gradingAuth is a pure number → it's a catalog/reference/serial number
+    // If gradingAuth is a bare number → it's a catalog/lot/reference number, move to serial
     if (/^\d{3,}$/.test(gradingAuth) && !serial) {
       serial      = gradingAuth;
       gradingAuth = '';
@@ -4115,9 +4116,8 @@ function renderLabels(){
       sheet: SHEET_LABELS[r.sheet] || r.sheet,
       sheetKey: r.sheet,
       series: cn(r.series || r.year || ''),
-      ..._fixLabelFields(r),
+      ...(() => { const f=_fixLabelFields(r); return {grade:f.grade,gradingAuth:f.gradingAuth,serial:f.serial,denomination:f.denom}; })(),
       cost: r.cost,
-      denomination: _fixLabelFields(r).denom || cn(r.denomination || '')
     }));
 
   const manualLabels = [...(MANUAL_LABELS || [])].map(key => {
@@ -4130,9 +4130,8 @@ function renderLabels(){
       sheet: SHEET_MAP[sheet] ? SHEET_MAP[sheet].label : sheet,
       sheetKey: sheet,
       series: cn(r.series || r.year || ''),
-      ..._fixLabelFields(r),
+      ...(() => { const f=_fixLabelFields(r); return {grade:f.grade,gradingAuth:f.gradingAuth,serial:f.serial,denomination:f.denom}; })(),
       cost: r.cost,
-      denomination: _fixLabelFields(r).denom || cn(r.denomination || '')
     };
   }).filter(Boolean);
 
