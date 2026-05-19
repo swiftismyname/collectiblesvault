@@ -2480,6 +2480,23 @@ async function loadFromSupabase() {
     buildFlat();
     updateBadges();            // updates the inventory count badge
     refreshSidebarTotal();     // updates sidebar value total
+
+    // Auto-clean: remove any NEW_RECORDS entries that are already in Supabase
+    // These got stuck if a previous add succeeded in SB but localStorage wasn't cleared
+    if (NEW_RECORDS && NEW_RECORDS.length > 0) {
+      const before = NEW_RECORDS.length;
+      NEW_RECORDS.splice(0, NEW_RECORDS.length,
+        ...NEW_RECORDS.filter(r => {
+          const sheet = r.sheet;
+          const id    = String(r.id);
+          return !(newD[sheet] && newD[sheet].some(s => String(s.id) === id));
+        })
+      );
+      if (NEW_RECORDS.length < before) {
+        saveNR();
+        console.log('[Supabase] Cleared', before - NEW_RECORDS.length, 'stale pending record(s) from NEW_RECORDS');
+      }
+    }
     if (typeof renderDash === 'function') renderDash();
     if (ST && ST.view === 'inv') renderInv();
     loadSpotPrices();          // refresh metal spot prices for accurate value
@@ -4197,11 +4214,11 @@ function renderLabels(){
       + '<td style="font-size:11px;color:var(--muted)">' + e(l.serial || '—') + '</td>'
       + '<td style="font-size:12px">' + (function(){
           const d = String(l.denomination || '').trim();
+          const g = String(l.grade || '').trim();
           if (!d) return '—';
-          // If denomination contains a numismatic grade value, it's a leftover from
-          // a column-mapping issue — show as — until data is re-migrated
-          if (/^(ms|pf|pr|vf|ef|xf|au|sp|bu|unc|f|vg|ag|fr|po)\s*[\-–]?\s*\d*$/i.test(d)) return '—';
-          // Format bare numbers as currency
+          // If denomination equals grade, it's a column-mapping artifact — suppress it
+          if (d === g) return '—';
+          // Format bare numbers as dollar amounts
           if (/^\d/.test(d)) return '$' + parseFloat(d).toFixed(2);
           return e(d);
         })() + '</td>'
@@ -4865,13 +4882,21 @@ async function retryPendingSync() {
     }
   }
 
-  // Retry pending adds (NEW_RECORDS that haven't synced)
-  for (const rec of [...NEW_RECORDS]) {
-    if (!rec || !rec.sheet) continue;
-    const sheetKey = rec.sheet;
-    const { sheet, _localId, ...recData } = rec;
-    const sid = await syncRecordToSheets(sheetKey, recData);
-    if (sid) adds++;
+  // Retry pending adds — skip when Supabase is primary (records already saved there)
+  if (!SB_URL || !SB_KEY) {
+    for (const rec of [...NEW_RECORDS]) {
+      if (!rec || !rec.sheet) continue;
+      const sheetKey = rec.sheet;
+      const { sheet, _localId, ...recData } = rec;
+      const sid = await syncRecordToSheets(sheetKey, recData);
+      if (sid) adds++;
+    }
+  } else {
+    // Supabase primary: fire GAS backup silently for any NEW_RECORDS, no retry
+    for (const rec of [...NEW_RECORDS]) {
+      if (!rec || !rec.sheet || !GSHEETS_URL) continue;
+      _writeToGAS(rec.sheet, cn(rec.id), rec).catch(() => {});
+    }
   }
 
   // Retry pending deletes
@@ -5156,6 +5181,30 @@ function setTheme(t){
 }
 
 
+
+/** Manually test the Google Sheets backup connection. */
+async function testSheetsBackup() {
+  if (!GSHEETS_URL) { alert('No Google Apps Script URL configured.'); return; }
+  const btn = event.target;
+  btn.disabled = true; btn.textContent = 'Testing…';
+  try {
+    const url = GSHEETS_URL + '?action=ping';
+    const r   = await fetch(url);
+    const d   = await r.json().catch(() => ({}));
+    if (d.ok) {
+      localStorage.setItem('cv_sheets_backup_ok', new Date().toISOString());
+      localStorage.setItem('cv_sheets_backup_fails', '0');
+      alert('✅ Google Sheets backup connection is working!\n\nGAS responded: ' + JSON.stringify(d));
+    } else {
+      alert('⚠ GAS connected but returned unexpected response:\n' + JSON.stringify(d));
+    }
+  } catch(ex) {
+    alert('❌ Could not reach Google Apps Script:\n' + ex.message + '\n\nCheck that your GAS is deployed and the URL is correct.');
+  }
+  btn.disabled = false; btn.textContent = 'Test Backup Now';
+  if (ST.view === 'settings') renderSettings();
+}
+
 function saveSupabaseConfig() {
   const url = (document.getElementById('sb-url-input') || {}).value || '';
   const key = (document.getElementById('sb-key-input') || {}).value || '';
@@ -5232,8 +5281,30 @@ function renderSettings(){
     +'<div style="font-size:12px;font-weight:600;color:#4caf7d;margin-bottom:10px;text-transform:uppercase;letter-spacing:.06em">⚡ Supabase</div>'
     +sbPanel+'</div>',
     '<div style="background:var(--bg3);border:1px solid '+cb+';border-radius:7px;padding:18px;margin-bottom:24px">'
-    +'<div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:10px;text-transform:uppercase;letter-spacing:.06em">Google Apps Script</div>'
-    +g+'</div>',
+    +'<div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:10px;text-transform:uppercase;letter-spacing:.06em">Google Apps Script (Sheets Backup)</div>'
+    +g
+    +(isConn ? (() => {
+        const lastOk  = localStorage.getItem(\'cv_sheets_backup_ok\');
+        const fails   = parseInt(localStorage.getItem(\'cv_sheets_backup_fails\') || \'0\');
+        const lastErr = localStorage.getItem(\'cv_sheets_backup_last_err\');
+        const errTs   = localStorage.getItem(\'cv_sheets_backup_last_err_ts\');
+        let html = \'<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">\'
+                 + \'<div style="font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--dim);margin-bottom:6px">Backup Status</div>\';
+        if (fails >= 3) {
+          html += \'<div style="color:var(--red);font-size:12px">⚠ Backup failing (\'+ fails +\'x in a row)</div>\';
+          if (lastErr) html += \'<div style="font-size:11px;color:var(--muted);margin-top:3px">Error: \'+ e(lastErr) +\'</div>\';
+          if (errTs)   html += \'<div style="font-size:11px;color:var(--dim)">Last attempt: \' + new Date(errTs).toLocaleString() + \'</div>\';
+        } else if (lastOk) {
+          html += \'<div style="color:var(--green);font-size:12px">✓ Last backup: \' + new Date(lastOk).toLocaleString() + \'</div>\';
+          if (fails > 0) html += \'<div style="font-size:11px;color:var(--muted);">(\'+ fails +\' recent failure(s) — not critical)</div>\';
+        } else {
+          html += \'<div style="font-size:12px;color:var(--muted)">No backup recorded yet — will update after next change</div>\';
+        }
+        html += \'<button class="bg" onclick="testSheetsBackup()" style="margin-top:8px;font-size:12px">Test Backup Now</button>\';
+        html += \'</div>\';
+        return html;
+      })() : \'\')
+    +\'</div>\',
     '<div class="stt">Appearance</div>',
     '<div style="background:var(--bg3);border:1px solid var(--border);border-radius:7px;padding:18px;margin-bottom:24px">'
     +'<div style="font-size:11px;color:var(--dim);margin-bottom:12px">Click a theme to switch instantly. Your choice is saved.</div>'
@@ -5523,16 +5594,40 @@ function saveEditedRecord(sheetKey, recordId) {
 }
 
 
-/** Write a record update to Google Sheets via GAS (fire-and-forget backup). */
+/** Write a record update to Google Sheets via GAS (fire-and-forget backup).
+ *  Tracks success/failure in localStorage — only surfaces errors after 3 consecutive failures. */
 async function _writeToGAS(sheetKey, id, updates) {
   if (!GSHEETS_URL) return;
   const url = GSHEETS_URL + '?action=updateRecord&sheet=' + encodeURIComponent(sheetKey)
             + '&id=' + encodeURIComponent(String(id))
             + '&data=' + encodeURIComponent(JSON.stringify(updates));
-  const r = await fetch(url);
-  const d = await r.json().catch(() => ({}));
-  if (!d.ok) console.warn('[GAS backup] update response:', d.error || 'unknown');
-  else updateSyncBanner('ok', 'primary · Sheets backup ✓ ' + new Date().toLocaleTimeString());
+  try {
+    const r = await fetch(url);
+    const d = await r.json().catch(() => ({}));
+    if (d.ok || r.ok) {
+      // Success — record timestamp, reset fail counter
+      const ts = new Date().toISOString();
+      localStorage.setItem('cv_sheets_backup_ok', ts);
+      localStorage.setItem('cv_sheets_backup_fails', '0');
+      updateSyncBanner('ok', 'primary · Sheets backup ✓ ' + new Date().toLocaleTimeString());
+    } else {
+      _trackGASBackupFail(d.error || 'GAS returned not-ok');
+    }
+  } catch(ex) {
+    _trackGASBackupFail(ex.message);
+  }
+}
+
+function _trackGASBackupFail(reason) {
+  const fails = parseInt(localStorage.getItem('cv_sheets_backup_fails') || '0') + 1;
+  localStorage.setItem('cv_sheets_backup_fails', String(fails));
+  localStorage.setItem('cv_sheets_backup_last_err', reason);
+  localStorage.setItem('cv_sheets_backup_last_err_ts', new Date().toISOString());
+  console.warn('[GAS backup] failure #' + fails + ':', reason);
+  // Only surface in banner after 3 consecutive failures — single blips are expected
+  if (fails >= 3) {
+    updateSyncBanner('error', 'Sheets backup failing (' + fails + 'x) — check Settings');
+  }
 }
 
 async function updateRecordInSheets(sheetKey, id, updates) {
@@ -5828,16 +5923,31 @@ function submitAdd(){
   NEW_RECORDS.push({sheet, ...rec});
   saveNR(); buildFlat(); updateBadges(); checkSyncState();
 
-  if(GSHEETS_URL){
-    const btn=document.querySelector('#content button.bp');
-    if(btn){btn.disabled=true;btn.textContent='Saving to Sheets...';}
+  if (SB_URL && SB_KEY) {
+    const btn = document.querySelector('#content button.bp');
+    if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+    try {
+      await insertInSupabase(sheet, rec);
+      // Remove from pending queue — record is now in Supabase (no GAS retry needed)
+      NEW_RECORDS.splice(NEW_RECORDS.findIndex(r => String(r.id) === String(rec.id)), 1);
+      saveNR();
+      // Fire GAS backup silently — no retry, no error if it fails
+      if (GSHEETS_URL) _writeToGAS(sheet, cn(rec.id), rec).catch(() => {});
+      alert('Record #' + cn(rec.id) + ' added to "' + SHEET_LABELS[sheet] + '" and saved to Supabase.');
+    } catch(ex) {
+      alert('Saved locally (ID: ' + cn(rec.id) + '). Supabase sync failed: ' + ex.message);
+    }
+    resetAdd(); renderAdd();
+  } else if (GSHEETS_URL) {
+    const btn = document.querySelector('#content button.bp');
+    if (btn) { btn.disabled = true; btn.textContent = 'Saving to Sheets...'; }
     syncRecordToSheets(sheet, {...rec}).then(sid => {
       if (sid) alert('Record #' + cn(sid) + ' saved to Google Sheets in "' + SHEET_LABELS[sheet] + '" and queued for label.');
       else     alert('Saved locally (ID: ' + cn(rec.id) + '). Sheets sync failed — check banner for details.');
       renderAdd();
     });
   } else {
-    alert('Record #'+rec.id+' added to '+SHEET_LABELS[sheet]+'.\n\nConnect Google Sheets in Settings to sync everywhere.');
+    alert('Record #' + rec.id + ' added to ' + SHEET_LABELS[sheet] + '.\n\nConnect Supabase or Google Sheets in Settings to sync everywhere.');
     resetAdd(); renderAdd();
   }
 }
