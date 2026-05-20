@@ -381,11 +381,54 @@ body.light select option{background:#fff}
 /* Larger touch targets for label-toggle buttons in inventory */
 @media (max-width: 900px) {
   .lbl-tog { width: 32px !important; height: 32px !important; font-size: 16px !important; }
+
+/* ── Spot Price Ticker ──────────────────────────────────────────────────────── */
+#spot-ticker {
+  width: 100%;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+  overflow: hidden;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  position: relative;
+  z-index: 20;
+}
+#spot-ticker-track {
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
+  animation: ticker-scroll 32s linear infinite;
+  gap: 0;
+}
+#spot-ticker-track:hover { animation-play-state: paused; }
+@keyframes ticker-scroll {
+  0%   { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+.ticker-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 18px;
+  font-size: 11px;
+  font-family: 'Karla', sans-serif;
+  letter-spacing: .04em;
+  border-right: 1px solid var(--border);
+  height: 28px;
+}
+.ticker-metal { color: var(--dim); text-transform: uppercase; font-size: 10px; }
+.ticker-price { color: var(--text); font-weight: 600; font-family: monospace; }
+.ticker-unit  { color: var(--dim); font-size: 10px; }
+.ticker-dot   { width: 5px; height: 5px; border-radius: 50%; background: var(--green); flex-shrink: 0; }
+.ticker-dot.off { background: var(--dim); }
 }
 
 </style>
 </head>
 <body>
+<div id="spot-ticker"><div id="spot-ticker-track"><span class="ticker-item"><span class="ticker-dot off" id="ticker-dot"></span><span class="ticker-metal">Loading spot prices…</span></span></div></div>
 <div id="app">
 <div id="sb">
   <div class="logo">
@@ -553,6 +596,34 @@ function saveSheetOverrides() { localStorage.setItem('cv_sheet_overrides', JSON.
 
 const MAX_EXISTING_ID = 2485;
 
+
+/** Rebuild the scrolling spot price ticker from current SPOTS data. */
+function updateSpotTicker() {
+  const track = document.getElementById('spot-ticker-track');
+  if (!track || !SPOTS) return;
+  const sp = SPOTS;
+  const fmt = (n) => n ? '$' + n.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2}) : '—';
+  const items = [
+    { label:'Gold',      price: fmt(sp.gold),      unit:'/oz' },
+    { label:'Silver',    price: fmt(sp.silver),     unit:'/oz' },
+    { label:'Platinum',  price: fmt(sp.platinum),   unit:'/oz' },
+    { label:'Palladium', price: fmt(sp.palladium),  unit:'/oz' },
+    { label:'Copper',    price: sp.copper ? '$' + sp.copper.toFixed(2) : '—', unit:'/lb' },
+  ];
+  // Build one set then duplicate for seamless loop
+  const buildSet = () => items.map(it =>
+    `<span class="ticker-item">` +
+    `<span class="ticker-metal">${it.label}</span>` +
+    `<span class="ticker-price">${it.price}</span>` +
+    `<span class="ticker-unit">${it.unit}</span>` +
+    `</span>`
+  ).join('');
+  const html = buildSet() + buildSet(); // duplicate for seamless loop
+  track.innerHTML = html;
+  const dot = document.getElementById('ticker-dot');
+  if (dot) { dot.classList.remove('off'); }
+}
+
 async function loadSpotPrices() {
   const symbols = {gold:'XAU', silver:'XAG', platinum:'XPT', palladium:'XPD', copper:'XCU'};
   try {
@@ -564,6 +635,7 @@ async function loadSpotPrices() {
       })
     );
     SPOTS = Object.fromEntries(results);
+    updateSpotTicker();
     const el = document.querySelector('.spot-status');
     if (el) el.innerHTML = '<span style="color:var(--green)">Live &#9679; ' + new Date().toLocaleTimeString() + '</span>';
     const dashEl = document.getElementById('spot-status-dash');
