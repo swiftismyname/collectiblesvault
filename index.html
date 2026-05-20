@@ -4679,7 +4679,7 @@ function openRenumberModal(sheetKey, rawId, groupNid) {
   };
 }
 
-function saveRenumber(sheetKey, rawId) {
+async function saveRenumber(sheetKey, rawId) {
   const modal  = document.getElementById('renumber-modal');
   if (!modal) return;
   const inp    = modal.querySelector('#renumber-new-id');
@@ -4743,15 +4743,30 @@ function saveRenumber(sheetKey, rawId) {
 
   const summary = '✓ Record #' + cn(String(oldId)) + ' → #' + cn(newVal) + '\nCategory: ' + (SHEET_MAP[sheetKey] ? SHEET_MAP[sheetKey].label : sheetKey);
 
-  // Always save to Supabase immediately, then GAS backup
-  updateRecordInSheets(sheetKey, String(oldId), { id: newVal }).then(syncOk => {
-    if (syncOk) {
+  // ── Save to Supabase: delete old ID + insert new ID (patch can't change PK) ──
+  if (SB_URL && SB_KEY) {
+    updateSyncBanner('syncing', 'Saving renumber to Supabase…');
+    try {
+      // Build full record with new ID
+      const fullRec = { ...arr[recIdx], id: newVal };
+      // Insert new record, delete old
+      await insertInSupabase(sheetKey, fullRec);
+      await deleteFromSupabase(sheetKey, String(oldId));
       delete PENDING_EDITS[newKey];
       savePendingEdits();
+      updateSyncBanner('ok', 'Renumber saved to Supabase ✓');
+      console.log('[Renumber] Supabase: deleted', oldId, '→ inserted', newVal);
+    } catch(e) {
+      console.error('[Renumber] Supabase save failed:', e.message);
+      updateSyncBanner('error', 'Renumber saved locally — Supabase sync failed: ' + e.message);
     }
-    // Also fire GAS backup silently regardless
-    if (GSHEETS_URL) _writeToGAS(sheetKey, String(oldId), { id: newVal }).catch(() => {});
-  });
+  }
+
+  // GAS backup — silent fire-and-forget
+  if (GSHEETS_URL) {
+    _writeToGAS(sheetKey, String(oldId), { id: newVal }).catch(() => {});
+  }
+
   alert(summary);
 }
 
