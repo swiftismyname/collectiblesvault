@@ -2527,11 +2527,12 @@ async function updateInSupabase(sheetKey, id, updates) {
   });
 }
 
-/** Insert a new record into Supabase. */
+/** Insert a new record into Supabase (upsert — safe even if ID already exists). */
 async function insertInSupabase(sheetKey, record) {
-  const { id, ...data } = record;
+  const { id, _localId, ...data } = record;  // strip _localId — internal use only
   await sbFetch('/' + SB_TABLE, {
-    method: 'POST', headers: { 'Prefer': 'return=minimal' },
+    method: 'POST',
+    headers: { 'Prefer': 'resolution=merge-duplicates,return=minimal' },
     body: JSON.stringify({ id: String(id), sheet: sheetKey, data })
   });
 }
@@ -5935,16 +5936,27 @@ async function submitAdd(){
     if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
     try {
       await insertInSupabase(sheet, rec);
-      // Remove from pending queue — record is now in Supabase (no GAS retry needed)
-      NEW_RECORDS.splice(NEW_RECORDS.findIndex(r => String(r.id) === String(rec.id)), 1);
+      // Remove from pending queue — record is now in Supabase
+      const nrIdx = NEW_RECORDS.findIndex(r => String(r.id) === String(rec.id));
+      if (nrIdx >= 0) NEW_RECORDS.splice(nrIdx, 1);
       saveNR();
-      // Fire GAS backup silently — no retry, no error if it fails
+      // Fire GAS backup silently
       if (GSHEETS_URL) _writeToGAS(sheet, cn(rec.id), rec).catch(() => {});
+      // Rebuild and navigate to inventory so the new record is visible
+      buildFlat();
+      updateBadges();
+      refreshSidebarTotal();
+      renderDash();
+      resetAdd();
+      nav('inv');
       alert('Record #' + cn(rec.id) + ' added to "' + SHEET_LABELS[sheet] + '" and saved to Supabase.');
     } catch(ex) {
-      alert('Saved locally (ID: ' + cn(rec.id) + '). Supabase sync failed: ' + ex.message);
+      console.error('[submitAdd] Supabase insert failed:', ex);
+      // Record is in local memory but not Supabase — keep it visible and warn
+      buildFlat(); updateBadges(); refreshSidebarTotal(); renderDash();
+      resetAdd(); nav('inv');
+      alert('⚠ Record #' + cn(rec.id) + ' was added locally but Supabase sync failed.\n\nError: ' + ex.message + '\n\nTry clicking Sync Now to retry.');
     }
-    resetAdd(); renderAdd();
   } else if (GSHEETS_URL) {
     const btn = document.querySelector('#content button.bp');
     if (btn) { btn.disabled = true; btn.textContent = 'Saving to Sheets...'; }
