@@ -25,8 +25,8 @@
   --text:#dfd5bc;--muted:#8a7f6a;--dim:#4a4030;
   --border:#252018;--green:#4a9a6a;--red:#c0504a;
 }
-body{background:var(--bg);color:var(--text);font-family:var(--font-body,'Karla',sans-serif);height:100vh;overflow:hidden;display:flex;flex-direction:column}
-#app{display:flex;width:100%;flex:1;min-height:0;overflow:hidden}
+body{background:var(--bg);color:var(--text);font-family:var(--font-body,'Karla',sans-serif);height:100vh;overflow:hidden;display:flex}
+#app{display:flex;width:100%;height:100vh;overflow:hidden}
 /* Sidebar */
 #sb{width:230px;background:#070604;border-right:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0}
 .logo{padding:22px 18px 18px;border-bottom:1px solid var(--border)}
@@ -382,34 +382,12 @@ body.light select option{background:#fff}
 @media (max-width: 900px) {
   .lbl-tog { width: 32px !important; height: 32px !important; font-size: 16px !important; }
 
-/* ── Spot Price Ticker ──────────────────────────────────────────────────────── */
-#spot-ticker {
-  width: 100%;
-  background: var(--bg2);
-  border-bottom: 1px solid var(--border);
-  overflow: hidden;
-  height: 30px;
-  display: flex;
-  align-items: center;
-  flex-shrink: 0;
-  position: relative;
-  z-index: 20;
-}
-#spot-ticker-track { will-change: transform; }
-#spot-ticker-track:hover { animation-play-state: paused !important; }
-@keyframes ticker-scroll {
-  0%   { transform: translateX(0); }
-  100% { transform: translateX(-50%); }
-}
-@keyframes pulse {
-  0%,100% { opacity:1; } 50% { opacity:.3; }
-}
+
 }
 
 </style>
 </head>
 <body>
-<div id="spot-ticker"><span style="color:var(--dim);font-size:11px;padding-left:14px;font-family:Karla,sans-serif;letter-spacing:.05em">Loading spot prices…</span></div>
 <div id="app">
 <div id="sb">
   <div class="logo">
@@ -578,42 +556,6 @@ function saveSheetOverrides() { localStorage.setItem('cv_sheet_overrides', JSON.
 const MAX_EXISTING_ID = 2485;
 
 
-/** Rebuild the scrolling spot price ticker from current SPOTS data. */
-function updateSpotTicker() {
-  const ticker = document.getElementById('spot-ticker');
-  if (!ticker || !SPOTS) return;
-  const sp = SPOTS;
-  const fmt = n => n ? '$' + n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}) : '—';
-  const metals = [
-    { sym:'●', label:'GOLD',      price:fmt(sp.gold),      unit:'/oz', col:'#c9a84c' },
-    { sym:'●', label:'SILVER',    price:fmt(sp.silver),    unit:'/oz', col:'#9aa8b8' },
-    { sym:'●', label:'PLATINUM',  price:fmt(sp.platinum),  unit:'/oz', col:'#78a0c0' },
-    { sym:'●', label:'PALLADIUM', price:fmt(sp.palladium), unit:'/oz', col:'#88a090' },
-    { sym:'●', label:'COPPER',    price:sp.copper?'$'+sp.copper.toFixed(2):'—', unit:'/lb', col:'#c07840' },
-  ];
-
-  const sep = `<span style="color:var(--border);padding:0 4px;font-size:16px">|</span>`;
-
-  const buildSet = () => metals.map(m =>
-    `<span style="display:inline-flex;align-items:center;gap:6px;padding:0 20px;white-space:nowrap">` +
-    `<span style="color:${m.col};font-size:8px">●</span>` +
-    `<span style="color:var(--dim);font-size:10px;letter-spacing:.08em;font-family:Karla,sans-serif">${m.label}</span>` +
-    `<span style="color:var(--text);font-size:12px;font-weight:600;font-family:monospace;letter-spacing:.02em">${m.price}</span>` +
-    `<span style="color:var(--dim);font-size:10px">${m.unit}</span>` +
-    `</span>` + sep
-  ).join('');
-
-  // Build double set for seamless infinite scroll
-  const inner = buildSet() + buildSet();
-
-  // Use a div inside for animation
-  ticker.innerHTML =
-    `<div id="ticker-live-dot" style="width:7px;height:7px;border-radius:50%;background:var(--green);flex-shrink:0;margin-left:12px;animation:pulse 2s ease-in-out infinite"></div>` +
-    `<div style="overflow:hidden;flex:1;display:flex;align-items:center">` +
-    `<div id="spot-ticker-track" style="display:inline-flex;align-items:center;animation:ticker-scroll 28s linear infinite;will-change:transform">${inner}</div>` +
-    `</div>`;
-}
-
 async function loadSpotPrices() {
   const symbols = {gold:'XAU', silver:'XAG', platinum:'XPT', palladium:'XPD', copper:'XCU'};
   try {
@@ -625,7 +567,6 @@ async function loadSpotPrices() {
       })
     );
     SPOTS = Object.fromEntries(results);
-    updateSpotTicker();
     const el = document.querySelector('.spot-status');
     if (el) el.innerHTML = '<span style="color:var(--green)">Live &#9679; ' + new Date().toLocaleTimeString() + '</span>';
     const dashEl = document.getElementById('spot-status-dash');
