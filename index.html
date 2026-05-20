@@ -4032,37 +4032,36 @@ async function exportLabelsNimbot(){
   // Header row — includes Source Sheet for label printing
   rows.push(['Record #','Series','Grade','Cost','Serial Number','Denomination','Source Sheet']);
 
-  sheetLabels.forEach(l => rows.push([  // sheetLabels is always [] — kept for safety
-    cn(l.id),
-    cn(l.series||''),
-    l.grade||'',
-    l.cost!=null?l.cost:'',
-    l.serial||'',
-    cn(l.denomination||''),
-    l.sourceSheet||''
-  ]));
-  // newRec rows:
-  newRec.forEach(r => rows.push([
-    cn(r.id),
-    cn(r.series||r.year||''),
-    r.grade||'',
-    r.cost!=null?r.cost:'',
-    r.serial||'',
-    cn(r.denomination||''),
-    SHEET_LABELS[r.sheet] || r.sheet || ''
-  ]));
+  // newRec rows — use _fixLabelFields for correct grade/denomination
+  newRec.forEach(r => {
+    const f = _fixLabelFields(r);
+    rows.push([
+      cn(r.id),
+      cn(r.series||r.year||''),
+      f.grade||'',
+      r.cost!=null?r.cost:'',
+      f.serial||r.serial||'',
+      f.denom||'',
+      SHEET_LABELS[r.sheet] || r.sheet || ''
+    ]);
+  });
   manualKeys.forEach(key => {
     const [sheet, id] = key.split('|');
     const item = ALL_ITEMS.find(i => i.sheet===sheet && cn(i.id)===id);
     if (!item) return;
     const r = item.raw || {};
+    const f = _fixLabelFields(r);
+    const denom = f.denom || '';
+    const denomDisplay = denom && /^\d/.test(denom)
+      ? '$' + parseFloat(denom).toFixed(2)
+      : denom;
     rows.push([
       cn(item.id),
       cn(r.series||r.year||''),
-      r.grade||'',
+      f.grade||'',
       r.cost!=null?r.cost:'',
-      r.serial||'',
-      cn(r.denomination||''),
+      f.serial||r.serial||'',
+      denomDisplay,
       SHEET_MAP[sheet] ? SHEET_MAP[sheet].label : sheet
     ]);
   });
@@ -5075,9 +5074,27 @@ async function manualSyncNow() {
 
   const results = { sb: null, sheets: null };
 
-  // ── Push any pending local edits to both backends ─────────────────────────
-  // Supabase: pending edits are written immediately on each change, so a
-  // reload is sufficient to confirm the state is current.
+  // ── Step 1: Push ALL pending edits to Supabase BEFORE reloading ──────────
+  // Critical: must flush first or reload will overwrite unsaved local changes
+  if (hasSB && typeof PENDING_EDITS !== 'undefined') {
+    const pendKeys = Object.keys(PENDING_EDITS);
+    if (pendKeys.length > 0) {
+      updateSyncBanner('syncing', 'Saving ' + pendKeys.length + ' pending edit(s) to Supabase…');
+      for (const key of pendKeys) {
+        const [sk, eid] = key.split('|');
+        try {
+          await updateInSupabase(sk, eid, PENDING_EDITS[key]);
+          delete PENDING_EDITS[key];
+          delete PENDING_EDIT_RETRIES[key];
+          savePendingEdits();
+        } catch(e) {
+          console.warn('[SyncNow] Failed to push pending edit:', key, e.message);
+        }
+      }
+    }
+  }
+
+  // ── Step 2: Reload from Supabase (now safe — edits are saved) ────────────
   if (hasSB) {
     try {
       await loadFromSupabase();
