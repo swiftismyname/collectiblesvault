@@ -4723,6 +4723,16 @@ function saveRenumber(sheetKey, rawId) {
   );
   saveNR();
 
+  // ── Update MANUAL_LABELS keys so queued labels survive the renumber ────────
+  const oldLabelKey = sheetKey + '|' + cn(String(oldId));
+  const newLabelKey = sheetKey + '|' + cn(newVal);
+  if (MANUAL_LABELS.has(oldLabelKey)) {
+    MANUAL_LABELS.delete(oldLabelKey);
+    MANUAL_LABELS.add(newLabelKey);
+    saveManualLabels();
+    console.log('[Renumber] Updated label key:', oldLabelKey, '→', newLabelKey);
+  }
+
   buildFlat();
   updateBadges();
   refreshSidebarTotal();
@@ -4733,21 +4743,16 @@ function saveRenumber(sheetKey, rawId) {
 
   const summary = '✓ Record #' + cn(String(oldId)) + ' → #' + cn(newVal) + '\nCategory: ' + (SHEET_MAP[sheetKey] ? SHEET_MAP[sheetKey].label : sheetKey);
 
-  if (GSHEETS_URL) {
-    alert(summary + '\n\nSyncing to Google Sheets…');
-    updateRecordInSheets(sheetKey, String(oldId), { id: newVal }).then(syncOk => {
-      if (syncOk) {
-        delete PENDING_EDITS[newKey];
-        savePendingEdits();
-        console.log('[Sync OK] Renumber #' + cn(String(oldId)) + ' → #' + cn(newVal));
-      } else {
-        console.warn('[Sync FAILED] Renumber kept in PENDING_EDITS for retry.');
-        updateSyncBanner('error', 'Renumber saved locally — Sheets sync failed. Check Apps Script deployment.');
-      }
-    });
-  } else {
-    alert(summary + '\n\nNote: Google Sheets not connected. Change saved in this browser only.');
-  }
+  // Always save to Supabase immediately, then GAS backup
+  updateRecordInSheets(sheetKey, String(oldId), { id: newVal }).then(syncOk => {
+    if (syncOk) {
+      delete PENDING_EDITS[newKey];
+      savePendingEdits();
+    }
+    // Also fire GAS backup silently regardless
+    if (GSHEETS_URL) _writeToGAS(sheetKey, String(oldId), { id: newVal }).catch(() => {});
+  });
+  alert(summary);
 }
 
 
@@ -5118,6 +5123,19 @@ async function manualSyncNow() {
       results.sheets = 'error: ' + e.message;
       console.error('[Sync] Sheets error:', e);
     }
+  }
+
+  // ── Clean stale MANUAL_LABELS keys (old IDs after renumber) ─────────────
+  if (typeof MANUAL_LABELS !== 'undefined' && MANUAL_LABELS.size > 0) {
+    let cleaned = 0;
+    for (const key of [...MANUAL_LABELS]) {
+      const [ml_sheet, ml_id] = key.split('|');
+      if (!ALL_ITEMS.some(i => i.sheet === ml_sheet && cn(i.id) === ml_id)) {
+        MANUAL_LABELS.delete(key);
+        cleaned++;
+      }
+    }
+    if (cleaned > 0) { saveManualLabels(); updateBadges(); console.log('[SyncNow] Removed', cleaned, 'stale label key(s)'); }
   }
 
   // ── Banner & summary ───────────────────────────────────────────────────────
@@ -5593,6 +5611,14 @@ refreshSidebarTotal();
   const hasSheets = !!GSHEETS_URL;
 
   if (hasSB) {
+    // Flush any pending edits to Supabase BEFORE reloading (prevents overwriting unsaved work)
+    if (typeof PENDING_EDITS !== 'undefined' && Object.keys(PENDING_EDITS).length > 0) {
+      for (const [key, updates] of Object.entries({...PENDING_EDITS})) {
+        const [sk, eid] = key.split('|');
+        try { await updateInSupabase(sk, eid, updates); delete PENDING_EDITS[key]; savePendingEdits(); }
+        catch(e) { console.warn('[Boot] flush pending edit failed:', key, e.message); }
+      }
+    }
     // Supabase is primary — load exclusively from it
     await loadFromSupabase();
     // If Sheets is also configured, flush any pending writes to it (backup only — no read)
