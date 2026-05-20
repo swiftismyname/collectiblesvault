@@ -622,7 +622,12 @@ function updateBadges(){
   const printed = (typeof labelsPrinted!=='undefined') ? labelsPrinted : new Set();
   const newPend = (typeof NEW_RECORDS!=='undefined')
     ? NEW_RECORDS.filter(r => !printed.has(String(r.id))).length : 0;
-  const manualPend = (typeof MANUAL_LABELS!=='undefined') ? MANUAL_LABELS.size : 0;
+  const manualPend = (typeof MANUAL_LABELS!=='undefined')
+    ? [...MANUAL_LABELS].filter(key => {
+        const [ml_sheet, ml_id] = key.split('|');
+        return ALL_ITEMS.some(i => i.sheet === ml_sheet && cn(i.id) === ml_id);
+      }).length
+    : 0;
   const pendLabels = newPend + manualPend;
   const labEl = document.getElementById('b-labels');
   if (labEl) labEl.textContent = pendLabels;
@@ -2477,6 +2482,20 @@ async function loadFromSupabase() {
     }
 
     Object.assign(D, newD);
+    // Re-apply any pending local edits on top of fresh Supabase data
+    // Ensures edits that failed to reach Supabase stay visible until next retry
+    if (typeof PENDING_EDITS !== 'undefined' && Object.keys(PENDING_EDITS).length > 0) {
+      let _pe = 0;
+      for (const [key, updates] of Object.entries(PENDING_EDITS)) {
+        const [sk, eid] = key.split('|');
+        const arr = newD[sk];
+        if (!arr) continue;
+        const idx = arr.findIndex(r => cn(String(r.id)) === eid);
+        if (idx >= 0) { Object.assign(arr[idx], updates); _pe++; }
+      }
+      if (_pe > 0) console.log('[Supabase] Re-applied', _pe, 'pending edit(s) on loaded data');
+    }
+
     buildFlat();
     updateBadges();            // updates the inventory count badge
     refreshSidebarTotal();     // updates sidebar value total
@@ -4123,6 +4142,107 @@ async function markAllPrinted() {
     return { grade, gradingAuth, denom, serial };
   }
 
+
+/** Show modal to add a range of record IDs to the labels queue. */
+function showAddRangeToLabels() {
+  const existing = document.getElementById('range-label-modal');
+  if (existing) existing.remove();
+
+  const modal = document.createElement('div');
+  modal.id = 'range-label-modal';
+  modal.className = 'ref-modal';
+  modal.onclick = ev => { if (ev.target === modal) modal.remove(); };
+  document.body.appendChild(modal);
+
+  modal.innerHTML = `
+    <div class="ref-modal-box" style="width:min(480px,94vw)">
+      <div class="ref-modal-head">
+        <div style="font-family:'Cormorant Garamond',serif;font-size:17px;font-weight:600">Add Range to Labels Queue</div>
+        <button class="rb" onclick="document.getElementById('range-label-modal').remove()" style="font-size:18px">✕</button>
+      </div>
+      <div class="ref-modal-body" style="padding:20px">
+        <div style="font-size:12px;color:var(--muted);margin-bottom:16px">
+          Enter a start and end Record # to add all matching records to the queue.<br>
+          You can also filter by sheet to add only records from a specific category.
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+          <div>
+            <div style="font-size:10px;color:var(--dim);margin-bottom:4px;text-transform:uppercase;letter-spacing:.07em">From Record #</div>
+            <input id="rl-from" type="number" min="1" placeholder="e.g. 1001"
+              style="width:100%;box-sizing:border-box;padding:8px 10px;background:var(--bg4);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:14px">
+          </div>
+          <div>
+            <div style="font-size:10px;color:var(--dim);margin-bottom:4px;text-transform:uppercase;letter-spacing:.07em">To Record #</div>
+            <input id="rl-to" type="number" min="1" placeholder="e.g. 1045"
+              style="width:100%;box-sizing:border-box;padding:8px 10px;background:var(--bg4);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:14px">
+          </div>
+        </div>
+        <div style="margin-bottom:16px">
+          <div style="font-size:10px;color:var(--dim);margin-bottom:4px;text-transform:uppercase;letter-spacing:.07em">Sheet (optional — leave blank for all)</div>
+          <select id="rl-sheet"
+            style="width:100%;box-sizing:border-box;padding:8px 10px;background:var(--bg4);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:13px">
+            <option value="">All sheets</option>
+            ${Object.entries(SHEET_MAP).map(([k,s]) => `<option value="${k}">${s.label}</option>`).join('')}
+          </select>
+        </div>
+        <div id="rl-preview" style="font-size:12px;color:var(--muted);min-height:20px"></div>
+      </div>
+      <div style="padding:12px 20px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end">
+        <button class="bg" onclick="document.getElementById('range-label-modal').remove()">Cancel</button>
+        <button class="bp" onclick="_addRangeToLabels()">Add to Queue</button>
+      </div>
+    </div>`;
+
+  // Live preview as user types
+  const update = () => {
+    const from  = parseInt(document.getElementById('rl-from').value) || 0;
+    const to    = parseInt(document.getElementById('rl-to').value) || 0;
+    const sheet = document.getElementById('rl-sheet').value;
+    if (!from || !to) { document.getElementById('rl-preview').textContent = ''; return; }
+    const matches = ALL_ITEMS.filter(i => {
+      const n = parseInt(cn(i.id));
+      return n >= from && n <= to && (!sheet || i.sheet === sheet);
+    });
+    const prev = document.getElementById('rl-preview');
+    if (matches.length === 0) {
+      prev.innerHTML = '<span style="color:var(--red)">No records found in that range.</span>';
+    } else {
+      prev.innerHTML = '<span style="color:var(--green)">&#9679; ' + matches.length + ' record' + (matches.length !== 1 ? 's' : '') + ' will be added.</span>';
+    }
+  };
+  document.getElementById('rl-from').addEventListener('input', update);
+  document.getElementById('rl-to').addEventListener('input', update);
+  document.getElementById('rl-sheet').addEventListener('change', update);
+  document.getElementById('rl-from').focus();
+}
+
+function _addRangeToLabels() {
+  const from  = parseInt(document.getElementById('rl-from').value) || 0;
+  const to    = parseInt(document.getElementById('rl-to').value) || 0;
+  const sheet = document.getElementById('rl-sheet').value;
+  if (!from || !to) { alert('Enter both a start and end Record #.'); return; }
+  if (from > to) { alert('Start # must be less than or equal to End #.'); return; }
+
+  const matches = ALL_ITEMS.filter(i => {
+    const n = parseInt(cn(i.id));
+    return n >= from && n <= to && (!sheet || i.sheet === sheet);
+  });
+  if (!matches.length) { alert('No records found in that range.'); return; }
+
+  let added = 0;
+  for (const item of matches) {
+    const key = item.sheet + '|' + cn(item.id);
+    if (!MANUAL_LABELS.has(key)) { MANUAL_LABELS.add(key); added++; }
+  }
+  saveManualLabels();
+  updateBadges();
+  document.getElementById('range-label-modal').remove();
+  renderLabels();
+  if (added < matches.length) {
+    alert(added + ' record' + (added !== 1 ? 's' : '') + ' added (' + (matches.length - added) + ' were already in the queue).');
+  }
+}
+
 function renderLabels(){
   // Labels come from two in-app sources:
   //   NEW_RECORDS — records added locally but not yet printed
@@ -4180,6 +4300,7 @@ function renderLabels(){
     + '<div class="vsub">' + newRecLabels.length + ' new records · ' + manualLabels.length + ' reprints &mdash; <em>click any row to view/edit; click &times; to remove</em></div></div>'
     + '<div style="display:flex;gap:8px">'
     + '<button class="bp" onclick="exportLabelsNimbot()">&#8595; Export Nimbot XLSX</button>'
+    + '<button class="bg" onclick="showAddRangeToLabels()">+ Add Range</button>'
     + '<button class="bg" onclick="markAllPrinted()">&#10003; Mark All Printed</button>'
     + '</div></div>';
 
@@ -4861,19 +4982,28 @@ async function retryPendingSync() {
   if (!GSHEETS_URL) return { edits:0, adds:0, deletes:0, total:0 };
   let edits = 0, adds = 0, deletes = 0;
 
-  // Retry pending edits (give up after MAX_EDIT_RETRIES to avoid infinite loops)
+  // Retry pending edits — push to Supabase first when configured, then GAS
   for (const key of Object.keys(PENDING_EDITS)) {
     const retryCount = (PENDING_EDIT_RETRIES[key] || 0) + 1;
     if (retryCount > MAX_EDIT_RETRIES) {
       console.warn('[retryPendingSync] Giving up on stuck edit after', retryCount, 'attempts:', key);
-      // Keep in PENDING_EDITS so user can see/clear it, but stop retrying automatically
       continue;
     }
     PENDING_EDIT_RETRIES[key] = retryCount;
     localStorage.setItem('cv_pending_edit_retries', JSON.stringify(PENDING_EDIT_RETRIES));
 
     const [sheetKey, id] = key.split('|');
-    const ok = await updateRecordInSheets(sheetKey, id, PENDING_EDITS[key]);
+    let ok = false;
+
+    // Try Supabase first when configured
+    if (SB_URL && SB_KEY) {
+      try { await updateInSupabase(sheetKey, id, PENDING_EDITS[key]); ok = true; }
+      catch(e) { console.warn('[retrySync] SB edit failed:', e.message); }
+    }
+    // Also send to GAS backup (or use GAS as primary if no SB)
+    const gasOk = await updateRecordInSheets(sheetKey, id, PENDING_EDITS[key]);
+    if (!SB_URL && gasOk) ok = true;
+
     if (ok) {
       delete PENDING_EDITS[key];
       delete PENDING_EDIT_RETRIES[key];
