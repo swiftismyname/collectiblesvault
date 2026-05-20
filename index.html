@@ -388,48 +388,28 @@ body.light select option{background:#fff}
   background: var(--bg2);
   border-bottom: 1px solid var(--border);
   overflow: hidden;
-  height: 28px;
+  height: 30px;
   display: flex;
   align-items: center;
   flex-shrink: 0;
   position: relative;
   z-index: 20;
-  align-self: stretch;
 }
-#spot-ticker-track {
-  display: flex;
-  align-items: center;
-  white-space: nowrap;
-  animation: ticker-scroll 32s linear infinite;
-  gap: 0;
-}
-#spot-ticker-track:hover { animation-play-state: paused; }
+#spot-ticker-track { will-change: transform; }
+#spot-ticker-track:hover { animation-play-state: paused !important; }
 @keyframes ticker-scroll {
   0%   { transform: translateX(0); }
   100% { transform: translateX(-50%); }
 }
-.ticker-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 0 18px;
-  font-size: 11px;
-  font-family: 'Karla', sans-serif;
-  letter-spacing: .04em;
-  border-right: 1px solid var(--border);
-  height: 28px;
+@keyframes pulse {
+  0%,100% { opacity:1; } 50% { opacity:.3; }
 }
-.ticker-metal { color: var(--dim); text-transform: uppercase; font-size: 10px; }
-.ticker-price { color: var(--text); font-weight: 600; font-family: monospace; }
-.ticker-unit  { color: var(--dim); font-size: 10px; }
-.ticker-dot   { width: 5px; height: 5px; border-radius: 50%; background: var(--green); flex-shrink: 0; }
-.ticker-dot.off { background: var(--dim); }
 }
 
 </style>
 </head>
 <body>
-<div id="spot-ticker"><div id="spot-ticker-track"><span class="ticker-item"><span class="ticker-dot off" id="ticker-dot"></span><span class="ticker-metal">Loading spot prices…</span></span></div></div>
+<div id="spot-ticker"><span style="color:var(--dim);font-size:11px;padding-left:14px;font-family:Karla,sans-serif;letter-spacing:.05em">Loading spot prices…</span></div>
 <div id="app">
 <div id="sb">
   <div class="logo">
@@ -600,29 +580,38 @@ const MAX_EXISTING_ID = 2485;
 
 /** Rebuild the scrolling spot price ticker from current SPOTS data. */
 function updateSpotTicker() {
-  const track = document.getElementById('spot-ticker-track');
-  if (!track || !SPOTS) return;
+  const ticker = document.getElementById('spot-ticker');
+  if (!ticker || !SPOTS) return;
   const sp = SPOTS;
-  const fmt = (n) => n ? '$' + n.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2}) : '—';
-  const items = [
-    { label:'Gold',      price: fmt(sp.gold),      unit:'/oz' },
-    { label:'Silver',    price: fmt(sp.silver),     unit:'/oz' },
-    { label:'Platinum',  price: fmt(sp.platinum),   unit:'/oz' },
-    { label:'Palladium', price: fmt(sp.palladium),  unit:'/oz' },
-    { label:'Copper',    price: sp.copper ? '$' + sp.copper.toFixed(2) : '—', unit:'/lb' },
+  const fmt = n => n ? '$' + n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}) : '—';
+  const metals = [
+    { sym:'●', label:'GOLD',      price:fmt(sp.gold),      unit:'/oz', col:'#c9a84c' },
+    { sym:'●', label:'SILVER',    price:fmt(sp.silver),    unit:'/oz', col:'#9aa8b8' },
+    { sym:'●', label:'PLATINUM',  price:fmt(sp.platinum),  unit:'/oz', col:'#78a0c0' },
+    { sym:'●', label:'PALLADIUM', price:fmt(sp.palladium), unit:'/oz', col:'#88a090' },
+    { sym:'●', label:'COPPER',    price:sp.copper?'$'+sp.copper.toFixed(2):'—', unit:'/lb', col:'#c07840' },
   ];
-  // Build one set then duplicate for seamless loop
-  const buildSet = () => items.map(it =>
-    `<span class="ticker-item">` +
-    `<span class="ticker-metal">${it.label}</span>` +
-    `<span class="ticker-price">${it.price}</span>` +
-    `<span class="ticker-unit">${it.unit}</span>` +
-    `</span>`
+
+  const sep = `<span style="color:var(--border);padding:0 4px;font-size:16px">|</span>`;
+
+  const buildSet = () => metals.map(m =>
+    `<span style="display:inline-flex;align-items:center;gap:6px;padding:0 20px;white-space:nowrap">` +
+    `<span style="color:${m.col};font-size:8px">●</span>` +
+    `<span style="color:var(--dim);font-size:10px;letter-spacing:.08em;font-family:Karla,sans-serif">${m.label}</span>` +
+    `<span style="color:var(--text);font-size:12px;font-weight:600;font-family:monospace;letter-spacing:.02em">${m.price}</span>` +
+    `<span style="color:var(--dim);font-size:10px">${m.unit}</span>` +
+    `</span>` + sep
   ).join('');
-  const html = buildSet() + buildSet(); // duplicate for seamless loop
-  track.innerHTML = html;
-  const dot = document.getElementById('ticker-dot');
-  if (dot) { dot.classList.remove('off'); }
+
+  // Build double set for seamless infinite scroll
+  const inner = buildSet() + buildSet();
+
+  // Use a div inside for animation
+  ticker.innerHTML =
+    `<div id="ticker-live-dot" style="width:7px;height:7px;border-radius:50%;background:var(--green);flex-shrink:0;margin-left:12px;animation:pulse 2s ease-in-out infinite"></div>` +
+    `<div style="overflow:hidden;flex:1;display:flex;align-items:center">` +
+    `<div id="spot-ticker-track" style="display:inline-flex;align-items:center;animation:ticker-scroll 28s linear infinite;will-change:transform">${inner}</div>` +
+    `</div>`;
 }
 
 async function loadSpotPrices() {
