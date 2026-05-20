@@ -4728,10 +4728,11 @@ async function saveRenumber(sheetKey, rawId) {
   const newLabelKey = sheetKey + '|' + cn(newVal);
   if (MANUAL_LABELS.has(oldLabelKey)) {
     MANUAL_LABELS.delete(oldLabelKey);
-    MANUAL_LABELS.add(newLabelKey);
-    saveManualLabels();
-    console.log('[Renumber] Updated label key:', oldLabelKey, '→', newLabelKey);
   }
+  // Always add the new ID to the labels queue — renumbered records need a fresh label
+  MANUAL_LABELS.add(newLabelKey);
+  saveManualLabels();
+  console.log('[Renumber] Added to labels queue:', newLabelKey);
 
   buildFlat();
   updateBadges();
