@@ -497,14 +497,19 @@ let PENDING_DELETES = JSON.parse(localStorage.getItem('cv_pending_deletes') || '
 let VALUE_HISTORY = JSON.parse(localStorage.getItem('cv_value_history') || '[]');
 function saveValueHistory() { localStorage.setItem('cv_value_history', JSON.stringify(VALUE_HISTORY)); }
 
+// Pending snapshots — queued for retry when Supabase is unreachable
+let PENDING_SNAPSHOTS = JSON.parse(localStorage.getItem('cv_pending_snapshots') || '[]');
+function savePendingSnapshots() { localStorage.setItem('cv_pending_snapshots', JSON.stringify(PENDING_SNAPSHOTS)); }
+
 // Record a value snapshot (called on each dashboard render)
 function recordValueSnapshot() {
   const T = computeTotals();
   const now = new Date();
   const today = now.toISOString().split('T')[0]; // YYYY-MM-DD
-  
+
   // Check if we already have a snapshot for today
   const existing = VALUE_HISTORY.find(s => s.date === today);
+  let snap;
   if (existing) {
     // Update today's snapshot with latest values
     existing.value = T.totVal;
@@ -512,23 +517,149 @@ function recordValueSnapshot() {
     existing.melt = T.totMelt;
     existing.count = T.totCount;
     existing.timestamp = now.toISOString();
+    snap = existing;
   } else {
     // Add new snapshot
-    VALUE_HISTORY.push({
+    snap = {
       date: today,
       value: T.totVal,
       cost: T.totCost,
       melt: T.totMelt,
       count: T.totCount,
       timestamp: now.toISOString()
-    });
+    };
+    VALUE_HISTORY.push(snap);
   }
-  
+
   // Keep only last 2 years of daily snapshots
   const twoYearsAgo = new Date(now.getTime() - 730 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
   VALUE_HISTORY = VALUE_HISTORY.filter(s => s.date >= twoYearsAgo);
-  
+
   saveValueHistory();
+
+  // Sync to Supabase (fire-and-forget). On failure, gets queued for retry.
+  if (typeof SB_URL !== 'undefined' && SB_URL && SB_KEY) {
+    pushSnapshotToSupabase(snap);
+  }
+}
+
+// ── SNAPSHOT SYNC (Supabase) ────────────────────────────────────────
+// Persists snapshots cross-device so trend charts (Daily/Monthly/Yearly)
+// show consistent history regardless of which device you open the app from.
+const SB_SNAPSHOT_TABLE = 'value_snapshots';
+
+/** Upsert a single snapshot to Supabase. On failure, queue for retry. */
+async function pushSnapshotToSupabase(snap) {
+  if (!SB_URL || !SB_KEY) return false;
+  try {
+    const url = SB_URL.replace(/\/+$/, '') + '/rest/v1/' + SB_SNAPSHOT_TABLE + '?on_conflict=date';
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'apikey': SB_KEY,
+        'Authorization': 'Bearer ' + SB_KEY,
+        'Content-Type': 'application/json',
+        'Prefer': 'resolution=merge-duplicates,return=minimal'
+      },
+      body: JSON.stringify({
+        date: snap.date,
+        value: snap.value,
+        cost: snap.cost,
+        melt: snap.melt,
+        count: snap.count,
+        timestamp: snap.timestamp
+      })
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    // On success, remove from pending queue if it was there
+    if (PENDING_SNAPSHOTS.length) {
+      PENDING_SNAPSHOTS = PENDING_SNAPSHOTS.filter(s => s.date !== snap.date);
+      savePendingSnapshots();
+    }
+    return true;
+  } catch (err) {
+    console.warn('[snapshot] push failed, queued for retry:', err.message);
+    // Replace any existing pending entry for the same date
+    PENDING_SNAPSHOTS = PENDING_SNAPSHOTS.filter(s => s.date !== snap.date);
+    PENDING_SNAPSHOTS.push(snap);
+    savePendingSnapshots();
+    return false;
+  }
+}
+
+/** Try to flush any queued snapshots up to Supabase. */
+async function flushPendingSnapshots() {
+  if (!SB_URL || !SB_KEY || !PENDING_SNAPSHOTS.length) return;
+  const toRetry = [...PENDING_SNAPSHOTS];
+  for (const snap of toRetry) {
+    await pushSnapshotToSupabase(snap);
+  }
+}
+
+/** Load all snapshots from Supabase and merge with local history.
+ *  Strategy: Supabase = source of truth for cross-device state.
+ *  Local-only snapshots (e.g. captured offline) get pushed up. */
+async function loadSnapshotsFromSupabase() {
+  if (!SB_URL || !SB_KEY) return;
+  try {
+    const url = SB_URL.replace(/\/+$/, '') + '/rest/v1/' + SB_SNAPSHOT_TABLE +
+                '?select=date,value,cost,melt,count,timestamp&order=date.asc';
+    const r = await fetch(url, {
+      headers: {
+        'apikey': SB_KEY,
+        'Authorization': 'Bearer ' + SB_KEY,
+        'Content-Type': 'application/json'
+      }
+    });
+    if (!r.ok) {
+      // 404 / table-not-found is the common case before migration is run
+      const body = await r.text();
+      if (body.includes('PGRST') || body.includes('not exist') || r.status === 404) {
+        console.warn('[snapshots] table not found — run 20260603_value_snapshots.sql in Supabase');
+      } else {
+        console.warn('[snapshots] load failed:', r.status, body.slice(0, 200));
+      }
+      return;
+    }
+    const remote = await r.json();
+    if (!Array.isArray(remote)) return;
+
+    // Index remote by date
+    const remoteByDate = {};
+    remote.forEach(s => { remoteByDate[s.date] = s; });
+
+    // Identify local-only snapshots (haven't been pushed up yet)
+    const localOnly = (VALUE_HISTORY || []).filter(s => !remoteByDate[s.date]);
+
+    // Rebuild VALUE_HISTORY: remote is authoritative + any newer local-only entries
+    VALUE_HISTORY = [...remote.map(s => ({
+      date: s.date,
+      value: Number(s.value) || 0,
+      cost:  Number(s.cost)  || 0,
+      melt:  Number(s.melt)  || 0,
+      count: Number(s.count) || 0,
+      timestamp: s.timestamp
+    })), ...localOnly];
+
+    // Sort chronologically
+    VALUE_HISTORY.sort((a, b) => a.date.localeCompare(b.date));
+    saveValueHistory();
+
+    // Push local-only snapshots up to Supabase (fire-and-forget)
+    localOnly.forEach(s => pushSnapshotToSupabase(s));
+
+    // Also retry any queued snapshots
+    flushPendingSnapshots();
+
+    console.log('[snapshots] Synced — ' + remote.length + ' remote, ' + localOnly.length + ' local-only uploaded');
+
+    // If the trend chart is currently visible, re-render it with merged data
+    if (typeof renderTrendChart === 'function' && ST && ST.view === 'dash') {
+      try { renderTrendChart(); } catch (e) { /* ignore */ }
+    }
+  } catch (err) {
+    console.warn('[snapshots] load failed, using local cache:', err.message);
+  }
 }
 
 
@@ -2548,6 +2679,7 @@ async function loadFromSupabase() {
     if (typeof renderDash === 'function') renderDash();
     if (ST && ST.view === 'inv') renderInv();
     loadSpotPrices();          // refresh metal spot prices for accurate value
+    loadSnapshotsFromSupabase(); // sync cross-device value history for trend chart
     const loadedCount = allRows.length;
     const bannerDetail = loadedCount + (total && total !== loadedCount ? ' of ' + total : '') + ' records · ' + new Date().toLocaleTimeString();
     updateSyncBanner('ok', bannerDetail);
