@@ -688,20 +688,48 @@ const MAX_EXISTING_ID = 2485;
 
 
 async function loadSpotPrices() {
-  const symbols = {gold:'XAU', silver:'XAG', platinum:'XPT', palladium:'XPD', copper:'XCU'};
+  // Copper is industrial — gold-api.com doesn't serve it (returns 404 on XCU).
+  // We read copper from localStorage (set via Settings → Copper $/lb, default $4.50).
+  const symbols = {gold:'XAU', silver:'XAG', platinum:'XPT', palladium:'XPD'};
+  const copperFromLocal = parseFloat(localStorage.getItem('cv_copper_price')) || 4.50;
+
   try {
-    const results = await Promise.all(
+    // allSettled so one bad metal doesn't tank the rest
+    const results = await Promise.allSettled(
       Object.entries(symbols).map(async ([metal, symbol]) => {
         const r = await fetch('https://api.gold-api.com/price/' + symbol, {headers:{'Accept':'application/json'}});
+        if (!r.ok) throw new Error(metal + ' HTTP ' + r.status);
         const d = await r.json();
-        return [metal, d.price || d.Price || 0];
+        const price = Number(d.price || d.Price || 0);
+        if (!price) throw new Error(metal + ' no price in response');
+        return [metal, price];
       })
     );
-    SPOTS = Object.fromEntries(results);
+
+    // Build SPOTS from successful fetches; log any failures quietly
+    const spots = {copper: copperFromLocal};
+    results.forEach((res, i) => {
+      const metal = Object.keys(symbols)[i];
+      if (res.status === 'fulfilled') {
+        spots[res.value[0]] = res.value[1];
+      } else {
+        console.warn('[spot] ' + metal + ' fetch failed:', res.reason.message);
+      }
+    });
+    SPOTS = spots;
+
+    const anyLive = Object.keys(symbols).some(m => spots[m] > 0);
+    const stamp   = new Date().toLocaleTimeString();
+    const lbl     = anyLive
+      ? '<span style="color:var(--green)">Live &#9679; ' + stamp + '</span>'
+      : '<span style="color:var(--red)">Offline &#9679; using cached/manual prices</span>';
     const el = document.querySelector('.spot-status');
-    if (el) el.innerHTML = '<span style="color:var(--green)">Live &#9679; ' + new Date().toLocaleTimeString() + '</span>';
+    if (el) el.innerHTML = lbl;
     const dashEl = document.getElementById('spot-status-dash');
-    if (dashEl) dashEl.innerHTML = '<span style="color:var(--green)">&#9679; Live ' + new Date().toLocaleTimeString() + '</span>';
+    if (dashEl) dashEl.innerHTML = anyLive
+      ? '<span style="color:var(--green)">&#9679; Live ' + stamp + '</span>'
+      : '<span style="color:var(--red)">&#9679; Offline</span>';
+
     refreshSidebarTotal();
     // Re-render whichever view is active so live melt values update everywhere
     if (typeof ST !== 'undefined') {
@@ -711,6 +739,9 @@ async function loadSpotPrices() {
       else if (ST.view === 'labels') renderLabels();
     }
   } catch(e) {
+    // Fallback so the rest of the app still has SPOTS.copper available
+    SPOTS = SPOTS || {copper: copperFromLocal};
+    if (!SPOTS.copper) SPOTS.copper = copperFromLocal;
     const el = document.querySelector('.spot-status');
     if (el) el.innerHTML = '<span style="color:var(--red)">Offline</span>';
   }
@@ -976,13 +1007,15 @@ const ST = {view:'dash',search:'',filterGroup:'all',filterSheet:'all',sortCol:'i
 let _charts={};
 
 // Value trend chart state
-let TREND_VIEW = 'daily';  // daily | monthly | yearly | all
+let TREND_VIEW = 'daily';  // daily | monthly | yearly | all | custom
+let TREND_CUSTOM_FROM = null; // ISO date string YYYY-MM-DD
+let TREND_CUSTOM_TO   = null;
 let trendChart = null;
 
 function setTrendView(view) {
   TREND_VIEW = view;
   // Update button states
-  ['daily','monthly','yearly','all'].forEach(v => {
+  ['daily','monthly','yearly','all','custom'].forEach(v => {
     const btn = document.getElementById('trend-' + v);
     if (btn) {
       if (v === view) {
@@ -994,7 +1027,80 @@ function setTrendView(view) {
       }
     }
   });
+  // Show / hide the custom range panel
+  const panel = document.getElementById('trend-custom-panel');
+  if (panel) panel.style.display = (view === 'custom') ? 'flex' : 'none';
+  // If switching to custom and no range is set yet, seed it with a reasonable default
+  if (view === 'custom') {
+    seedCustomRangeFromData();
+  }
   renderTrendChart();
+}
+
+/** Initialize the custom date inputs with sensible defaults + min/max bounds. */
+function seedCustomRangeFromData() {
+  if (!VALUE_HISTORY || VALUE_HISTORY.length === 0) return;
+  const sorted = [...VALUE_HISTORY].sort((a,b) => a.date.localeCompare(b.date));
+  const minDate = sorted[0].date;
+  const maxDate = sorted[sorted.length - 1].date;
+  const fromEl = document.getElementById('trend-from');
+  const toEl   = document.getElementById('trend-to');
+  if (!fromEl || !toEl) return;
+  // Set min/max so the picker can't go outside available data
+  fromEl.min = minDate; fromEl.max = maxDate;
+  toEl.min   = minDate; toEl.max   = maxDate;
+  // Default values: full available range, but only on first open
+  if (!TREND_CUSTOM_FROM || !TREND_CUSTOM_TO) {
+    TREND_CUSTOM_FROM = minDate;
+    TREND_CUSTOM_TO   = maxDate;
+  }
+  // Clamp existing values to current available range
+  if (TREND_CUSTOM_FROM < minDate) TREND_CUSTOM_FROM = minDate;
+  if (TREND_CUSTOM_TO   > maxDate) TREND_CUSTOM_TO   = maxDate;
+  if (TREND_CUSTOM_FROM > TREND_CUSTOM_TO) TREND_CUSTOM_FROM = TREND_CUSTOM_TO;
+  fromEl.value = TREND_CUSTOM_FROM;
+  toEl.value   = TREND_CUSTOM_TO;
+  // Show availability hint
+  const hint = document.getElementById('trend-range-hint');
+  if (hint) {
+    hint.textContent = 'Data available ' + minDate + ' \u2192 ' + maxDate +
+                       ' (' + VALUE_HISTORY.length + ' snapshot' +
+                       (VALUE_HISTORY.length === 1 ? '' : 's') + ')';
+  }
+}
+
+/** Called when either date input changes. Re-renders the chart. */
+function onTrendDateChange() {
+  const fromEl = document.getElementById('trend-from');
+  const toEl   = document.getElementById('trend-to');
+  if (!fromEl || !toEl) return;
+  let f = fromEl.value;
+  let t = toEl.value;
+  // Swap if user picked them in reverse
+  if (f && t && f > t) { const tmp = f; f = t; t = tmp; fromEl.value = f; toEl.value = t; }
+  TREND_CUSTOM_FROM = f || null;
+  TREND_CUSTOM_TO   = t || null;
+  if (TREND_VIEW !== 'custom') setTrendView('custom');
+  else renderTrendChart();
+}
+
+/** Quick presets inside the custom panel. */
+function setTrendQuickRange(days) {
+  if (!VALUE_HISTORY || VALUE_HISTORY.length === 0) return;
+  const sorted = [...VALUE_HISTORY].sort((a,b) => a.date.localeCompare(b.date));
+  const minDate = sorted[0].date;
+  const maxDate = sorted[sorted.length - 1].date;
+  const end = new Date(maxDate + 'T00:00:00');
+  const start = new Date(end.getTime() - days * 24 * 60 * 60 * 1000);
+  let startStr = start.toISOString().split('T')[0];
+  if (startStr < minDate) startStr = minDate;
+  TREND_CUSTOM_FROM = startStr;
+  TREND_CUSTOM_TO   = maxDate;
+  const fromEl = document.getElementById('trend-from');
+  const toEl   = document.getElementById('trend-to');
+  if (fromEl) fromEl.value = TREND_CUSTOM_FROM;
+  if (toEl)   toEl.value   = TREND_CUSTOM_TO;
+  setTrendView('custom');
 }
 
 function renderTrendChart() {
@@ -1012,8 +1118,64 @@ function renderTrendChart() {
   let values = [];
   
   const now = new Date();
-  
-  if (TREND_VIEW === 'daily') {
+
+  if (TREND_VIEW === 'custom') {
+    // ── Custom range — auto-pick granularity based on span ─────────────
+    const from = TREND_CUSTOM_FROM;
+    const to   = TREND_CUSTOM_TO;
+    if (from && to) {
+      data = data.filter(s => s.date >= from && s.date <= to);
+    }
+    if (data.length === 0) {
+      // No data in range — show empty state but keep chart visible
+      labels = [];
+      values = [];
+    } else {
+      // Compute span in days to pick granularity
+      const spanMs = (new Date(to + 'T00:00:00') - new Date(from + 'T00:00:00'));
+      const spanDays = Math.max(1, Math.round(spanMs / 86400000));
+
+      if (spanDays <= 60) {
+        // Daily granularity
+        labels = data.map(s => {
+          const d = new Date(s.date + 'T00:00:00');
+          return (d.getMonth()+1) + '/' + d.getDate();
+        });
+        values = data.map(s => s.value);
+      } else if (spanDays <= 730) {
+        // Monthly — last value per month
+        const byMonth = {};
+        data.forEach(s => {
+          const m = s.date.substring(0, 7);
+          if (!byMonth[m]) byMonth[m] = [];
+          byMonth[m].push(s);
+        });
+        const months = Object.keys(byMonth).sort();
+        labels = months.map(m => {
+          const [y, mo] = m.split('-');
+          return ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][parseInt(mo)-1] + " '" + y.substring(2);
+        });
+        values = months.map(m => {
+          const snaps = byMonth[m];
+          return snaps[snaps.length - 1].value;
+        });
+      } else {
+        // Yearly — last value per year
+        const byYear = {};
+        data.forEach(s => {
+          const y = s.date.substring(0, 4);
+          if (!byYear[y]) byYear[y] = [];
+          byYear[y].push(s);
+        });
+        const years = Object.keys(byYear).sort();
+        labels = years;
+        values = years.map(y => {
+          const snaps = byYear[y];
+          return snaps[snaps.length - 1].value;
+        });
+      }
+    }
+  } else if (TREND_VIEW === 'daily') {
     // Last 30 days
     const cutoff = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
     data = data.filter(s => s.date >= cutoff);
@@ -1665,15 +1827,38 @@ function renderDash(){
 </div>
 <!-- Value Trend Chart -->
 <div style="background:var(--bg2);border:1px solid var(--border);border-radius:7px;padding:18px;margin-bottom:24px">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px">
     <div class="stt" style="margin:0">Collection Value Over Time</div>
-    <div style="display:flex;gap:6px">
-      <button id="trend-daily" class="bp" onclick="setTrendView('daily')" style="padding:4px 10px;font-size:11px;background:var(--gold);color:#000">Daily</button>
+    <div style="display:flex;gap:6px;flex-wrap:wrap">
+      <button id="trend-daily"   class="bp" onclick="setTrendView('daily')"   style="padding:4px 10px;font-size:11px;background:var(--gold);color:#000">Daily</button>
       <button id="trend-monthly" class="bp" onclick="setTrendView('monthly')" style="padding:4px 10px;font-size:11px">Monthly</button>
-      <button id="trend-yearly" class="bp" onclick="setTrendView('yearly')" style="padding:4px 10px;font-size:11px">Yearly</button>
-      <button id="trend-all" class="bp" onclick="setTrendView('all')" style="padding:4px 10px;font-size:11px">All Time</button>
+      <button id="trend-yearly"  class="bp" onclick="setTrendView('yearly')"  style="padding:4px 10px;font-size:11px">Yearly</button>
+      <button id="trend-all"     class="bp" onclick="setTrendView('all')"     style="padding:4px 10px;font-size:11px">All Time</button>
+      <button id="trend-custom"  class="bp" onclick="setTrendView('custom')"  style="padding:4px 10px;font-size:11px">Custom</button>
     </div>
   </div>
+
+  <!-- Custom date range panel (shown only when Custom is active) -->
+  <div id="trend-custom-panel" style="display:none;flex-wrap:wrap;align-items:center;gap:10px;margin-bottom:14px;padding:10px 12px;background:var(--bg3);border:1px solid var(--border);border-radius:5px">
+    <div style="display:flex;align-items:center;gap:8px">
+      <label style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--dim)">From</label>
+      <input type="date" id="trend-from" onchange="onTrendDateChange()" style="background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:4px 8px;font-size:12px;border-radius:4px;font-family:inherit">
+    </div>
+    <div style="display:flex;align-items:center;gap:8px">
+      <label style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--dim)">To</label>
+      <input type="date" id="trend-to" onchange="onTrendDateChange()" style="background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:4px 8px;font-size:12px;border-radius:4px;font-family:inherit">
+    </div>
+    <div style="display:flex;align-items:center;gap:4px;margin-left:auto">
+      <span style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--dim);margin-right:4px">Quick</span>
+      <button class="bp" onclick="setTrendQuickRange(7)"   style="padding:3px 8px;font-size:10px">7d</button>
+      <button class="bp" onclick="setTrendQuickRange(30)"  style="padding:3px 8px;font-size:10px">30d</button>
+      <button class="bp" onclick="setTrendQuickRange(90)"  style="padding:3px 8px;font-size:10px">90d</button>
+      <button class="bp" onclick="setTrendQuickRange(365)" style="padding:3px 8px;font-size:10px">1y</button>
+      <button class="bp" onclick="setTrendQuickRange(730)" style="padding:3px 8px;font-size:10px">2y</button>
+    </div>
+    <div id="trend-range-hint" style="flex-basis:100%;font-size:11px;color:var(--dim);font-family:'DM Mono',ui-monospace,monospace;letter-spacing:.04em"></div>
+  </div>
+
   <div class="chart-wrap" style="height:240px">
     <canvas id="trend-chart"></canvas>
   </div>
@@ -1758,7 +1943,8 @@ function renderDash(){
   `;
   requestAnimationFrame(()=>renderDashCharts(gstats,totVal));
   recordValueSnapshot(); // capture today's value snapshot before drawing the trend chart
-  renderTrendChart();
+  // Restore the user's current trend view (button highlighting + custom panel visibility)
+  setTrendView(TREND_VIEW);
 }
 
 function renderDashCharts(gs,totVal){
