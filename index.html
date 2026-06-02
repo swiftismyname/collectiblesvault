@@ -1336,14 +1336,15 @@ function computeTotals() {
   const copperMelt = sp.copper    ? copperLb   * sp.copper    : D.copper.reduce((s,r)=>s+nv(r.meltValue),0);
   const totMelt    = goldMelt + silverMelt + platMelt + pallMelt + copperMelt;
 
-  // ── Override Precious Metals group oz + melt to cover ALL precious metal content ──
-  // gstats only counts bullion sheets; silver in coins also has real metal weight.
-  const totPreciousOz   = goldOzPure + silverOz + platOz + pallOz;  // all silver oz across entire collection
+  // ── Comprehensive precious-metal totals (bullion + metal content in coins) ──
+  // These are exposed on the return object for the dashboard *header* stat
+  // ("Precious Metals Melt") which shows the metal-content view across the
+  // ENTIRE collection. They are intentionally NOT applied to gstats below
+  // because silver coins already contribute their numismatic value to the
+  // Coins group — folding their melt back into Precious Metals would
+  // double-count and break the per-row → TOTAL math.
+  const totPreciousOz   = goldOzPure + silverOz + platOz + pallOz;
   const totPreciousMelt = goldMelt + silverMelt + platMelt + pallMelt + copperMelt;
-  if (gstats['Precious Metals']) {
-    gstats['Precious Metals'].oz    = totPreciousOz;
-    gstats['Precious Metals'].melt  = totPreciousMelt;
-  }
 
   return { totVal: adjTotVal, totCost: adjTotCost, totCount: adjTotCount, gstats,
            silverOz, silverBulOz, silverGradOz, silverRawOz,
@@ -1385,6 +1386,7 @@ function refreshSidebarTotal() {
 function renderDash(){
   const P = PRECOMPUTED;
   const T = computeTotals();
+  const sp = SPOTS || {};
   const gstats = T.gstats;
   const totVal = T.totVal, totCost = T.totCost, totCount = T.totCount;
   const silverOz = T.silverOz;
@@ -1548,40 +1550,64 @@ function renderDash(){
 </div>
 
 <div class="stt">Breakdown by Category Group</div>
+<div style="font-size:11px;color:var(--dim);margin-bottom:10px;line-height:1.55;max-width:880px">
+  Each item is valued <strong style="color:var(--text)">once</strong>, at the higher of its numismatic value or melt value.
+  Bullion typically lands on melt; graded coins on numismatic. Category subtotals sum to the TOTAL row.
+  The <em>Metal Content</em> column shows the underlying melt value of any precious metal inside each group at current spot &mdash; informational only, already included in the Value column where it's the higher number.
+</div>
 <table style="margin-bottom:8px">
-  <thead><tr><th>Group</th><th class="r">Records</th><th class="r">Total OZ</th><th class="r">Cost Paid</th><th class="r">Current / Melt Value</th><th class="r">Gain / Loss</th></tr></thead>
+  <thead><tr><th>Group</th><th class="r">Records</th><th class="r">Metal Oz</th><th class="r">Cost Paid</th><th class="r">Metal Content</th><th class="r">Current Value</th><th class="r">Gain / Loss</th></tr></thead>
   <tbody>
     ${GO.filter(g=>gstats[g]&&gstats[g].count>0).map(g=>{
       const r=gstats[g]; const gc=GC[g]||'#707070';
-      // For Precious Metals: use the full melt total (covers silver in coins too).
-      // For all other groups: use itemBest value as usual.
-      const dispVal  = (r.melt && r.melt > r.value) ? r.melt : r.value;
-      const gn = dispVal - r.cost;
-      // Oz label: distinguish troy oz from other units
+      // Each item counted once via itemBest in computeTotals — no overrides here.
+      const gn = r.value - r.cost;
+      // Melt content (informational): what's the metal worth at spot if you melted it?
+      //   Precious Metals  → bullion melt for the group's items
+      //   Coins            → silver/gold/etc content of silver-bearing coins
+      //   Currency/Sets/Other → none
+      let meltContent = 0;
+      if (g === 'Precious Metals') {
+        meltContent = (T.goldMelt||0) + (sp.silver ? (T.silverBulOz||0)*sp.silver : 0)
+                    + (T.platMelt||0) + (T.pallMelt||0) + (T.copperMelt||0);
+      } else if (g === 'Coins') {
+        meltContent = sp.silver ? ((T.silverGradOz||0) + (T.silverRawOz||0)) * sp.silver : 0;
+      }
       const ozLabel = r.oz > 0
-        ? (g === 'Precious Metals'
+        ? (g === 'Precious Metals' || g === 'Coins'
             ? r.oz.toFixed(3) + ' troy oz'
             : r.oz.toFixed(3) + ' oz')
         : '—';
+      const meltLabel = meltContent > 0
+        ? `<span style="color:var(--dim);font-size:11px" class="mono">${fmt$(meltContent)}</span>`
+        : '<span style="color:var(--dim)">—</span>';
       return `<tr>
         <td><span class="pill" style="background:${gc}18;color:${gc};border-color:${gc}40">${g}</span></td>
         <td class="r">${r.count.toLocaleString()}</td>
         <td class="r">${ozLabel}</td>
         <td class="r">${fmt$(r.cost)}</td>
-        <td class="r mono">${fmt$(dispVal)}</td>
+        <td class="r">${meltLabel}</td>
+        <td class="r mono">${fmt$(r.value)}</td>
         <td class="r ${gn>=0?'grn':'red'}">${gn>=0?'+':''}${fmt$(gn)}</td>
       </tr>`;
     }).join('')}
     <tr class="tr-total">
       <td><strong>TOTAL</strong></td>
       <td class="r"><strong>${totCount.toLocaleString()}</strong></td>
-      <td class="r">—</td>
+      <td class="r"><span style="color:var(--dim);font-size:11px">${(T.totPreciousOz||0).toFixed(3)} troy oz combined</span></td>
       <td class="r"><strong>${fmt$(totCost)}</strong></td>
+      <td class="r"><span class="mono" style="color:var(--dim);font-size:11px">${fmt$(T.totMelt||0)}</span></td>
       <td class="r mono"><strong>${fmt$(totVal)}</strong></td>
       <td class="r ${gain>=0?'grn':'red'}"><strong>${gain>=0?'+':''}${fmt$(gain)}</strong></td>
     </tr>
   </tbody>
 </table>
+<div style="font-size:11px;color:var(--dim);margin-bottom:24px;line-height:1.55">
+  <strong style="color:var(--gold)">Total Metal Content</strong> across the entire collection
+  (${(T.totPreciousOz||0).toFixed(3)} troy oz of precious metal) carries a melt value of
+  <span class="mono" style="color:var(--text)">${fmt$(T.totMelt||0)}</span> at current spot prices &mdash;
+  shown here as a reference. Each item is already valued at the higher of numismatic or melt in its category row.
+</div>
 <div class="stt" style="margin-top:20px">Category Detail</div>
 <table>
   <thead><tr><th>Category</th><th>Group</th><th class="r">Records</th><th class="r">Cost Paid</th><th class="r">Value / Melt</th></tr></thead>
