@@ -245,11 +245,21 @@ body.light select option{background:#fff}
     padding-bottom: max(8px, env(safe-area-inset-bottom));
   }
   #mobile-tabs button {
-    flex: 1; background: transparent; border: 0; color: var(--muted);
-    padding: 10px 4px; font-size: 10px;
-    text-transform: uppercase; letter-spacing: .04em;
+    flex: 1 1 0;
+    min-width: 0;                /* allow buttons to shrink past content width */
+    background: transparent; border: 0; color: var(--muted);
+    padding: 8px 2px; font-size: 10px;
+    text-transform: uppercase; letter-spacing: .03em;
     display: flex; flex-direction: column; align-items: center; gap: 3px;
     cursor: pointer; transition: color .15s;
+    overflow: hidden;
+  }
+  #mobile-tabs button > span:not(.ic):not(.bdg) {
+    /* The label text — shrink gracefully if needed */
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   #mobile-tabs button.on { color: var(--gold); }
   #mobile-tabs button .ic { font-size: 18px; line-height: 1; }
@@ -257,6 +267,17 @@ body.light select option{background:#fff}
     background: var(--gold); color: #000; font-size: 9px; padding: 1px 5px;
     border-radius: 8px; font-weight: 700; min-width: 16px; text-align: center;
     margin-top: -2px;
+  }
+  /* On very narrow screens (sub-380px like Samsung Galaxy S25 portrait),
+     shrink font and gap further so all 6 tabs comfortably fit. */
+  @media (max-width: 380px) {
+    #mobile-tabs button {
+      padding: 8px 1px;
+      font-size: 9px;
+      letter-spacing: .02em;
+      gap: 2px;
+    }
+    #mobile-tabs button .ic { font-size: 16px; }
   }
   /* Main area: pad enough below content to clear the tab bar (~64px tall buttons)
      PLUS the safe-area inset, PLUS a visible breathing-room buffer so the Save
@@ -272,6 +293,9 @@ body.light select option{background:#fff}
   .sv { font-size: 22px !important; }
   /* Metals breakdown + chart grids: single column */
   .lg2, .lg3, .lg4, .lg5 { grid-template-columns: 1fr !important; gap: 10px; }
+  /* Chart row (Value by Group + Cost vs Current Value): stack on mobile too —
+     previously this used `1fr 1.6fr` which overflowed horizontally on phones. */
+  .cr { grid-template-columns: 1fr !important; gap: 10px; }
   /* Charts: take full width, fixed height */
   .chart-wrap { height: 240px !important; }
   /* View headers: stack title + actions */
