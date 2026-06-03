@@ -241,7 +241,8 @@ body.light select option{background:#fff}
     background: var(--bg2);
     border-top: 1px solid var(--border);
     z-index: 50;
-    padding-bottom: env(safe-area-inset-bottom);
+    /* Always keep ≥8px below the buttons so the home indicator never crowds them */
+    padding-bottom: max(8px, env(safe-area-inset-bottom));
   }
   #mobile-tabs button {
     flex: 1; background: transparent; border: 0; color: var(--muted);
@@ -257,8 +258,10 @@ body.light select option{background:#fff}
     border-radius: 8px; font-weight: 700; min-width: 16px; text-align: center;
     margin-top: -2px;
   }
-  /* Main area takes full width with bottom padding for tab bar */
-  #main { padding-bottom: 64px; }
+  /* Main area: pad enough below content to clear the tab bar (~64px tall buttons)
+     PLUS the safe-area inset, PLUS a visible breathing-room buffer so the Save
+     button never sits right against the nav. */
+  #main { padding-bottom: calc(80px + env(safe-area-inset-bottom)); }
   #content { padding: 14px 12px !important; }
   /* Sync banner: keep at top */
   #sync-bar { font-size: 11px; padding: 6px 12px; }
