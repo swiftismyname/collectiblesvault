@@ -384,10 +384,126 @@ body.light select option{background:#fff}
 
 
 }
+/* ─── PASSCODE SPLASH SCREEN ────────────────────────────────────── */
+.splash{
+  position:fixed; inset:0; z-index:99999;
+  background:linear-gradient(180deg, var(--bg) 0%, var(--bg2) 100%);
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  padding:20px;
+  transition:opacity .55s ease, visibility .55s ease;
+}
+.splash.hidden{opacity:0; visibility:hidden; pointer-events:none}
+.splash-brand{display:flex;flex-direction:column;align-items:center;margin-bottom:32px}
+.splash-mark{
+  width:54px; height:54px; border:1px solid var(--gold);
+  display:grid; place-items:center; transform:rotate(45deg);
+  position:relative; margin-bottom:22px;
+}
+.splash-mark::before{content:'';position:absolute;inset:5px;border:1px solid var(--gold);opacity:.45}
+.splash-mark span{
+  transform:rotate(-45deg);
+  font-family:'Cormorant Garamond','Times New Roman',serif;
+  color:var(--gold); font-size:22px; font-style:italic; font-weight:400;
+}
+.splash-title{
+  font-family:'Cormorant Garamond','Times New Roman',serif;
+  font-size:30px; font-weight:300; color:var(--text); letter-spacing:.01em;
+}
+.splash-sub{
+  font-family:'DM Mono',ui-monospace,Menlo,monospace;
+  font-size:10px; color:var(--dim);
+  letter-spacing:.32em; text-transform:uppercase;
+  margin-top:6px;
+}
+.splash-dots{
+  display:flex; gap:18px;
+  margin:32px 0 30px;
+}
+.splash-dot{
+  width:13px; height:13px;
+  border:1px solid var(--gold); border-radius:50%;
+  transition:background .18s ease, transform .18s ease;
+}
+.splash-dot.filled{background:var(--gold); transform:scale(1.12)}
+.splash-dots.shake{animation:splash-shake .5s}
+@keyframes splash-shake{
+  0%,100%{transform:translateX(0)}
+  20%,60%{transform:translateX(-9px)}
+  40%,80%{transform:translateX(9px)}
+}
+.splash-keypad{
+  display:grid; grid-template-columns:repeat(3, 70px); gap:14px;
+}
+.splash-key{
+  width:70px; height:70px;
+  border:1px solid var(--border);
+  background:transparent; color:var(--text);
+  font-family:'Cormorant Garamond','Times New Roman',serif;
+  font-size:24px; font-weight:300;
+  border-radius:50%; cursor:pointer;
+  transition:all .22s ease;
+  display:flex; align-items:center; justify-content:center;
+  -webkit-tap-highlight-color:transparent;
+  user-select:none;
+  padding:0;
+}
+.splash-key:hover{border-color:var(--gold); color:var(--gold)}
+.splash-key:active{background:var(--gold); color:var(--bg); transform:scale(.94)}
+.splash-key.action{
+  font-size:16px;
+  font-family:'DM Mono',ui-monospace,Menlo,monospace;
+}
+.splash-key-spacer{width:70px;height:70px;visibility:hidden}
+.splash-hint{
+  font-family:'DM Mono',ui-monospace,Menlo,monospace;
+  font-size:10px; color:var(--dim);
+  letter-spacing:.22em; text-transform:uppercase;
+  margin-top:30px;
+  min-height:14px;
+  transition:color .25s;
+}
+.splash-hint.error{color:#d68a8a}
+.splash-hint.ok{color:var(--gold)}
+
+@media (max-width:520px){
+  .splash-keypad{grid-template-columns:repeat(3, 62px); gap:12px}
+  .splash-key,.splash-key-spacer{width:62px; height:62px; font-size:22px}
+  .splash-title{font-size:26px}
+}
 
 </style>
 </head>
 <body>
+<!-- ═══════ PASSCODE SPLASH ═══════ -->
+<div id="splash" class="splash" role="dialog" aria-modal="true" aria-label="Enter passcode">
+  <div class="splash-brand">
+    <div class="splash-mark"><span>V</span></div>
+    <div class="splash-title">Collectibles Vault</div>
+    <div class="splash-sub">The Private Registry</div>
+  </div>
+  <div class="splash-dots" id="splash-dots">
+    <div class="splash-dot"></div>
+    <div class="splash-dot"></div>
+    <div class="splash-dot"></div>
+    <div class="splash-dot"></div>
+  </div>
+  <div class="splash-keypad" id="splash-keypad">
+    <button class="splash-key" data-d="1">1</button>
+    <button class="splash-key" data-d="2">2</button>
+    <button class="splash-key" data-d="3">3</button>
+    <button class="splash-key" data-d="4">4</button>
+    <button class="splash-key" data-d="5">5</button>
+    <button class="splash-key" data-d="6">6</button>
+    <button class="splash-key" data-d="7">7</button>
+    <button class="splash-key" data-d="8">8</button>
+    <button class="splash-key" data-d="9">9</button>
+    <div class="splash-key-spacer"></div>
+    <button class="splash-key" data-d="0">0</button>
+    <button class="splash-key action" data-action="back" aria-label="Delete">&#9003;</button>
+  </div>
+  <div class="splash-hint" id="splash-hint">Enter Passcode</div>
+</div>
+
 <div id="app">
 <div id="sb">
   <div class="logo">
@@ -5901,6 +6017,31 @@ function renderSettings(){
     '<div style="background:var(--bg3);border:1px solid var(--border);border-radius:7px;padding:18px;margin-bottom:24px">'+sp+'<button class="bg" onclick="loadSpotPrices()" style="width:100%">Refresh Prices</button><div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)"><label style="font-size:11px;color:var(--dim);display:block;margin-bottom:5px">Copper $/lb</label><div style="display:flex;gap:8px"><input type="number" step="0.01" id="cpi" value="'+copper+'" style="flex:1"><button class="bp" onclick="setCopperPrice(document.getElementById(\'cpi\').value)">Save</button></div></div></div>',
     '<div class="stt">Data</div>',
     '<div style="background:var(--bg3);border:1px solid var(--border);border-radius:7px;padding:18px;margin-bottom:24px"><p style="font-size:13px;color:var(--text);margin-bottom:14px"><b>'+nr+'</b> locally-added records</p><button class="bg" onclick="exportUpdatedSpreadsheet()" style="margin-right:8px">Export Updated XLSX</button><button class="bg" onclick="clearAllData()" style="color:var(--red);border-color:var(--red)">Clear Local Data</button></div>',
+
+    // ── Security (passcode) ──────────────────────────────────────────
+    '<div class="stt">Security</div>'
+    +'<div style="background:var(--bg3);border:1px solid var(--border);border-radius:7px;padding:18px;margin-bottom:24px">'
+    +'<div style="font-size:13px;color:var(--text);line-height:1.6;margin-bottom:16px">'
+    +'The app is protected by a 4-digit passcode at launch. The default code is <strong style="color:var(--gold);font-family:DM Mono,monospace">0330</strong>. '
+    +'Update it below for additional privacy.</div>'
+    +'<div style="display:grid;grid-template-columns:1fr;gap:10px;max-width:300px">'
+    +'<div><div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--dim);margin-bottom:5px">Current Passcode</div>'
+    +'<input id="pc-current" type="password" inputmode="numeric" maxlength="4" pattern="[0-9]*" autocomplete="off" '
+    +'style="width:100%;padding:9px 12px;background:var(--bg4);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:15px;letter-spacing:.25em;font-family:DM Mono,monospace"></div>'
+    +'<div><div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--dim);margin-bottom:5px">New Passcode</div>'
+    +'<input id="pc-new" type="password" inputmode="numeric" maxlength="4" pattern="[0-9]*" autocomplete="new-password" '
+    +'style="width:100%;padding:9px 12px;background:var(--bg4);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:15px;letter-spacing:.25em;font-family:DM Mono,monospace"></div>'
+    +'<div><div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--dim);margin-bottom:5px">Confirm New Passcode</div>'
+    +'<input id="pc-confirm" type="password" inputmode="numeric" maxlength="4" pattern="[0-9]*" autocomplete="new-password" '
+    +'style="width:100%;padding:9px 12px;background:var(--bg4);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:15px;letter-spacing:.25em;font-family:DM Mono,monospace"></div>'
+    +'</div>'
+    +'<div id="pc-msg" style="font-size:12px;margin:14px 0 4px;min-height:16px;font-family:DM Mono,monospace;color:var(--dim)"></div>'
+    +'<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:6px">'
+    +'<button class="bp" onclick="changePasscode()">Update Passcode</button>'
+    +'<button class="bg" onclick="resetPasscodeToDefault()" style="font-size:12px">Reset to Default (0330)</button>'
+    +'<button class="bg" onclick="lockAppNow()" style="font-size:12px;color:var(--red);border-color:rgba(255,80,80,.3);margin-left:auto">🔒 Lock Now</button>'
+    +'</div>'
+    +'</div>',
     (function(){
       let h = '<div class="stt">Sheets Sync Diagnostic</div>';
       if (!window._lastLoadDiag) {
@@ -6556,6 +6697,175 @@ function clearAllData() {
   VALUE_HISTORY = [];
   alert('Local data cleared. The page will now reload.');
   location.reload();
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  PASSCODE LOCK SCREEN
+//  Default code: 0330 (changeable in Settings → Security)
+//  Stored as SHA-256 hash in localStorage; never plaintext.
+//  Unlock state is per-tab (sessionStorage) — closing tab re-locks.
+// ═══════════════════════════════════════════════════════════════════
+const PASSCODE_KEY         = 'cv_passcode_hash';
+const PASSCODE_SESSION_KEY = 'cv_unlocked';
+const PASSCODE_DEFAULT     = '0330';
+let   PASSCODE_BUFFER      = '';
+
+async function sha256Hex(text) {
+  const data = new TextEncoder().encode(text);
+  const buf  = await crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
+}
+
+async function ensurePasscodeInitialized() {
+  if (!localStorage.getItem(PASSCODE_KEY)) {
+    const hash = await sha256Hex(PASSCODE_DEFAULT);
+    localStorage.setItem(PASSCODE_KEY, hash);
+  }
+}
+
+function isUnlocked() { return sessionStorage.getItem(PASSCODE_SESSION_KEY) === '1'; }
+function markUnlocked() { sessionStorage.setItem(PASSCODE_SESSION_KEY, '1'); }
+
+function showSplash() {
+  const s = document.getElementById('splash');
+  if (s) s.classList.remove('hidden');
+  PASSCODE_BUFFER = '';
+  updateSplashDots();
+  setSplashHint('Enter Passcode', null);
+}
+function hideSplash() {
+  const s = document.getElementById('splash');
+  if (s) s.classList.add('hidden');
+}
+
+function setSplashHint(text, kind) {
+  const h = document.getElementById('splash-hint');
+  if (!h) return;
+  h.classList.remove('error','ok');
+  if (kind) h.classList.add(kind);
+  h.textContent = text || '';
+}
+
+function updateSplashDots() {
+  document.querySelectorAll('#splash-dots .splash-dot').forEach((d, i) =>
+    d.classList.toggle('filled', i < PASSCODE_BUFFER.length));
+}
+
+function shakeSplashDots() {
+  const d = document.getElementById('splash-dots');
+  if (!d) return;
+  d.classList.add('shake');
+  setTimeout(() => d.classList.remove('shake'), 500);
+}
+
+async function trySplashUnlock() {
+  const hash   = await sha256Hex(PASSCODE_BUFFER);
+  const stored = localStorage.getItem(PASSCODE_KEY);
+  if (hash === stored) {
+    setSplashHint('Unlocked', 'ok');
+    markUnlocked();
+    setTimeout(hideSplash, 250);
+  } else {
+    shakeSplashDots();
+    setSplashHint('Incorrect Passcode', 'error');
+    PASSCODE_BUFFER = '';
+    setTimeout(() => {
+      updateSplashDots();
+      setSplashHint('Enter Passcode', null);
+    }, 700);
+  }
+}
+
+function splashKeyPress(digit) {
+  if (PASSCODE_BUFFER.length >= 4) return;
+  PASSCODE_BUFFER += digit;
+  updateSplashDots();
+  if (PASSCODE_BUFFER.length === 4) setTimeout(trySplashUnlock, 150);
+}
+function splashKeyBack() {
+  if (!PASSCODE_BUFFER.length) return;
+  PASSCODE_BUFFER = PASSCODE_BUFFER.slice(0, -1);
+  updateSplashDots();
+}
+
+function bindSplashEvents() {
+  document.querySelectorAll('#splash-keypad .splash-key').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const d = btn.getAttribute('data-d');
+      const a = btn.getAttribute('data-action');
+      if (d) splashKeyPress(d);
+      else if (a === 'back') splashKeyBack();
+    });
+  });
+  // Hardware keyboard
+  document.addEventListener('keydown', e => {
+    const s = document.getElementById('splash');
+    if (!s || s.classList.contains('hidden')) return;
+    if (/^[0-9]$/.test(e.key))      { splashKeyPress(e.key); e.preventDefault(); }
+    else if (e.key === 'Backspace') { splashKeyBack();       e.preventDefault(); }
+    else if (e.key === 'Enter' && PASSCODE_BUFFER.length === 4) {
+      trySplashUnlock(); e.preventDefault();
+    }
+  });
+}
+
+// Init on load — runs alongside the rest of the app; splash overlays UI until unlocked
+(async function initLock() {
+  await ensurePasscodeInitialized();
+  const start = () => {
+    bindSplashEvents();
+    if (isUnlocked()) hideSplash();
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
+  else start();
+})();
+
+// ─── PASSCODE MANAGEMENT (called from Settings) ────────────────────
+async function changePasscode() {
+  const cur  = (document.getElementById('pc-current')?.value || '').trim();
+  const nu1  = (document.getElementById('pc-new')?.value     || '').trim();
+  const nu2  = (document.getElementById('pc-confirm')?.value || '').trim();
+  const msg  = document.getElementById('pc-msg');
+
+  function show(txt, kind) {
+    if (!msg) return;
+    msg.textContent = txt;
+    msg.style.color = kind === 'error' ? 'var(--red)'
+                    : kind === 'ok'    ? 'var(--green)'
+                    : 'var(--dim)';
+  }
+  if (!/^\d{4}$/.test(nu1)) { show('New passcode must be exactly 4 digits.', 'error'); return; }
+  if (nu1 !== nu2)          { show('New passcodes do not match.',            'error'); return; }
+  const curHash = await sha256Hex(cur);
+  if (curHash !== localStorage.getItem(PASSCODE_KEY)) {
+    show('Current passcode is incorrect.', 'error'); return;
+  }
+  const newHash = await sha256Hex(nu1);
+  localStorage.setItem(PASSCODE_KEY, newHash);
+  show('Passcode updated successfully.', 'ok');
+  ['pc-current','pc-new','pc-confirm'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.value = '';
+  });
+}
+
+async function resetPasscodeToDefault() {
+  if (!confirm('Reset passcode to the default (0330)?\n\nAnyone with access to this device will be able to unlock with that code until you set a new one.')) return;
+  const hash = await sha256Hex(PASSCODE_DEFAULT);
+  localStorage.setItem(PASSCODE_KEY, hash);
+  const msg = document.getElementById('pc-msg');
+  if (msg) {
+    msg.textContent = 'Passcode reset to default: 0330';
+    msg.style.color = 'var(--gold)';
+  } else {
+    alert('Passcode reset to default: 0330');
+  }
+}
+
+function lockAppNow() {
+  if (!confirm('Lock the app now?\n\nYou will need to enter your passcode to continue.')) return;
+  sessionStorage.removeItem(PASSCODE_SESSION_KEY);
+  PASSCODE_BUFFER = '';
+  showSplash();
 }
 </script>
 <div id="mobile-tabs">
