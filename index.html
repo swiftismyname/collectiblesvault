@@ -471,6 +471,119 @@ body.light select option{background:#fff}
   .splash-title{font-size:26px}
 }
 
+/* ─── AI SCAN MODAL ─────────────────────────────────────────────── */
+.ai-modal-bg{
+  position:fixed; inset:0; z-index:9000;
+  background:rgba(0,0,0,.75);
+  backdrop-filter:blur(6px);
+  display:none; align-items:center; justify-content:center;
+  padding:20px; overflow-y:auto;
+}
+.ai-modal-bg.show{display:flex}
+.ai-modal{
+  background:var(--bg2);
+  border:1px solid var(--border);
+  border-radius:10px;
+  max-width:640px; width:100%;
+  max-height:90vh;
+  display:flex; flex-direction:column;
+  box-shadow:0 30px 80px -20px rgba(0,0,0,.8);
+}
+.ai-modal-head{
+  padding:18px 22px; border-bottom:1px solid var(--border);
+  display:flex; align-items:center; justify-content:space-between;
+}
+.ai-modal-title{font-family:'Cormorant Garamond',serif; font-size:22px; color:var(--text); font-weight:300}
+.ai-modal-title em{color:var(--gold); font-style:italic}
+.ai-modal-close{
+  width:30px; height:30px; border:1px solid var(--border);
+  background:transparent; color:var(--text);
+  border-radius:50%; cursor:pointer; font-size:16px;
+  display:grid; place-items:center;
+}
+.ai-modal-close:hover{border-color:var(--gold); color:var(--gold)}
+.ai-modal-body{padding:22px; overflow-y:auto}
+.ai-slots{
+  display:grid; grid-template-columns:1fr 1fr; gap:12px;
+  margin-bottom:16px;
+}
+@media (max-width:480px){.ai-slots{grid-template-columns:1fr}}
+.ai-slot{
+  background:var(--bg3); border:1.5px dashed var(--border);
+  border-radius:8px; padding:14px;
+  text-align:center;
+  transition:border-color .2s ease, background .2s ease;
+  position:relative;
+  min-height:180px;
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+}
+.ai-slot.has-image{border-style:solid; border-color:var(--gold); background:var(--bg4); padding:6px}
+.ai-slot-label{
+  font-family:'DM Mono',monospace; font-size:10px; color:var(--gold);
+  letter-spacing:.22em; text-transform:uppercase; margin-bottom:8px;
+}
+.ai-slot-icon{font-size:36px; color:var(--dim); margin-bottom:6px}
+.ai-slot-hint{font-size:11px; color:var(--muted); margin-bottom:10px}
+.ai-slot-btn{
+  display:inline-block; padding:8px 14px;
+  background:var(--gold); color:var(--bg);
+  border:none; border-radius:5px; cursor:pointer;
+  font-size:11px; letter-spacing:.1em; text-transform:uppercase; font-weight:500;
+}
+.ai-slot-btn:hover{filter:brightness(1.1)}
+.ai-slot input[type="file"]{display:none}
+.ai-slot-preview{
+  width:100%; aspect-ratio:1/1; object-fit:cover;
+  border-radius:6px; display:block;
+}
+.ai-slot-replace{
+  position:absolute; top:10px; right:10px;
+  background:rgba(0,0,0,.7); color:white;
+  border:none; border-radius:50%;
+  width:26px; height:26px; cursor:pointer;
+  font-size:12px; display:none;
+}
+.ai-slot.has-image .ai-slot-replace{display:grid; place-items:center}
+.ai-action-row{
+  display:flex; gap:10px; margin-top:18px; padding-top:18px;
+  border-top:1px solid var(--border);
+}
+.ai-status{
+  font-family:'DM Mono',monospace; font-size:11px;
+  color:var(--dim); letter-spacing:.1em;
+  padding:10px 0; min-height:18px;
+}
+.ai-status.error{color:#d68a8a}
+.ai-status.ok{color:var(--gold)}
+.ai-results{
+  margin-top:16px; padding:16px;
+  background:var(--bg3); border:1px solid var(--gold3);
+  border-radius:7px; display:none;
+}
+.ai-results.show{display:block}
+.ai-results-head{
+  font-family:'DM Mono',monospace; font-size:10px;
+  color:var(--gold); letter-spacing:.22em;
+  text-transform:uppercase; margin-bottom:10px;
+}
+.ai-results-grid{
+  display:grid; grid-template-columns:auto 1fr; gap:8px 14px;
+  font-size:13px;
+}
+.ai-results-grid .k{
+  color:var(--dim); font-family:'DM Mono',monospace; font-size:11px;
+  text-transform:uppercase; letter-spacing:.06em; padding-top:2px;
+}
+.ai-results-grid .v{color:var(--text); word-break:break-word}
+.ai-results-grid .v.gold{color:var(--gold); font-weight:500}
+.ai-spin{
+  display:inline-block; width:14px; height:14px;
+  border:2px solid var(--border); border-top-color:var(--gold);
+  border-radius:50%; animation:ai-spin 0.7s linear infinite;
+  vertical-align:middle; margin-right:8px;
+}
+@keyframes ai-spin{to{transform:rotate(360deg)}}
+
 </style>
 </head>
 <body>
@@ -502,6 +615,62 @@ body.light select option{background:#fff}
     <button class="splash-key action" data-action="back" aria-label="Delete">&#9003;</button>
   </div>
   <div class="splash-hint" id="splash-hint">Enter Passcode</div>
+</div>
+
+<!-- ═══════ AI SCAN MODAL ═══════ -->
+<div id="ai-modal" class="ai-modal-bg" role="dialog" aria-modal="true" aria-label="Scan with AI">
+  <div class="ai-modal">
+    <div class="ai-modal-head">
+      <div class="ai-modal-title">Scan with <em>AI</em></div>
+      <button class="ai-modal-close" onclick="closeAIScan()" aria-label="Close">&times;</button>
+    </div>
+    <div class="ai-modal-body">
+      <div style="font-size:12px;color:var(--muted);line-height:1.6;margin-bottom:14px">
+        Capture the <strong style="color:var(--gold)">obverse</strong> (front) and <strong style="color:var(--gold)">reverse</strong> (back). Claude analyzes both and pre-fills the Add form.
+      </div>
+
+      <div class="ai-slots">
+        <div class="ai-slot" id="ai-slot-front">
+          <button class="ai-slot-replace" onclick="aiResetSlot('front')" title="Replace image">&times;</button>
+          <img class="ai-slot-preview" id="ai-preview-front" style="display:none">
+          <div class="ai-slot-empty">
+            <div class="ai-slot-icon">⊙</div>
+            <div class="ai-slot-label">Obverse · Front</div>
+            <div class="ai-slot-hint">Heads side / portrait side</div>
+            <label class="ai-slot-btn">
+              Capture
+              <input type="file" accept="image/*" capture="environment" onchange="aiCaptureImage('front', this)">
+            </label>
+          </div>
+        </div>
+        <div class="ai-slot" id="ai-slot-back">
+          <button class="ai-slot-replace" onclick="aiResetSlot('back')" title="Replace image">&times;</button>
+          <img class="ai-slot-preview" id="ai-preview-back" style="display:none">
+          <div class="ai-slot-empty">
+            <div class="ai-slot-icon">⊚</div>
+            <div class="ai-slot-label">Reverse · Back</div>
+            <div class="ai-slot-hint">Tails side / numerical side</div>
+            <label class="ai-slot-btn">
+              Capture
+              <input type="file" accept="image/*" capture="environment" onchange="aiCaptureImage('back', this)">
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <div id="ai-status" class="ai-status"></div>
+
+      <div id="ai-results" class="ai-results">
+        <div class="ai-results-head">Analysis</div>
+        <div id="ai-results-body"></div>
+      </div>
+
+      <div class="ai-action-row">
+        <button class="bg" onclick="closeAIScan()" style="flex:1">Cancel</button>
+        <button class="bp" onclick="aiAnalyze()" id="ai-analyze-btn" style="flex:2">Analyze with AI</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <div id="app">
@@ -6042,6 +6211,96 @@ function renderSettings(){
     +'<button class="bg" onclick="lockAppNow()" style="font-size:12px;color:var(--red);border-color:rgba(255,80,80,.3);margin-left:auto">🔒 Lock Now</button>'
     +'</div>'
     +'</div>',
+
+    // ── AI Vision ────────────────────────────────────────────────────
+    (function() {
+      const provider     = localStorage.getItem('cv_ai_provider') || 'gemini';
+      const savedKey     = localStorage.getItem('cv_ai_key_' + provider) || '';
+      const savedModel   = localStorage.getItem('cv_ai_model_' + provider)
+                            || (provider === 'gemini' ? 'gemini-2.5-flash' : 'claude-sonnet-4-5');
+      const keyMasked    = savedKey ? (savedKey.slice(0, 10) + '…' + savedKey.slice(-4)) : '';
+      const otherKeyExists = !!localStorage.getItem('cv_ai_key_' + (provider === 'gemini' ? 'anthropic' : 'gemini'));
+
+      const providerInfo = {
+        gemini: {
+          label: 'Google Gemini',
+          cost: '<strong style="color:var(--green)">FREE</strong> · up to 1,500 requests/day · no credit card required',
+          keyUrl: 'https://aistudio.google.com/app/apikey',
+          keyHost: 'aistudio.google.com',
+          keyPrefix: 'AIza…',
+          keyHelp: 'Sign in with any Google account, click "Create API key", copy and paste below.',
+          models: ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash']
+        },
+        anthropic: {
+          label: 'Anthropic Claude',
+          cost: 'Paid · roughly <strong>$0.01–0.03</strong> per scan · pay-as-you-go after free credits',
+          keyUrl: 'https://console.anthropic.com/settings/keys',
+          keyHost: 'console.anthropic.com',
+          keyPrefix: 'sk-ant-…',
+          keyHelp: 'Create an Anthropic account, generate a key in Settings → API Keys.',
+          models: ['claude-sonnet-4-5', 'claude-opus-4-5', 'claude-haiku-4-5']
+        }
+      };
+      const info = providerInfo[provider];
+
+      const modelOpts = info.models.map(function(m){
+        const rec = (m === (provider === 'gemini' ? 'gemini-2.5-flash' : 'claude-sonnet-4-5')) ? ' (recommended)' : '';
+        return '<option value="'+m+'"'+(m===savedModel?' selected':'')+'>'+m+rec+'</option>';
+      }).join('');
+
+      return '<div class="stt">AI Vision</div>'
+        +'<div style="background:var(--bg3);border:1px solid var(--border);border-radius:7px;padding:18px;margin-bottom:24px">'
+        +'<div style="font-size:13px;color:var(--text);line-height:1.6;margin-bottom:14px">'
+        +'Identify coins and paper currency by photographing them — the AI analyzes both sides and pre-fills the Add form with grade, denomination, country, composition, and estimated value.'
+        +'</div>'
+
+        // Provider selector
+        +'<div style="margin-bottom:14px">'
+        +'<div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--dim);margin-bottom:5px">AI Provider</div>'
+        +'<select id="ai-provider-input" onchange="aiSwitchProvider(this.value)" style="width:100%;padding:9px 12px;background:var(--bg4);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:13px">'
+        +'<option value="gemini"' +(provider==='gemini'   ?' selected':'')+ '>Google Gemini (free)</option>'
+        +'<option value="anthropic"'+(provider==='anthropic'?' selected':'')+ '>Anthropic Claude (paid)</option>'
+        +'</select>'
+        +'</div>'
+
+        // Cost note
+        +'<div style="font-size:12px;color:var(--muted);line-height:1.7;margin-bottom:14px;padding:10px 12px;background:var(--bg4);border-radius:5px;border-left:3px solid '+(provider==='gemini'?'var(--green)':'var(--gold)')+'">'
+        +info.cost
+        +'</div>'
+
+        // Setup help
+        +'<div style="font-size:12px;color:var(--muted);line-height:1.6;margin-bottom:14px">'
+        +'<strong style="color:var(--gold)">Setup:</strong> '+info.keyHelp+' Free key from <a href="'+info.keyUrl+'" target="_blank" rel="noopener" style="color:var(--gold);text-decoration:underline">'+info.keyHost+'</a>.'
+        +'</div>'
+
+        // Status
+        +(savedKey
+          ? '<div style="font-size:12px;color:var(--green);margin-bottom:10px">✓ '+info.label+' key configured: <span style="font-family:DM Mono,monospace;color:var(--text)">'+keyMasked+'</span></div>'
+          : '<div style="font-size:12px;color:var(--dim);margin-bottom:10px">No '+info.label+' key configured</div>')
+        +(otherKeyExists
+          ? '<div style="font-size:11px;color:var(--dim);margin-bottom:10px;font-style:italic">A key for the other provider is also saved — switch providers above to use it.</div>'
+          : '')
+
+        // Key + model inputs
+        +'<div style="display:grid;grid-template-columns:1fr;gap:10px;margin-bottom:10px">'
+        +'<div><div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--dim);margin-bottom:5px">'+info.label+' API Key</div>'
+        +'<input id="ai-key-input" type="password" autocomplete="off" placeholder="'+info.keyPrefix+'" value="'+savedKey.replace(/"/g, '&quot;')+'"'
+        +' style="width:100%;padding:9px 12px;background:var(--bg4);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:13px;font-family:DM Mono,monospace"></div>'
+        +'<div><div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--dim);margin-bottom:5px">Model</div>'
+        +'<select id="ai-model-input" style="width:100%;padding:9px 12px;background:var(--bg4);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:13px">'
+        +modelOpts
+        +'</select></div>'
+        +'</div>'
+        +'<div id="ai-key-msg" style="font-size:12px;margin:6px 0;min-height:14px;color:var(--dim);font-family:DM Mono,monospace"></div>'
+
+        // Actions
+        +'<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px">'
+        +'<button class="bp" onclick="saveAIKey()">Save</button>'
+        +(savedKey ? '<button class="bg" onclick="openAIScan()" style="font-size:12px">📸 Test Scan</button>' : '')
+        +(savedKey ? '<button class="bg" onclick="clearAIKey()" style="font-size:12px;color:var(--red);border-color:rgba(255,80,80,.3);margin-left:auto">Remove Key</button>' : '')
+        +'</div>'
+        +'</div>';
+    })(),
     (function(){
       let h = '<div class="stt">Sheets Sync Diagnostic</div>';
       if (!window._lastLoadDiag) {
@@ -6494,7 +6753,9 @@ function renderAdd(){
   const suggestedId = Math.max(...existingIds, ...allIds, MAX_EXISTING_ID, 0) + 1;
 
   document.getElementById('content').innerHTML =
-    '<div class="vh"><div><div class="vt">Add Record</div><div class="vsub">Add a new item to your collection</div></div></div>'
+    '<div class="vh"><div><div class="vt">Add Record</div><div class="vsub">Add a new item to your collection</div></div>'
+    +'<button class="bp" onclick="openAIScan()" style="font-size:13px;padding:9px 16px;letter-spacing:.02em">📸 Scan with AI</button>'
+    +'</div>'
     +'<div style="max-width:560px">'
     +'<div style="margin-bottom:20px"><label style="display:block;font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin-bottom:6px">Category</label>'
     +'<select onchange="ADD_SHEET=this.value;renderAdd()" style="width:100%;background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:4px;font-size:13px">'+sheetOpts+'</select></div>'
@@ -6866,6 +7127,386 @@ function lockAppNow() {
   sessionStorage.removeItem(PASSCODE_SESSION_KEY);
   PASSCODE_BUFFER = '';
   showSplash();
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  AI VISION SCAN — Identify coins / paper currency from photos
+//  Two providers supported:
+//    • Gemini (Google AI Studio) — FREE tier (1,500 req/day)
+//    • Anthropic (Claude) — paid, ~$0.01-0.03 per scan
+//  Keys live only in localStorage on this device.
+// ═══════════════════════════════════════════════════════════════════
+const AI_PROVIDER_DEFAULT = 'gemini';
+const AI_MODELS = {
+  gemini:    ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash'],
+  anthropic: ['claude-sonnet-4-5', 'claude-opus-4-5', 'claude-haiku-4-5']
+};
+const AI_MODEL_DEFAULTS = {
+  gemini:    'gemini-2.5-flash',
+  anthropic: 'claude-sonnet-4-5'
+};
+const AI_PROVIDER_LABELS = {
+  gemini:    'Google Gemini (free tier)',
+  anthropic: 'Anthropic Claude (paid)'
+};
+let AI_FRONT_IMG = null;   // data URL
+let AI_BACK_IMG  = null;
+let AI_LAST_RESULT = null;
+
+function aiCurrentProvider() {
+  return localStorage.getItem('cv_ai_provider') || AI_PROVIDER_DEFAULT;
+}
+function aiCurrentModel() {
+  const p = aiCurrentProvider();
+  return localStorage.getItem('cv_ai_model_' + p) || AI_MODEL_DEFAULTS[p];
+}
+function aiCurrentKey() {
+  return localStorage.getItem('cv_ai_key_' + aiCurrentProvider()) || '';
+}
+
+const AI_PROMPT = `You are an expert numismatist and currency specialist. You will be shown one or two images of a coin OR paper banknote (typically obverse/front and reverse/back).
+
+Identify the item carefully and return ONLY valid JSON (no markdown, no preamble, no commentary) with this exact structure:
+
+{
+  "category": "<one of: gradedSilver, rawSilver, gradedUS, rawUS, gradedForeign, rawForeign, gold, silver, copper, platinum, palladium, mintSets, usNotes, confederate, obsolete, foreignNotes, fractional, ancient, other>",
+  "isCoin": true|false,
+  "isBanknote": true|false,
+  "country": "e.g. USA, Great Britain, Mexico",
+  "series": "year or series, e.g. 1881-S or 2024",
+  "year": "1881",
+  "type": "e.g. Morgan Dollar, Lincoln Cent, Silver Certificate, Federal Reserve Note",
+  "denomination": "e.g. $1, .25 Cents, 1 Pound, 100 Mark",
+  "grade": "Estimated grade. For coins use Sheldon scale (G 4, VG 8, F 12, VF 20-35, EF/XF 40-45, AU 50-58, MS 60-70, PR/PF 60-70). For notes: VG 8, Fine 12, VF 20-35, EF/XF 40-45, AU 50-58, UNC 60-65, GEM 66+.",
+  "gradingAuth": "If holdered: PCGS, NGC, ICG, ANACS, PMG, CAC. If raw: Self",
+  "serial": "Serial number if visible (slab cert # or banknote serial)",
+  "mint": "Mint location if discernable (Philadelphia, Denver, San Francisco, etc.)",
+  "composition": "Material composition (Copper-Nickel, .900 Silver, .999 Silver, etc.)",
+  "silverContent": 0.0,
+  "weight": 0.0,
+  "features": "Notable details: varieties, errors, toning, designations like FBL, FS, DCAM, holder type, etc.",
+  "estimatedValue": { "low": 0, "mid": 0, "high": 0 },
+  "confidence": "high|medium|low",
+  "notes": "Brief one-sentence assessment"
+}
+
+Rules:
+- Be conservative on grade. If image quality limits assessment, lean toward a lower grade and set confidence to "low" or "medium".
+- For US coins, default category to "gradedUS" if in a slab, "rawUS" if raw.
+- For silver coins, default to "gradedSilver" or "rawSilver".
+- For paper currency, choose "usNotes", "foreignNotes", "confederate", "obsolete", or "fractional" as appropriate.
+- If you cannot identify a field with reasonable confidence, leave it as empty string "" or 0.
+- Use Troy ounces for weight where applicable (e.g. 0.7734 for Morgan, 1.0 for Silver Eagle).
+- Estimated value should be in USD for the assessed grade.
+- Output JSON ONLY. No code fences, no extra text.`;
+
+// Compress to a reasonable size to keep API costs/payload small
+function aiResizeImage(file, maxSize) {
+  maxSize = maxSize || 1400;
+  return new Promise(function(resolve, reject) {
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      const img = new Image();
+      img.onload = function() {
+        const scale = Math.min(maxSize / img.width, maxSize / img.height, 1);
+        const w = Math.round(img.width * scale);
+        const h = Math.round(img.height * scale);
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+        resolve(canvas.toDataURL('image/jpeg', 0.85));
+      };
+      img.onerror = reject;
+      img.src = e.target.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function openAIScan() {
+  if (!aiCurrentKey()) {
+    if (confirm('AI scanning requires an API key. Open Settings → AI Vision to add one?\n\nGoogle Gemini offers a generous free tier — no credit card required.')) {
+      nav('settings');
+      setTimeout(function() {
+        const el = document.getElementById('ai-key-input');
+        if (el) { el.scrollIntoView({behavior:'smooth', block:'center'}); el.focus(); }
+      }, 100);
+    }
+    return;
+  }
+  AI_FRONT_IMG = null; AI_BACK_IMG = null; AI_LAST_RESULT = null;
+  aiResetSlot('front'); aiResetSlot('back');
+  document.getElementById('ai-status').textContent = '';
+  document.getElementById('ai-status').className = 'ai-status';
+  document.getElementById('ai-results').classList.remove('show');
+  document.getElementById('ai-modal').classList.add('show');
+}
+function closeAIScan() {
+  document.getElementById('ai-modal').classList.remove('show');
+}
+
+async function aiCaptureImage(slot, fileInput) {
+  const file = fileInput.files && fileInput.files[0];
+  if (!file) return;
+  try {
+    const dataUrl = await aiResizeImage(file);
+    if (slot === 'front') AI_FRONT_IMG = dataUrl; else AI_BACK_IMG = dataUrl;
+    const preview = document.getElementById('ai-preview-' + slot);
+    preview.src = dataUrl;
+    preview.style.display = 'block';
+    document.getElementById('ai-slot-' + slot).classList.add('has-image');
+    document.getElementById('ai-slot-' + slot).querySelector('.ai-slot-empty').style.display = 'none';
+  } catch (e) {
+    alert('Could not load image: ' + e.message);
+  }
+  fileInput.value = '';
+}
+
+function aiResetSlot(slot) {
+  if (slot === 'front') AI_FRONT_IMG = null; else AI_BACK_IMG = null;
+  const wrap = document.getElementById('ai-slot-' + slot);
+  if (!wrap) return;
+  wrap.classList.remove('has-image');
+  const preview = document.getElementById('ai-preview-' + slot);
+  preview.src = ''; preview.style.display = 'none';
+  const empty = wrap.querySelector('.ai-slot-empty');
+  if (empty) empty.style.display = '';
+}
+
+async function aiAnalyze() {
+  const provider = aiCurrentProvider();
+  const key = aiCurrentKey();
+  if (!key) { alert('Please configure your AI API key in Settings → AI Vision.'); return; }
+  if (!AI_FRONT_IMG && !AI_BACK_IMG) { alert('Please capture at least one image (front or back).'); return; }
+
+  const model = aiCurrentModel();
+  const statusEl = document.getElementById('ai-status');
+  const btn = document.getElementById('ai-analyze-btn');
+  const resultsEl = document.getElementById('ai-results');
+
+  resultsEl.classList.remove('show');
+  statusEl.innerHTML = '<span class="ai-spin"></span>Analyzing with ' + model + '…';
+  statusEl.className = 'ai-status';
+  btn.disabled = true;
+
+  try {
+    const result = (provider === 'gemini')
+      ? await aiAnalyzeGemini(key, model)
+      : await aiAnalyzeAnthropic(key, model);
+    AI_LAST_RESULT = result;
+    statusEl.innerHTML = '✓ Analysis complete · confidence: ' + (result.confidence || 'medium');
+    statusEl.className = 'ai-status ok';
+    renderAIResults(result);
+  } catch (err) {
+    statusEl.textContent = 'Error: ' + err.message;
+    statusEl.className = 'ai-status error';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// ── Gemini (free tier) ─────────────────────────────────────────────
+async function aiAnalyzeGemini(key, model) {
+  const parts = [];
+  if (AI_FRONT_IMG) {
+    parts.push({inline_data: {mime_type:'image/jpeg', data: AI_FRONT_IMG.split(',')[1]}});
+  }
+  if (AI_BACK_IMG) {
+    parts.push({inline_data: {mime_type:'image/jpeg', data: AI_BACK_IMG.split(',')[1]}});
+  }
+  parts.push({text: AI_PROMPT});
+
+  const url = 'https://generativelanguage.googleapis.com/v1beta/models/' +
+              encodeURIComponent(model) + ':generateContent?key=' + encodeURIComponent(key);
+
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: {'content-type': 'application/json'},
+    body: JSON.stringify({
+      contents: [{parts: parts}],
+      generationConfig: {
+        responseMimeType: 'application/json',
+        temperature: 0.3,
+        maxOutputTokens: 1500
+      }
+    })
+  });
+  if (!r.ok) {
+    const errTxt = await r.text();
+    throw new Error('Gemini ' + r.status + ': ' + errTxt.slice(0, 300));
+  }
+  const data = await r.json();
+  const text = (data.candidates && data.candidates[0] && data.candidates[0].content
+                && data.candidates[0].content.parts && data.candidates[0].content.parts[0]
+                && data.candidates[0].content.parts[0].text) || '';
+  const m = text.match(/\{[\s\S]*\}/);
+  if (!m) throw new Error('No JSON object found in Gemini response.');
+  return JSON.parse(m[0]);
+}
+
+// ── Anthropic Claude (paid) ────────────────────────────────────────
+async function aiAnalyzeAnthropic(key, model) {
+  const content = [];
+  if (AI_FRONT_IMG) {
+    content.push({type:'image', source:{type:'base64', media_type:'image/jpeg', data: AI_FRONT_IMG.split(',')[1]}});
+  }
+  if (AI_BACK_IMG) {
+    content.push({type:'image', source:{type:'base64', media_type:'image/jpeg', data: AI_BACK_IMG.split(',')[1]}});
+  }
+  content.push({type:'text', text: AI_PROMPT});
+
+  const r = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'x-api-key': key,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true',
+      'content-type': 'application/json'
+    },
+    body: JSON.stringify({
+      model: model,
+      max_tokens: 1500,
+      messages: [{ role: 'user', content: content }]
+    })
+  });
+  if (!r.ok) {
+    const errTxt = await r.text();
+    throw new Error('Anthropic ' + r.status + ': ' + errTxt.slice(0, 300));
+  }
+  const data = await r.json();
+  const text = (data.content && data.content[0] && data.content[0].text) || '';
+  const m = text.match(/\{[\s\S]*\}/);
+  if (!m) throw new Error('No JSON object found in Anthropic response.');
+  return JSON.parse(m[0]);
+}
+
+function renderAIResults(r) {
+  const SHEET_LABEL_MAP = (typeof SHEET_LABELS !== 'undefined') ? SHEET_LABELS : {};
+  const categoryLabel = SHEET_LABEL_MAP[r.category] || r.category || '—';
+  const ev = r.estimatedValue || {};
+  function row(k, v) {
+    if (v == null || v === '' || v === 0) return '';
+    return '<div class="k">' + k + '</div><div class="v">' + String(v) + '</div>';
+  }
+  function rowGold(k, v) {
+    if (v == null || v === '' || v === 0) return '';
+    return '<div class="k">' + k + '</div><div class="v gold">' + String(v) + '</div>';
+  }
+  const html =
+    '<div class="ai-results-grid">'
+    + rowGold('Category', categoryLabel)
+    + row('Country', r.country)
+    + row('Series', r.series)
+    + row('Year', r.year)
+    + row('Type', r.type)
+    + row('Denomination', r.denomination)
+    + rowGold('Grade', r.grade)
+    + row('Grading Auth', r.gradingAuth)
+    + row('Serial', r.serial)
+    + row('Mint', r.mint)
+    + row('Composition', r.composition)
+    + row('Silver Content', r.silverContent)
+    + row('Weight (oz)', r.weight)
+    + row('Features', r.features)
+    + ((ev.low || ev.mid || ev.high) ?
+        rowGold('Est. Value', '$' + (ev.low||'?') + ' – $' + (ev.mid||'?') + ' – $' + (ev.high||'?'))
+       : '')
+    + row('Notes', r.notes)
+    + '</div>'
+    + '<div style="display:flex;gap:8px;margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">'
+    + '<button class="bp" onclick="aiApplyToForm()" style="flex:1">→ Use these values in Add Form</button>'
+    + '<button class="bg" onclick="document.getElementById(\'ai-results\').classList.remove(\'show\')" style="flex:0 0 auto">Dismiss</button>'
+    + '</div>';
+
+  document.getElementById('ai-results-body').innerHTML = html;
+  document.getElementById('ai-results').classList.add('show');
+}
+
+function aiApplyToForm() {
+  if (!AI_LAST_RESULT) return;
+  const r = AI_LAST_RESULT;
+  if (r.category && (typeof SCHEMAS === 'undefined' || SCHEMAS[r.category])) {
+    ADD_SHEET = r.category;
+  }
+  closeAIScan();
+  nav('add');
+  // After renderAdd completes, populate the form fields
+  setTimeout(function() {
+    const schema = (typeof SCHEMAS !== 'undefined') ? (SCHEMAS[ADD_SHEET] || []) : [];
+    const fieldKeys = schema.map(function(f){return f.f;});
+    const map = {
+      country: r.country,
+      series: r.series,
+      year: r.year,
+      type: r.type,
+      denomination: r.denomination,
+      grade: r.grade,
+      gradingAuth: r.gradingAuth,
+      serial: r.serial,
+      mint: r.mint,
+      composition: r.composition,
+      silverContent: r.silverContent,
+      weight: r.weight,
+      features: r.features,
+      notes: r.notes,
+      state: r.country,        // for confederate/obsolete (state field)
+      description: r.features  // for bullion (description field)
+    };
+    Object.keys(map).forEach(function(k) {
+      const v = map[k];
+      if (v == null || v === '' || v === 0) return;
+      if (fieldKeys.indexOf(k) === -1) return;
+      const el = document.getElementById('af-' + k);
+      if (el) el.value = v;
+    });
+    // Estimated value → "value" field
+    if (r.estimatedValue && r.estimatedValue.mid && fieldKeys.indexOf('value') !== -1) {
+      const v = document.getElementById('af-value');
+      if (v) v.value = r.estimatedValue.mid;
+    }
+  }, 120);
+}
+
+function saveAIKey() {
+  const provider = document.getElementById('ai-provider-input')?.value || aiCurrentProvider();
+  const keyEl = document.getElementById('ai-key-input');
+  const modelEl = document.getElementById('ai-model-input');
+  const msg = document.getElementById('ai-key-msg');
+  const key = (keyEl && keyEl.value || '').trim();
+  const model = (modelEl && modelEl.value || AI_MODEL_DEFAULTS[provider]).trim();
+  if (!key) {
+    if (msg) { msg.textContent = 'API key cannot be empty.'; msg.style.color = 'var(--red)'; }
+    return;
+  }
+  // Light validation: Gemini keys start with AIza, Anthropic with sk-ant-
+  if (provider === 'anthropic' && !key.startsWith('sk-ant-')) {
+    if (msg) { msg.textContent = 'Anthropic key should start with "sk-ant-".'; msg.style.color = 'var(--red)'; }
+    return;
+  }
+  if (provider === 'gemini' && !key.startsWith('AIza')) {
+    if (msg) { msg.textContent = 'Gemini key should start with "AIza".'; msg.style.color = 'var(--red)'; }
+    return;
+  }
+  localStorage.setItem('cv_ai_provider', provider);
+  localStorage.setItem('cv_ai_key_' + provider, key);
+  localStorage.setItem('cv_ai_model_' + provider, model);
+  if (msg) { msg.textContent = '✓ Saved.'; msg.style.color = 'var(--green)'; }
+  setTimeout(function(){ renderSettings(); }, 600);
+}
+
+function clearAIKey() {
+  const provider = aiCurrentProvider();
+  if (!confirm('Remove the saved ' + (AI_PROVIDER_LABELS[provider] || provider) + ' API key from this device?')) return;
+  localStorage.removeItem('cv_ai_key_' + provider);
+  localStorage.removeItem('cv_ai_model_' + provider);
+  renderSettings();
+}
+
+// Switch which provider is currently active (without losing the other's saved key)
+function aiSwitchProvider(newProvider) {
+  localStorage.setItem('cv_ai_provider', newProvider);
+  renderSettings();
 }
 </script>
 <div id="mobile-tabs">
