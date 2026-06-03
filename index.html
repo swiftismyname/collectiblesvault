@@ -6217,7 +6217,7 @@ function renderSettings(){
       const provider     = localStorage.getItem('cv_ai_provider') || 'gemini';
       const savedKey     = localStorage.getItem('cv_ai_key_' + provider) || '';
       const savedModel   = localStorage.getItem('cv_ai_model_' + provider)
-                            || (provider === 'gemini' ? 'gemini-2.5-flash' : 'claude-sonnet-4-5');
+                            || (provider === 'gemini' ? 'gemini-flash-latest' : 'claude-sonnet-4-5');
       const keyMasked    = savedKey ? (savedKey.slice(0, 10) + '…' + savedKey.slice(-4)) : '';
       const otherKeyExists = !!localStorage.getItem('cv_ai_key_' + (provider === 'gemini' ? 'anthropic' : 'gemini'));
 
@@ -6227,9 +6227,9 @@ function renderSettings(){
           cost: '<strong style="color:var(--green)">FREE</strong> · up to 1,500 requests/day · no credit card required',
           keyUrl: 'https://aistudio.google.com/app/apikey',
           keyHost: 'aistudio.google.com',
-          keyPrefix: 'AIza…',
+          keyPrefix: 'AIza… or AQ…',
           keyHelp: 'Sign in with any Google account, click "Create API key", copy and paste below.',
-          models: ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash']
+          models: ['gemini-flash-latest', 'gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash']
         },
         anthropic: {
           label: 'Anthropic Claude',
@@ -6244,7 +6244,7 @@ function renderSettings(){
       const info = providerInfo[provider];
 
       const modelOpts = info.models.map(function(m){
-        const rec = (m === (provider === 'gemini' ? 'gemini-2.5-flash' : 'claude-sonnet-4-5')) ? ' (recommended)' : '';
+        const rec = (m === (provider === 'gemini' ? 'gemini-flash-latest' : 'claude-sonnet-4-5')) ? ' (recommended)' : '';
         return '<option value="'+m+'"'+(m===savedModel?' selected':'')+'>'+m+rec+'</option>';
       }).join('');
 
@@ -7138,11 +7138,11 @@ function lockAppNow() {
 // ═══════════════════════════════════════════════════════════════════
 const AI_PROVIDER_DEFAULT = 'gemini';
 const AI_MODELS = {
-  gemini:    ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash'],
+  gemini:    ['gemini-flash-latest', 'gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash'],
   anthropic: ['claude-sonnet-4-5', 'claude-opus-4-5', 'claude-haiku-4-5']
 };
 const AI_MODEL_DEFAULTS = {
-  gemini:    'gemini-2.5-flash',
+  gemini:    'gemini-flash-latest',
   anthropic: 'claude-sonnet-4-5'
 };
 const AI_PROVIDER_LABELS = {
@@ -7317,12 +7317,17 @@ async function aiAnalyzeGemini(key, model) {
   }
   parts.push({text: AI_PROMPT});
 
+  // Use X-goog-api-key header — required by newer "AQ." format keys,
+  // also works with legacy "AIza" keys. Avoids the deprecated ?key= query param.
   const url = 'https://generativelanguage.googleapis.com/v1beta/models/' +
-              encodeURIComponent(model) + ':generateContent?key=' + encodeURIComponent(key);
+              encodeURIComponent(model) + ':generateContent';
 
   const r = await fetch(url, {
     method: 'POST',
-    headers: {'content-type': 'application/json'},
+    headers: {
+      'content-type': 'application/json',
+      'x-goog-api-key': key
+    },
     body: JSON.stringify({
       contents: [{parts: parts}],
       generationConfig: {
@@ -7484,8 +7489,8 @@ function saveAIKey() {
     if (msg) { msg.textContent = 'Anthropic key should start with "sk-ant-".'; msg.style.color = 'var(--red)'; }
     return;
   }
-  if (provider === 'gemini' && !key.startsWith('AIza')) {
-    if (msg) { msg.textContent = 'Gemini key should start with "AIza".'; msg.style.color = 'var(--red)'; }
+  if (provider === 'gemini' && !key.startsWith('AIza') && !key.startsWith('AQ.')) {
+    if (msg) { msg.textContent = 'Gemini key should start with "AIza" or "AQ.".'; msg.style.color = 'var(--red)'; }
     return;
   }
   localStorage.setItem('cv_ai_provider', provider);
