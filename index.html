@@ -6301,6 +6301,54 @@ function renderSettings(){
         +'</div>'
         +'</div>';
     })(),
+
+    // ── Sync Settings (transfer config between devices) ──────────────
+    (function() {
+      const out = syncBuildExport();
+      return '<div class="stt">Sync Settings</div>'
+        +'<div style="background:var(--bg3);border:1px solid var(--border);border-radius:7px;padding:18px;margin-bottom:24px">'
+        +'<div style="font-size:13px;color:var(--text);line-height:1.6;margin-bottom:14px">'
+        +'Transfer your configuration to another device (mobile ↔ desktop). Includes Supabase credentials, API keys, passcode, and preferences — your collection data syncs automatically through Supabase.'
+        +'</div>'
+        +'<div style="font-size:12px;color:var(--muted);line-height:1.7;margin-bottom:14px;padding:10px 12px;background:var(--bg4);border-radius:5px;border-left:3px solid var(--gold)">'
+        +'<strong style="color:var(--gold)">Security:</strong> The export contains your API keys. Transfer via a private channel — AirDrop, Signal, or direct device-to-device. Do not email or post publicly.'
+        +'</div>'
+
+        +'<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px">'
+        +'<button class="bp" onclick="syncShowExport()">📤 Export from this device</button>'
+        +'<button class="bg" onclick="syncShowImport()">📥 Import to this device</button>'
+        +'</div>'
+
+        // Export panel (hidden by default)
+        +'<div id="sync-export-panel" style="display:none;margin-top:10px;padding-top:14px;border-top:1px solid var(--border)">'
+        +'<div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--gold);margin-bottom:8px">Your Settings Export · <span id="sync-export-count">' + out.count + ' settings included</span></div>'
+        +'<textarea id="sync-export-textarea" readonly style="width:100%;height:160px;padding:10px;background:var(--bg4);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:11px;font-family:DM Mono,monospace;line-height:1.5;resize:vertical">' + out.json.replace(/</g,'&lt;') + '</textarea>'
+        +'<div id="sync-export-msg" style="font-size:12px;margin:8px 0;min-height:14px;color:var(--dim);font-family:DM Mono,monospace"></div>'
+        +'<div style="display:flex;gap:8px;margin-top:8px">'
+        +'<button class="bp" onclick="syncCopyExport()">📋 Copy to Clipboard</button>'
+        +'<button class="bg" onclick="document.getElementById(\'sync-export-panel\').style.display=\'none\'">Close</button>'
+        +'</div>'
+        +'<div style="font-size:11px;color:var(--muted);margin-top:10px;line-height:1.6">'
+        +'<strong>Next:</strong> Open the app on your other device, go to Settings → Sync Settings → Import to this device, paste this blob, tap Apply.'
+        +'</div>'
+        +'</div>'
+
+        // Import panel (hidden by default)
+        +'<div id="sync-import-panel" style="display:none;margin-top:10px;padding-top:14px;border-top:1px solid var(--border)">'
+        +'<div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--gold);margin-bottom:8px">Paste Settings JSON</div>'
+        +'<textarea id="sync-import-textarea" placeholder="Paste the export from your other device here…" style="width:100%;height:160px;padding:10px;background:var(--bg4);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:11px;font-family:DM Mono,monospace;line-height:1.5;resize:vertical"></textarea>'
+        +'<div id="sync-import-msg" style="font-size:12px;margin:8px 0;min-height:14px;color:var(--dim);font-family:DM Mono,monospace"></div>'
+        +'<div style="display:flex;gap:8px;margin-top:8px">'
+        +'<button class="bp" onclick="syncApplyImport()">✓ Apply & Reload</button>'
+        +'<button class="bg" onclick="document.getElementById(\'sync-import-panel\').style.display=\'none\'">Cancel</button>'
+        +'</div>'
+        +'<div style="font-size:11px;color:var(--muted);margin-top:10px;line-height:1.6">'
+        +'⚠️ This will overwrite the current settings on this device with the imported values.'
+        +'</div>'
+        +'</div>'
+
+        +'</div>';
+    })(),
     (function(){
       let h = '<div class="stt">Sheets Sync Diagnostic</div>';
       if (!window._lastLoadDiag) {
@@ -7512,6 +7560,114 @@ function clearAIKey() {
 function aiSwitchProvider(newProvider) {
   localStorage.setItem('cv_ai_provider', newProvider);
   renderSettings();
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  SETTINGS SYNC — Export config from one device, import on another
+//  Covers Supabase config, API keys, passcode, theme, preferences.
+// ═══════════════════════════════════════════════════════════════════
+const SYNC_KEYS = [
+  'cv_sb_url',
+  'cv_sb_key',
+  'cv_gsheets_url',
+  'cv_copper_price',
+  'cv_theme',
+  'cv_font',
+  'cv_passcode_hash',
+  'cv_ai_provider',
+  'cv_ai_key_gemini',
+  'cv_ai_key_anthropic',
+  'cv_ai_model_gemini',
+  'cv_ai_model_anthropic',
+  'cv_sheet_overrides'
+];
+
+function syncBuildExport() {
+  const data = {};
+  let count = 0;
+  SYNC_KEYS.forEach(function(k) {
+    const v = localStorage.getItem(k);
+    if (v != null) { data[k] = v; count++; }
+  });
+  return {
+    json: JSON.stringify({
+      _type: 'cv-settings',
+      _version: 1,
+      _exported: new Date().toISOString(),
+      data: data
+    }, null, 2),
+    count: count
+  };
+}
+
+function syncShowExport() {
+  const out = syncBuildExport();
+  const ta = document.getElementById('sync-export-textarea');
+  const panel = document.getElementById('sync-export-panel');
+  const importPanel = document.getElementById('sync-import-panel');
+  if (ta) ta.value = out.json;
+  if (panel) panel.style.display = 'block';
+  if (importPanel) importPanel.style.display = 'none';
+  const ct = document.getElementById('sync-export-count');
+  if (ct) ct.textContent = out.count + ' setting' + (out.count === 1 ? '' : 's') + ' included';
+  const msg = document.getElementById('sync-export-msg');
+  if (msg) msg.textContent = '';
+}
+
+function syncShowImport() {
+  const panel = document.getElementById('sync-import-panel');
+  const exportPanel = document.getElementById('sync-export-panel');
+  if (panel) panel.style.display = 'block';
+  if (exportPanel) exportPanel.style.display = 'none';
+  const ta = document.getElementById('sync-import-textarea');
+  if (ta) { ta.value = ''; setTimeout(function(){ ta.focus(); }, 100); }
+  const msg = document.getElementById('sync-import-msg');
+  if (msg) msg.textContent = '';
+}
+
+async function syncCopyExport() {
+  const ta = document.getElementById('sync-export-textarea');
+  const msg = document.getElementById('sync-export-msg');
+  if (!ta) return;
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(ta.value);
+    } else {
+      ta.select();
+      ta.setSelectionRange(0, 999999);
+      document.execCommand('copy');
+    }
+    if (msg) { msg.textContent = '✓ Copied to clipboard.'; msg.style.color = 'var(--green)'; }
+  } catch (e) {
+    ta.select(); ta.setSelectionRange(0, 999999);
+    if (msg) { msg.textContent = 'Tap the box and copy manually.'; msg.style.color = 'var(--gold)'; }
+  }
+}
+
+function syncApplyImport() {
+  const ta = document.getElementById('sync-import-textarea');
+  const msg = document.getElementById('sync-import-msg');
+  const text = (ta && ta.value || '').trim();
+  function show(t, color) { if (msg) { msg.textContent = t; msg.style.color = color || 'var(--dim)'; } }
+  if (!text) { show('Paste your settings JSON first.', 'var(--red)'); return; }
+  let parsed;
+  try { parsed = JSON.parse(text); }
+  catch (e) { show('Invalid JSON: ' + e.message, 'var(--red)'); return; }
+  if (!parsed || parsed._type !== 'cv-settings') {
+    show('Does not look like a Collectibles Vault settings export.', 'var(--red)');
+    return;
+  }
+  const data = parsed.data || {};
+  if (!confirm('This will overwrite settings on this device with the imported values, including your Supabase config, API keys, and passcode.\n\nContinue?')) return;
+  let count = 0;
+  Object.keys(data).forEach(function(k) {
+    if (SYNC_KEYS.indexOf(k) === -1) return;        // ignore unknown keys
+    if (typeof data[k] !== 'string') return;        // skip non-strings
+    localStorage.setItem(k, data[k]);
+    count++;
+  });
+  show('✓ Imported ' + count + ' settings. Reloading…', 'var(--green)');
+  setTimeout(function(){ location.reload(); }, 1500);
 }
 </script>
 <div id="mobile-tabs">
