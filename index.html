@@ -2674,8 +2674,8 @@ function showDetail(item){
     displayWeight = grams + ' g (' + (grams/31.1035).toFixed(4) + ' oz)';
   }
 
-  // Image attachments (front/back) — render at the top so they're the first thing
-  // you see when opening a record. Click opens full-size in a new tab.
+  // Image attachments (front/back) — rendered as the LAST section so the user
+  // sees the record's data first and scrolls down to view photos.
   const _frontUrl = raw.imageFrontUrl || raw.imagefronturl || '';
   const _backUrl  = raw.imageBackUrl  || raw.imagebackurl  || '';
   let imagesHtml = '';
@@ -2686,14 +2686,15 @@ function showDetail(item){
     const _isCurrency = _currencySheets.has(item.sheet);
     const _frontLbl = _isCurrency ? 'Face'  : 'Obverse';
     const _backLbl  = _isCurrency ? 'Back'  : 'Reverse';
-    imagesHtml = '<div class="dp-images' + (single ? ' single' : '') + '">'
+    imagesHtml =
+      '<div class="dp-section">Photos</div>'
+      + '<div class="dp-images' + (single ? ' single' : '') + '">'
       + (_frontUrl ? '<a href="' + e(_frontUrl) + '" target="_blank" rel="noopener"><span class="lbl">' + _frontLbl + '</span><img src="' + e(_frontUrl) + '" alt="' + _frontLbl + '" loading="lazy"></a>' : '')
       + (_backUrl  ? '<a href="' + e(_backUrl)  + '" target="_blank" rel="noopener"><span class="lbl">' + _backLbl  + '</span><img src="' + e(_backUrl)  + '" alt="' + _backLbl  + '" loading="lazy"></a>' : '')
       + '</div>';
   }
 
   document.getElementById('dp-body').innerHTML = `
-    ${imagesHtml}
     <div class="dp-section">Summary</div>
     <div class="dp-row"><span class="dp-label">Record #</span><span class="dp-value">${e(item.id)}</span></div>
     <div class="dp-row"><span class="dp-label">Description</span><span class="dp-value">${e(item.desc)}</span></div>
@@ -2704,6 +2705,7 @@ function showDetail(item){
     ${liveMelt>0?`<div class="dp-row"><span class="dp-label">Live Melt Value</span><span class="dp-value mono" style="color:var(--gold)" title="${e(meltLabel)}">${fmt$(liveMelt)}</span></div>`:''}
     <div class="dp-section">All Fields</div>
     ${rows}
+    ${imagesHtml}
   `;
   // Action buttons (Edit / Delete)
   const body = panel.querySelector('.dp-body');
@@ -7438,7 +7440,7 @@ Identify the item carefully and return ONLY valid JSON (no markdown, no preamble
   "type": "e.g. Morgan Dollar, Lincoln Cent, Silver Certificate, Federal Reserve Note",
   "denomination": "e.g. $1, .25 Cents, 1 Pound, 100 Mark",
   "grade": "Estimated grade. For coins use Sheldon scale (G 4, VG 8, F 12, VF 20-35, EF/XF 40-45, AU 50-58, MS 60-70, PR/PF 60-70). For notes: VG 8, Fine 12, VF 20-35, EF/XF 40-45, AU 50-58, UNC 60-65, GEM 66+.",
-  "gradingAuth": "If holdered: PCGS, NGC, ICG, ANACS, PMG, CAC. If raw: Self",
+  "gradingAuth": "If the item is in a TPG holder/slab (Third-Party Grading service), report the exact service: PCGS, NGC, ICG, ANACS, PMG, CAC, CACG, CGC. If the item is raw/uncertified (no slab), leave this as empty string \"\" — the app will automatically stamp it as AI-Estimated.",
   "serial": "Serial number if visible (slab cert # or banknote serial)",
   "mint": "Mint location if discernable (Philadelphia, Denver, San Francisco, etc.)",
   "composition": "Material composition (Copper-Nickel, .900 Silver, .999 Silver, etc.)",
@@ -7685,6 +7687,13 @@ function renderAIResults(r) {
     return '<div class="k">' + k + '</div><div class="v gold">' + String(v) + '</div>';
   }
   const hasImage = !!(AI_FRONT_IMG || AI_BACK_IMG);
+  // Compute the displayed grading authority. If AI graded the item (no real TPG
+  // slab detected), we preview "AI-Estimated" — same value that will land in
+  // the record's Grading Authority field when applied.
+  const _REAL_TPGS = ['PCGS','NGC','ICG','ANACS','PMG','CAC','CACG','CGC'];
+  const _detectedAuth = String(r.gradingAuth || '').trim();
+  const _isRealTPG = _REAL_TPGS.some(function(t) { return t.toUpperCase() === _detectedAuth.toUpperCase(); });
+  const _displayAuth = _isRealTPG ? _detectedAuth : (r.grade ? 'AI-Estimated' : _detectedAuth);
   const html =
     '<div class="ai-results-grid">'
     + rowGold('Category', categoryLabel)
@@ -7694,7 +7703,10 @@ function renderAIResults(r) {
     + row('Type', r.type)
     + row('Denomination', r.denomination)
     + rowGold('Grade', r.grade)
-    + row('Grading Auth', r.gradingAuth)
+    + (_displayAuth
+        ? (_isRealTPG ? row('Grading Auth', _displayAuth)
+                      : '<div class="k">Grading Auth</div><div class="v" style="color:var(--gold);font-style:italic">' + _displayAuth + '</div>')
+        : '')
     + row('Serial', r.serial)
     + row('Mint', r.mint)
     + row('Composition', r.composition)
@@ -7799,6 +7811,15 @@ async function aiApplyToForm() {
       const el = document.getElementById('af-' + k);
       if (el) el.value = v;
     });
+    // If AI provided a grade but no real TPG slab was detected, mark gradingAuth
+    // as "AI-Estimated" so the record permanently shows the AI was the source.
+    const REAL_TPGS = ['PCGS','NGC','ICG','ANACS','PMG','CAC','CACG','CGC'];
+    const detectedAuth = String(r.gradingAuth || '').trim();
+    const isRealTPG = REAL_TPGS.some(function(t) { return t.toUpperCase() === detectedAuth.toUpperCase(); });
+    if (r.grade && !isRealTPG && fieldKeys.indexOf('gradingAuth') !== -1) {
+      const gaEl = document.getElementById('af-gradingAuth');
+      if (gaEl) gaEl.value = 'AI-Estimated';
+    }
     if (r.estimatedValue && r.estimatedValue.mid && fieldKeys.indexOf('value') !== -1) {
       const v = document.getElementById('af-value');
       if (v) v.value = r.estimatedValue.mid;
