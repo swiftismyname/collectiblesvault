@@ -133,6 +133,38 @@ tbody tr.sel td{background:rgba(201,168,76,.06)}
 .dp-header{padding:16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
 .dp-title{font-family:var(--font-display,'Cormorant Garamond',serif);font-size:17px;font-weight:600;line-height:1.3}
 .dp-body{padding:16px;overflow-y:auto;flex:1}
+/* Coin / banknote image attachments at the top of the detail panel.
+   Uses natural aspect ratio with a max-height cap so square coins display
+   as squares and wide banknotes display as wide rectangles, each cleanly. */
+.dp-images{
+  display:grid; grid-template-columns:1fr 1fr; gap:10px;
+  margin-bottom:18px;
+  align-items:start;
+}
+.dp-images.single{grid-template-columns:1fr; max-width:420px}
+.dp-images a{
+  display:block; position:relative;
+  background:var(--bg3); border:1px solid var(--border);
+  border-radius:6px; overflow:hidden;
+  transition:border-color .2s;
+}
+.dp-images a:hover{border-color:var(--gold)}
+.dp-images img{
+  display:block;
+  width:100%; height:auto;
+  max-height:280px;
+  object-fit:contain;
+}
+.dp-images .lbl{
+  position:absolute; top:6px; left:6px;
+  background:rgba(0,0,0,.7); color:var(--gold);
+  font-size:9px; padding:2px 7px; border-radius:3px;
+  text-transform:uppercase; letter-spacing:.1em;
+  font-family:'DM Mono',monospace; pointer-events:none;
+}
+@media (max-width:480px){
+  .dp-images{grid-template-columns:1fr}
+}
 .dp-row{display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid rgba(255,255,255,.04);font-size:12px;gap:8px}
 .dp-row:last-child{border-bottom:none}
 .dp-label{color:var(--muted);flex-shrink:0}
@@ -538,11 +570,41 @@ body.light select option{background:#fff}
 }
 .ai-modal-close:hover{border-color:var(--gold); color:var(--gold)}
 .ai-modal-body{padding:22px; overflow-y:auto}
+
+/* Coin / Currency mode toggle */
+.ai-mode-toggle{
+  display:flex; gap:3px;
+  background:var(--bg4); border:1px solid var(--border);
+  border-radius:8px; padding:3px;
+  margin-bottom:14px;
+}
+.ai-mode-btn{
+  flex:1; background:transparent; border:0; color:var(--muted);
+  padding:9px 12px; font-size:11px;
+  border-radius:6px; cursor:pointer;
+  transition:background .18s ease, color .18s ease;
+  font-family:'DM Mono',monospace;
+  letter-spacing:.08em; text-transform:uppercase;
+  display:flex; align-items:center; justify-content:center; gap:6px;
+  -webkit-tap-highlight-color:transparent;
+}
+.ai-mode-btn.on{background:var(--gold); color:var(--bg); font-weight:600}
+.ai-mode-btn .mode-glyph{font-size:13px; line-height:1}
+
 .ai-slots{
   display:grid; grid-template-columns:1fr 1fr; gap:12px;
   margin-bottom:16px;
 }
 @media (max-width:480px){.ai-slots{grid-template-columns:1fr}}
+
+/* Coin mode: square slots (1:1) */
+.ai-slots[data-mode="coin"] .ai-slot{aspect-ratio:1/1}
+.ai-slots[data-mode="coin"] .ai-slot-preview{aspect-ratio:1/1}
+
+/* Currency mode: wide slots (banknote-like, 5:3 — close to US note proportions
+   without forcing the user to perfectly frame the shot) */
+.ai-slots[data-mode="currency"] .ai-slot{aspect-ratio:5/3; min-height:140px}
+.ai-slots[data-mode="currency"] .ai-slot-preview{aspect-ratio:5/3}
 .ai-slot{
   background:var(--bg3); border:1.5px dashed var(--border);
   border-radius:8px; padding:14px;
@@ -568,7 +630,7 @@ body.light select option{background:#fff}
 .ai-slot-btn:hover{filter:brightness(1.1)}
 .ai-slot input[type="file"]{display:none}
 .ai-slot-preview{
-  width:100%; aspect-ratio:1/1; object-fit:cover;
+  width:100%; object-fit:cover;
   border-radius:6px; display:block;
 }
 .ai-slot-replace{
@@ -661,17 +723,23 @@ body.light select option{background:#fff}
     </div>
     <div class="ai-modal-body">
       <div style="font-size:12px;color:var(--muted);line-height:1.6;margin-bottom:14px">
-        Capture the <strong style="color:var(--gold)">obverse</strong> (front) and <strong style="color:var(--gold)">reverse</strong> (back). Claude analyzes both and pre-fills the Add form.
+        Choose what you're scanning, then capture both sides. Claude analyzes both and pre-fills the Add form.
       </div>
 
-      <div class="ai-slots">
+      <!-- Coin / Currency mode toggle -->
+      <div class="ai-mode-toggle" role="tablist" aria-label="Scan mode">
+        <button type="button" class="ai-mode-btn on" data-mode="coin"     onclick="aiSetMode('coin')"     role="tab"><span class="mode-glyph">⊙</span> Coin</button>
+        <button type="button" class="ai-mode-btn"    data-mode="currency" onclick="aiSetMode('currency')" role="tab"><span class="mode-glyph">▭</span> Currency</button>
+      </div>
+
+      <div class="ai-slots" id="ai-slots-container" data-mode="coin">
         <div class="ai-slot" id="ai-slot-front">
           <button class="ai-slot-replace" onclick="aiResetSlot('front')" title="Replace image">&times;</button>
           <img class="ai-slot-preview" id="ai-preview-front" style="display:none">
           <div class="ai-slot-empty">
-            <div class="ai-slot-icon">⊙</div>
-            <div class="ai-slot-label">Obverse · Front</div>
-            <div class="ai-slot-hint">Heads side / portrait side</div>
+            <div class="ai-slot-icon" id="ai-icon-front">⊙</div>
+            <div class="ai-slot-label" id="ai-label-front">Obverse · Heads</div>
+            <div class="ai-slot-hint" id="ai-hint-front">Portrait / heads side</div>
             <label class="ai-slot-btn">
               Capture
               <input type="file" accept="image/*" capture="environment" onchange="aiCaptureImage('front', this)">
@@ -682,9 +750,9 @@ body.light select option{background:#fff}
           <button class="ai-slot-replace" onclick="aiResetSlot('back')" title="Replace image">&times;</button>
           <img class="ai-slot-preview" id="ai-preview-back" style="display:none">
           <div class="ai-slot-empty">
-            <div class="ai-slot-icon">⊚</div>
-            <div class="ai-slot-label">Reverse · Back</div>
-            <div class="ai-slot-hint">Tails side / numerical side</div>
+            <div class="ai-slot-icon" id="ai-icon-back">⊚</div>
+            <div class="ai-slot-label" id="ai-label-back">Reverse · Tails</div>
+            <div class="ai-slot-hint" id="ai-hint-back">Tails / numerical side</div>
             <label class="ai-slot-btn">
               Capture
               <input type="file" accept="image/*" capture="environment" onchange="aiCaptureImage('back', this)">
@@ -2514,7 +2582,7 @@ function showDetail(item){
   // (they may exist in the record from a previous lookup but aren't meaningful here)
   const _noWeightSheets = new Set(['gradedUS','rawUS','gradedForeign','rawForeign','ancient',
                                     'usNotes','confederate','obsolete','foreignNotes','fractional','mintSets','other']);
-  const _hiddenFields = new Set(['_supabaseSheet']);
+  const _hiddenFields = new Set(['_supabaseSheet', 'imageFrontUrl', 'imageBackUrl']);
   if (_noWeightSheets.has(item.sheet)) {
     _hiddenFields.add('weight');
     _hiddenFields.add('weightG');
@@ -2606,7 +2674,26 @@ function showDetail(item){
     displayWeight = grams + ' g (' + (grams/31.1035).toFixed(4) + ' oz)';
   }
 
+  // Image attachments (front/back) — render at the top so they're the first thing
+  // you see when opening a record. Click opens full-size in a new tab.
+  const _frontUrl = raw.imageFrontUrl || raw.imagefronturl || '';
+  const _backUrl  = raw.imageBackUrl  || raw.imagebackurl  || '';
+  let imagesHtml = '';
+  if (_frontUrl || _backUrl) {
+    const single = (_frontUrl && !_backUrl) || (!_frontUrl && _backUrl);
+    // Use banknote vs. coin terminology based on the sheet category
+    const _currencySheets = new Set(['usNotes','foreignNotes','confederate','obsolete','fractional']);
+    const _isCurrency = _currencySheets.has(item.sheet);
+    const _frontLbl = _isCurrency ? 'Face'  : 'Obverse';
+    const _backLbl  = _isCurrency ? 'Back'  : 'Reverse';
+    imagesHtml = '<div class="dp-images' + (single ? ' single' : '') + '">'
+      + (_frontUrl ? '<a href="' + e(_frontUrl) + '" target="_blank" rel="noopener"><span class="lbl">' + _frontLbl + '</span><img src="' + e(_frontUrl) + '" alt="' + _frontLbl + '" loading="lazy"></a>' : '')
+      + (_backUrl  ? '<a href="' + e(_backUrl)  + '" target="_blank" rel="noopener"><span class="lbl">' + _backLbl  + '</span><img src="' + e(_backUrl)  + '" alt="' + _backLbl  + '" loading="lazy"></a>' : '')
+      + '</div>';
+  }
+
   document.getElementById('dp-body').innerHTML = `
+    ${imagesHtml}
     <div class="dp-section">Summary</div>
     <div class="dp-row"><span class="dp-label">Record #</span><span class="dp-value">${e(item.id)}</span></div>
     <div class="dp-row"><span class="dp-label">Description</span><span class="dp-value">${e(item.desc)}</span></div>
@@ -6907,6 +6994,10 @@ function renderAdd(){
 
 function resetAdd(){
   document.querySelectorAll('[id^="af-"]').forEach(el=>el.value='');
+  // Discard any AI-scan image URLs that haven't been used yet
+  window.PENDING_AI_IMAGES = null;
+  const banner = document.getElementById('pending-images-banner');
+  if (banner) banner.remove();
 }
 
 
@@ -6969,6 +7060,12 @@ async function submitAdd(){
     if(!v && (f.f==='cost'||f.f==='weight'||f.f==='weightG')) missing.push(f.l);
     rec[f.f] = f.t==='number' ? (parseFloat(v)||0) : v;
   });
+
+  // Attach AI-scanned image URLs uploaded earlier (if any)
+  if (window.PENDING_AI_IMAGES) {
+    if (window.PENDING_AI_IMAGES.front) rec.imageFrontUrl = window.PENDING_AI_IMAGES.front;
+    if (window.PENDING_AI_IMAGES.back)  rec.imageBackUrl  = window.PENDING_AI_IMAGES.back;
+  }
 
   if(missing.length){ alert('Please fill in: '+missing.join(', ')); return; }
 
@@ -7283,6 +7380,38 @@ const AI_PROVIDER_LABELS = {
 let AI_FRONT_IMG = null;   // data URL
 let AI_BACK_IMG  = null;
 let AI_LAST_RESULT = null;
+let AI_CAPTURE_MODE = 'coin';  // 'coin' | 'currency'
+
+const AI_MODE_LABELS = {
+  coin: {
+    intro: 'Capture the <strong style="color:var(--gold)">obverse</strong> (heads) and <strong style="color:var(--gold)">reverse</strong> (tails). The AI analyzes both and pre-fills the Add form.',
+    s1Icon: '⊙', s1Label: 'Obverse · Heads', s1Hint: 'Portrait / heads side',
+    s2Icon: '⊚', s2Label: 'Reverse · Tails', s2Hint: 'Tails / numerical side'
+  },
+  currency: {
+    intro: 'Capture the <strong style="color:var(--gold)">face</strong> (portrait side) and <strong style="color:var(--gold)">back</strong> (reverse). The AI analyzes both and pre-fills the Add form.',
+    s1Icon: '▭', s1Label: 'Face · Front', s1Hint: 'Portrait / signature side',
+    s2Icon: '▭', s2Label: 'Back · Reverse', s2Hint: 'Denomination / vignette side'
+  }
+};
+
+function aiSetMode(mode) {
+  if (mode !== 'coin' && mode !== 'currency') return;
+  AI_CAPTURE_MODE = mode;
+  const slots = document.getElementById('ai-slots-container');
+  if (slots) slots.setAttribute('data-mode', mode);
+  document.querySelectorAll('.ai-mode-btn').forEach(function(b) {
+    b.classList.toggle('on', b.getAttribute('data-mode') === mode);
+  });
+  const L = AI_MODE_LABELS[mode];
+  const setText = function(id, text) { const el = document.getElementById(id); if (el) el.textContent = text; };
+  setText('ai-icon-front',  L.s1Icon);
+  setText('ai-label-front', L.s1Label);
+  setText('ai-hint-front',  L.s1Hint);
+  setText('ai-icon-back',   L.s2Icon);
+  setText('ai-label-back',  L.s2Label);
+  setText('ai-hint-back',   L.s2Hint);
+}
 
 function aiCurrentProvider() {
   return localStorage.getItem('cv_ai_provider') || AI_PROVIDER_DEFAULT;
@@ -7331,6 +7460,31 @@ Rules:
 - Estimated value should be in USD for the assessed grade.
 - Output JSON ONLY. No code fences, no extra text.`;
 
+// Prepend a mode-specific instruction so the AI focuses on the right details
+// for coins vs. paper currency. The user picks the mode in the scan modal.
+function aiBuildPrompt() {
+  const coinPrefix =
+    'CONTEXT: The user has indicated this is a COIN. Focus on coin-specific details:\n' +
+    '- Mint mark (S, D, P, CC, O, etc.) and designer initials\n' +
+    '- Slab certification number if holdered (PCGS/NGC/ICG/ANACS) — read carefully from the holder label\n' +
+    '- Variety designations (FBL, FS, DCAM, Cameo, VAM numbers, etc.)\n' +
+    '- Coin-specific category: gradedSilver, rawSilver, gradedUS, rawUS, gradedForeign, rawForeign, gold, silver, copper, platinum, palladium, ancient, mintSets.\n' +
+    'Do NOT choose a currency category.\n\n';
+  const noteprefix =
+    'CONTEXT: The user has indicated this is PAPER CURRENCY (a banknote, not a coin). Focus on banknote-specific details:\n' +
+    '- Serial number(s) — read every visible digit/letter\n' +
+    '- Series year (e.g. "Series 2017A")\n' +
+    '- Federal Reserve district letter & number (for US Federal Reserve Notes)\n' +
+    '- Star note indicator (★ at end of serial) — mention if present\n' +
+    '- Signature combination (Treasurer / Secretary of the Treasury for US notes)\n' +
+    '- Seal color (green, red, blue) and type\n' +
+    '- Block letters\n' +
+    '- Type of note: Federal Reserve Note, Silver Certificate, Gold Certificate, US Note, National Bank Note, Confederate, Obsolete (broken bank), Fractional, foreign issuer, etc.\n' +
+    '- Currency-specific category: usNotes, foreignNotes, confederate, obsolete, fractional. NEVER choose a coin category.\n' +
+    '- Banknote grading scale: Good 4, VG 8, Fine 12, VF 20-35, EF/XF 40-45, AU 50-58, UNC 60-65, GEM UNC 66+.\n\n';
+  return (AI_CAPTURE_MODE === 'currency' ? noteprefix : coinPrefix) + AI_PROMPT;
+}
+
 // Compress to a reasonable size to keep API costs/payload small
 function aiResizeImage(file, maxSize) {
   maxSize = maxSize || 1400;
@@ -7367,6 +7521,7 @@ function openAIScan() {
     return;
   }
   AI_FRONT_IMG = null; AI_BACK_IMG = null; AI_LAST_RESULT = null;
+  aiSetMode('coin');   // default each session to coin mode
   aiResetSlot('front'); aiResetSlot('back');
   document.getElementById('ai-status').textContent = '';
   document.getElementById('ai-status').className = 'ai-status';
@@ -7446,7 +7601,7 @@ async function aiAnalyzeGemini(key, model) {
   if (AI_BACK_IMG) {
     parts.push({inline_data: {mime_type:'image/jpeg', data: AI_BACK_IMG.split(',')[1]}});
   }
-  parts.push({text: AI_PROMPT});
+  parts.push({text: aiBuildPrompt()});
 
   // Use X-goog-api-key header — required by newer "AQ." format keys,
   // also works with legacy "AIza" keys. Avoids the deprecated ?key= query param.
@@ -7490,7 +7645,7 @@ async function aiAnalyzeAnthropic(key, model) {
   if (AI_BACK_IMG) {
     content.push({type:'image', source:{type:'base64', media_type:'image/jpeg', data: AI_BACK_IMG.split(',')[1]}});
   }
-  content.push({type:'text', text: AI_PROMPT});
+  content.push({type:'text', text: aiBuildPrompt()});
 
   const r = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -7529,6 +7684,7 @@ function renderAIResults(r) {
     if (v == null || v === '' || v === 0) return '';
     return '<div class="k">' + k + '</div><div class="v gold">' + String(v) + '</div>';
   }
+  const hasImage = !!(AI_FRONT_IMG || AI_BACK_IMG);
   const html =
     '<div class="ai-results-grid">'
     + rowGold('Category', categoryLabel)
@@ -7550,8 +7706,18 @@ function renderAIResults(r) {
        : '')
     + row('Notes', r.notes)
     + '</div>'
+    // ── Attach images checkbox ──────────────────────────────
+    + (hasImage ?
+      '<div style="display:flex;align-items:center;gap:10px;margin-top:14px;padding:12px;background:var(--bg4);border-radius:6px;border:1px solid var(--border)">'
+      + '<label style="display:flex;align-items:center;gap:10px;font-size:13px;color:var(--text);cursor:pointer;flex:1">'
+      + '<input type="checkbox" id="ai-attach-images" checked style="width:18px;height:18px;accent-color:var(--gold);cursor:pointer">'
+      + '<span>📎 Also save '+(AI_FRONT_IMG && AI_BACK_IMG ? 'these two images' : 'this image')+' to the record</span>'
+      + '</label>'
+      + '</div>'
+      + '<div style="font-size:11px;color:var(--muted);margin-top:6px;line-height:1.5">Images upload to Supabase Storage and appear in the detail panel when you open the record later.</div>'
+      : '')
     + '<div style="display:flex;gap:8px;margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">'
-    + '<button class="bp" onclick="aiApplyToForm()" style="flex:1">→ Use these values in Add Form</button>'
+    + '<button class="bp" onclick="aiApplyToForm()" id="ai-apply-btn" style="flex:1">→ Use these values in Add Form</button>'
     + '<button class="bg" onclick="document.getElementById(\'ai-results\').classList.remove(\'show\')" style="flex:0 0 auto">Dismiss</button>'
     + '</div>';
 
@@ -7559,9 +7725,46 @@ function renderAIResults(r) {
   document.getElementById('ai-results').classList.add('show');
 }
 
-function aiApplyToForm() {
+async function aiApplyToForm() {
   if (!AI_LAST_RESULT) return;
   const r = AI_LAST_RESULT;
+  const attachBox  = document.getElementById('ai-attach-images');
+  const attach     = attachBox ? attachBox.checked : false;
+  const applyBtn   = document.getElementById('ai-apply-btn');
+  const statusEl   = document.getElementById('ai-status');
+
+  // Reset any prior pending images so we don't leak them into the next record
+  window.PENDING_AI_IMAGES = null;
+
+  // Upload images BEFORE switching to the Add view, so URLs are ready by save time
+  if (attach && (AI_FRONT_IMG || AI_BACK_IMG)) {
+    if (applyBtn) { applyBtn.disabled = true; applyBtn.textContent = 'Uploading…'; }
+    if (statusEl) {
+      statusEl.innerHTML = '<span class="ai-spin"></span>Uploading images to Supabase Storage…';
+      statusEl.className = 'ai-status';
+    }
+    try {
+      const urls = { front: null, back: null };
+      if (AI_FRONT_IMG) urls.front = await uploadImageToSupabase(AI_FRONT_IMG, 'coin-front');
+      if (AI_BACK_IMG)  urls.back  = await uploadImageToSupabase(AI_BACK_IMG,  'coin-back');
+      window.PENDING_AI_IMAGES = urls;
+      if (statusEl) {
+        statusEl.textContent = '✓ Images uploaded — they will attach when you save the record.';
+        statusEl.className = 'ai-status ok';
+      }
+    } catch (e) {
+      if (statusEl) {
+        statusEl.textContent = 'Image upload error: ' + e.message + ' — proceeding without images.';
+        statusEl.className = 'ai-status error';
+      }
+      // Pause briefly so the user can read the error
+      await new Promise(function(res) { setTimeout(res, 1800); });
+    } finally {
+      if (applyBtn) { applyBtn.disabled = false; applyBtn.textContent = '→ Use these values in Add Form'; }
+    }
+  }
+
+  // Switch sheet category if detected
   if (r.category && (typeof SCHEMAS === 'undefined' || SCHEMAS[r.category])) {
     ADD_SHEET = r.category;
   }
@@ -7586,8 +7789,8 @@ function aiApplyToForm() {
       weight: r.weight,
       features: r.features,
       notes: r.notes,
-      state: r.country,        // for confederate/obsolete (state field)
-      description: r.features  // for bullion (description field)
+      state: r.country,
+      description: r.features
     };
     Object.keys(map).forEach(function(k) {
       const v = map[k];
@@ -7596,10 +7799,22 @@ function aiApplyToForm() {
       const el = document.getElementById('af-' + k);
       if (el) el.value = v;
     });
-    // Estimated value → "value" field
     if (r.estimatedValue && r.estimatedValue.mid && fieldKeys.indexOf('value') !== -1) {
       const v = document.getElementById('af-value');
       if (v) v.value = r.estimatedValue.mid;
+    }
+    // Visual hint that images are queued for this record
+    if (window.PENDING_AI_IMAGES && (window.PENDING_AI_IMAGES.front || window.PENDING_AI_IMAGES.back)) {
+      const c = document.getElementById('content');
+      if (c) {
+        const banner = document.createElement('div');
+        banner.id = 'pending-images-banner';
+        banner.style.cssText = 'background:var(--bg3);border:1px solid var(--gold);border-radius:6px;padding:10px 14px;margin-bottom:14px;font-size:12px;color:var(--gold);display:flex;align-items:center;gap:10px;max-width:560px';
+        const cnt = (window.PENDING_AI_IMAGES.front?1:0) + (window.PENDING_AI_IMAGES.back?1:0);
+        banner.innerHTML = '<span style="font-size:18px">📎</span><span>' + cnt + ' image' + (cnt===1?'':'s') + ' queued — they will attach to this record when you tap Add to Collection.</span>';
+        const heading = c.querySelector('.vh');
+        if (heading && heading.nextSibling) c.insertBefore(banner, heading.nextSibling);
+      }
     }
   }, 120);
 }
@@ -7643,6 +7858,56 @@ function clearAIKey() {
 function aiSwitchProvider(newProvider) {
   localStorage.setItem('cv_ai_provider', newProvider);
   renderSettings();
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  IMAGE ATTACHMENTS — Upload coin photos to Supabase Storage,
+//  store the resulting public URL on the record so the image appears
+//  in the detail panel and syncs across devices automatically.
+// ═══════════════════════════════════════════════════════════════════
+const IMAGE_BUCKET = 'coin-images';
+// Holds image URLs uploaded during an AI scan, picked up by submitAdd()
+// when the user finalizes the record. Cleared after each successful insert.
+window.PENDING_AI_IMAGES = null;
+
+async function uploadImageToSupabase(dataUrl, prefix) {
+  const sbUrl = (localStorage.getItem('cv_sb_url') || '').replace(/\/$/, '');
+  const sbKey = localStorage.getItem('cv_sb_key') || '';
+  if (!sbUrl || !sbKey) throw new Error('Supabase not configured. Set URL/key in Settings → Database.');
+
+  // Convert data URL → Blob
+  const blobRes = await fetch(dataUrl);
+  const blob = await blobRes.blob();
+
+  // Unique filename: <prefix>-<timestamp>-<6char rand>.jpg
+  const ts = Date.now();
+  const rand = Math.random().toString(36).slice(2, 8);
+  const filename = (prefix || 'img') + '-' + ts + '-' + rand + '.jpg';
+
+  const r = await fetch(sbUrl + '/storage/v1/object/' + IMAGE_BUCKET + '/' + filename, {
+    method: 'POST',
+    headers: {
+      'apikey': sbKey,
+      'authorization': 'Bearer ' + sbKey,
+      'content-type': 'image/jpeg',
+      'x-upsert': 'false'
+    },
+    body: blob
+  });
+
+  if (!r.ok) {
+    const txt = await r.text();
+    // Hint when the bucket isn't set up yet
+    if (r.status === 404 || /bucket not found/i.test(txt)) {
+      throw new Error('Storage bucket "coin-images" not found — run the SQL migration in Supabase first.');
+    }
+    if (r.status === 403 || /policy|denied/i.test(txt)) {
+      throw new Error('Upload blocked by RLS policy. Re-run the migration so policies are in place.');
+    }
+    throw new Error('Upload failed (' + r.status + '): ' + txt.slice(0, 200));
+  }
+
+  return sbUrl + '/storage/v1/object/public/' + IMAGE_BUCKET + '/' + filename;
 }
 
 // ═══════════════════════════════════════════════════════════════════
