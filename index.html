@@ -1050,6 +1050,133 @@ async function loadSnapshotsFromSupabase() {
   }
 }
 
+// ═════════════════════════════════════════════════════════════════════
+//  LABEL QUEUE SYNC — Cross-device sync of the "labels to print" set.
+//  Mirror of the snapshot-sync pattern: each toggle pushes/removes one row
+//  from the `label_queue` table; failures get queued for retry; on boot
+//  we load the remote queue and merge with local-only entries.
+// ═════════════════════════════════════════════════════════════════════
+const SB_LABELS_TABLE = 'label_queue';
+let PENDING_LABEL_OPS = JSON.parse(localStorage.getItem('cv_pending_label_ops') || '[]');
+
+function savePendingLabelOps() {
+  localStorage.setItem('cv_pending_label_ops', JSON.stringify(PENDING_LABEL_OPS));
+}
+
+async function pushLabelToSupabase(sheet, id) {
+  if (!SB_URL || !SB_KEY) return false;
+  const _id = String(id);
+  try {
+    const url = SB_URL.replace(/\/+$/, '') + '/rest/v1/' + SB_LABELS_TABLE + '?on_conflict=sheet,id';
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'apikey': SB_KEY,
+        'Authorization': 'Bearer ' + SB_KEY,
+        'Content-Type': 'application/json',
+        'Prefer': 'resolution=ignore-duplicates,return=minimal'
+      },
+      body: JSON.stringify({ sheet: sheet, id: _id, added_at: new Date().toISOString() })
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    PENDING_LABEL_OPS = PENDING_LABEL_OPS.filter(op =>
+      !(op.action === 'add' && op.sheet === sheet && op.id === _id));
+    savePendingLabelOps();
+    return true;
+  } catch (err) {
+    console.warn('[label-queue] push failed, queued for retry:', err.message);
+    PENDING_LABEL_OPS = PENDING_LABEL_OPS.filter(op =>
+      !(op.action === 'add' && op.sheet === sheet && op.id === _id));
+    PENDING_LABEL_OPS.push({ action: 'add', sheet: sheet, id: _id });
+    savePendingLabelOps();
+    return false;
+  }
+}
+
+async function removeLabelFromSupabase(sheet, id) {
+  if (!SB_URL || !SB_KEY) return false;
+  const _id = String(id);
+  try {
+    const url = SB_URL.replace(/\/+$/, '') + '/rest/v1/' + SB_LABELS_TABLE +
+      '?sheet=eq.' + encodeURIComponent(sheet) + '&id=eq.' + encodeURIComponent(_id);
+    const r = await fetch(url, {
+      method: 'DELETE',
+      headers: { 'apikey': SB_KEY, 'Authorization': 'Bearer ' + SB_KEY }
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    PENDING_LABEL_OPS = PENDING_LABEL_OPS.filter(op =>
+      !(op.action === 'remove' && op.sheet === sheet && op.id === _id));
+    savePendingLabelOps();
+    return true;
+  } catch (err) {
+    console.warn('[label-queue] delete failed, queued for retry:', err.message);
+    PENDING_LABEL_OPS = PENDING_LABEL_OPS.filter(op =>
+      !(op.action === 'remove' && op.sheet === sheet && op.id === _id));
+    PENDING_LABEL_OPS.push({ action: 'remove', sheet: sheet, id: _id });
+    savePendingLabelOps();
+    return false;
+  }
+}
+
+async function flushPendingLabelOps() {
+  if (!SB_URL || !SB_KEY || !PENDING_LABEL_OPS.length) return;
+  const toRetry = [...PENDING_LABEL_OPS];
+  for (const op of toRetry) {
+    if (op.action === 'add')         await pushLabelToSupabase(op.sheet, op.id);
+    else if (op.action === 'remove') await removeLabelFromSupabase(op.sheet, op.id);
+  }
+}
+
+async function loadLabelQueueFromSupabase() {
+  if (!SB_URL || !SB_KEY) return;
+  try {
+    const url = SB_URL.replace(/\/+$/, '') + '/rest/v1/' + SB_LABELS_TABLE +
+      '?select=sheet,id&order=added_at.asc';
+    const r = await fetch(url, {
+      headers: {
+        'apikey': SB_KEY, 'Authorization': 'Bearer ' + SB_KEY, 'Content-Type': 'application/json'
+      }
+    });
+    if (!r.ok) {
+      const body = await r.text();
+      if (body.includes('PGRST') || body.includes('not exist') || r.status === 404) {
+        console.warn('[label-queue] table not found — run 20260605_label_queue.sql in Supabase');
+      } else {
+        console.warn('[label-queue] load failed:', r.status, body.slice(0, 200));
+      }
+      return;
+    }
+    const remote = await r.json();
+    if (!Array.isArray(remote)) return;
+
+    const remoteKeys = new Set(remote.map(row => row.sheet + '|' + row.id));
+    const localOnly  = [...MANUAL_LABELS].filter(k => !remoteKeys.has(k));
+
+    // Source of truth = remote ∪ local-only (haven't been pushed yet)
+    MANUAL_LABELS = new Set([
+      ...remote.map(row => row.sheet + '|' + row.id),
+      ...localOnly
+    ]);
+    saveManualLabels();
+
+    // Push local-only entries up (fire-and-forget)
+    localOnly.forEach(key => {
+      const sep = key.indexOf('|');
+      if (sep < 0) return;
+      pushLabelToSupabase(key.slice(0, sep), key.slice(sep + 1));
+    });
+
+    // Retry any queued ops
+    flushPendingLabelOps();
+
+    console.log('[label-queue] Synced — ' + remote.length + ' remote, ' + localOnly.length + ' local-only uploaded');
+    if (typeof updateBadges === 'function') updateBadges();
+    if (ST && ST.view === 'labels' && typeof renderLabels === 'function') renderLabels();
+    else if (ST && ST.view === 'inv' && typeof renderInv === 'function') renderInv();
+  } catch (err) {
+    console.warn('[label-queue] load error:', err.message);
+  }
+}
 
 function savePendingDeletes() { localStorage.setItem('cv_pending_deletes', JSON.stringify(PENDING_DELETES)); }
 
@@ -1218,11 +1345,14 @@ function saveManualLabels() {
 
 function toggleLabelQueue(sheet, id, ev) {
   if (ev) { ev.stopPropagation(); ev.preventDefault(); }
-  const key = sheet + '|' + cn(id);
+  const cleanId = cn(id);
+  const key = sheet + '|' + cleanId;
   if (MANUAL_LABELS.has(key)) {
     MANUAL_LABELS.delete(key);
+    removeLabelFromSupabase(sheet, cleanId);
   } else {
     MANUAL_LABELS.add(key);
+    pushLabelToSupabase(sheet, cleanId);
   }
   saveManualLabels();
   updateBadges();
@@ -3323,6 +3453,7 @@ async function loadFromSupabase() {
     if (ST && ST.view === 'inv') renderInv();
     loadSpotPrices();          // refresh metal spot prices for accurate value
     loadSnapshotsFromSupabase(); // sync cross-device value history for trend chart
+    loadLabelQueueFromSupabase(); // sync cross-device label print queue
     const loadedCount = allRows.length;
     const bannerDetail = loadedCount + (total && total !== loadedCount ? ' of ' + total : '') + ' records · ' + new Date().toLocaleTimeString();
     updateSyncBanner('ok', bannerDetail);
@@ -4903,9 +5034,15 @@ async function markAllPrinted() {
     if (id) labelsPrinted.add(id);
   });
   
-  // Clear manual labels queue
+  // Clear manual labels queue (and sync the deletions to Supabase so other devices see it)
+  const _clearedKeys = [...MANUAL_LABELS];
   MANUAL_LABELS = new Set();
   saveManualLabels();
+  _clearedKeys.forEach(key => {
+    const sep = key.indexOf('|');
+    if (sep < 0) return;
+    removeLabelFromSupabase(key.slice(0, sep), key.slice(sep + 1));
+  });
   
   // Persist labelsPrinted
   saveLabelsPrinted();
@@ -5184,6 +5321,7 @@ function removeFromLabelQueue(id, source, sheetKey) {
   if (source === 'manual' && sheetKey) {
     MANUAL_LABELS.delete(sheetKey + '|' + cleanId);
     saveManualLabels();
+    removeLabelFromSupabase(sheetKey, cleanId);
   } else {
     // 'new' source: mark as printed so it's filtered out of NEW_RECORDS display
     labelsPrinted.add(String(id));
@@ -5532,10 +5670,12 @@ async function saveRenumber(sheetKey, rawId) {
   const newLabelKey = sheetKey + '|' + cn(newVal);
   if (MANUAL_LABELS.has(oldLabelKey)) {
     MANUAL_LABELS.delete(oldLabelKey);
+    removeLabelFromSupabase(sheetKey, cn(String(oldId)));
   }
   // Always add the new ID to the labels queue — renumbered records need a fresh label
   MANUAL_LABELS.add(newLabelKey);
   saveManualLabels();
+  pushLabelToSupabase(sheetKey, cn(newVal));
   console.log('[Renumber] Added to labels queue:', newLabelKey);
 
   buildFlat();
@@ -5952,6 +6092,7 @@ async function manualSyncNow() {
       const [ml_sheet, ml_id] = key.split('|');
       if (!ALL_ITEMS.some(i => i.sheet === ml_sheet && cn(i.id) === ml_id)) {
         MANUAL_LABELS.delete(key);
+        removeLabelFromSupabase(ml_sheet, ml_id);
         cleaned++;
       }
     }
@@ -7097,7 +7238,18 @@ async function submitAdd(){
   arr.push(rec);
   D[sheet] = arr;
   NEW_RECORDS.push({sheet, ...rec});
-  saveNR(); buildFlat(); updateBadges(); checkSyncState();
+  saveNR();
+
+  // Auto-add to the label print queue — every new record gets a label by default.
+  // The print queue syncs across devices via Supabase (label_queue table).
+  const _qKey = sheet + '|' + cn(rec.id);
+  if (!MANUAL_LABELS.has(_qKey)) {
+    MANUAL_LABELS.add(_qKey);
+    saveManualLabels();
+    pushLabelToSupabase(sheet, cn(rec.id));   // fire-and-forget; queues retry on fail
+  }
+
+  buildFlat(); updateBadges(); checkSyncState();
 
   if (SB_URL && SB_KEY) {
     const btn = document.querySelector('#content button.bp');
