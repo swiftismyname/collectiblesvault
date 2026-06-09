@@ -187,6 +187,12 @@ tbody tr.sel td{background:rgba(201,168,76,.06)}
 .lookup-btn{background:transparent;border:1px solid #4a7ab5;color:#4a7ab5;border-radius:4px;padding:3px 7px;font-size:11px;cursor:pointer;font-family:var(--font-body,'Karla',sans-serif);white-space:nowrap;transition:all .12s}
 .lookup-btn:hover{background:rgba(74,122,181,.12)}
 .lookup-btn:disabled{opacity:.5;cursor:not-allowed}
+/* "Already run" indicator — small green dot in the top-right corner of a lookup button.
+   The button stays clickable so the user can re-run to refresh. */
+.lookup-btn{position:relative}
+.lookup-btn.tpg-done::after{content:'';position:absolute;top:-3px;right:-3px;width:8px;height:8px;border-radius:50%;background:var(--green,#4a9a6a);box-shadow:0 0 0 2px var(--bg,#0a0a0a);pointer-events:none}
+/* Camera icon in the inventory row's # column — gentle gold tint, doesn't shout */
+.row-img-marker{display:inline-block;margin-left:5px;vertical-align:middle;opacity:.75;color:var(--gold,#c9a84c)}
 .ref-modal{position:fixed;inset:0;background:rgba(0,0,0,.72);display:flex;align-items:center;justify-content:center;z-index:200}
 .ref-modal-box{background:var(--bg3);border:1px solid var(--border);border-radius:10px;width:min(560px,92vw);max-height:85vh;overflow:hidden;display:flex;flex-direction:column}
 .ref-modal-head{padding:16px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center}
@@ -3466,8 +3472,14 @@ function renderInv(){
         const gain=item.value-item.cost;
         const isEl=ST.selItem===item;
         const inQ=isInLabelQueue(item.sheet,item.id);
+        // Pre-compute "lookup already applied" states for this record
+        const _hasImg  = _hasImages(item);
+        const _didPCGS = !!_tpgWasApplied(item,'pcgs');
+        const _didNGC  = !!_tpgWasApplied(item,'ngc');
+        const _didICG  = !!_tpgWasApplied(item,'icg');
+        const _didCRef = !!_tpgWasApplied(item,'coinref');
         return `<tr class="${isEl?'sel':''}" onclick="showDetail(ALL_ITEMS[${ALL_ITEMS.indexOf(item)}])" style="cursor:pointer">
-          <td style="font-size:11px;color:var(--dim)">${cn(item.id)}</td>
+          <td style="font-size:11px;color:var(--dim);white-space:nowrap">${cn(item.id)}${_hasImg?`<span class="row-img-marker" title="Has images attached"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg></span>`:''}</td>
           <td>
             <span class="pill" style="background:${gc}18;color:${gc};border-color:${gc}38;font-size:10px;margin-right:6px">${sm.label}</span>
             <span title="${e(item.desc)}">${e(item.desc).substring(0,50)}${item.desc.length>50?'…':''}</span>
@@ -3486,10 +3498,10 @@ function renderInv(){
           <td style="text-align:center;padding:0 4px">
             <div style="display:flex;gap:3px;justify-content:center;align-items:center">
               <button onclick="toggleLabelQueue('${item.sheet}','${item.id}',event)" title="${inQ?'Remove from label queue':'Add to label print queue'}" style="background:${inQ?'var(--gold2)':'transparent'};border:1px solid ${inQ?'var(--gold)':'var(--border)'};color:${inQ?'var(--gold)':'var(--dim)'};border-radius:4px;width:26px;height:24px;cursor:pointer;font-size:13px;line-height:1;padding:0">${inQ?'\u2713':'+'}</button>
-              ${(item.raw.type||item.raw.series||['gradedUS','rawUS'].includes(item.sheet))?`<button onclick="event.stopPropagation();lookupRecord(ALL_ITEMS[${ALL_ITEMS.indexOf(item)}])" title="Lookup in US Coin Reference" class="lookup-btn" id="lookup-btn-${cn(item.id)}" style="padding:2px 5px;font-size:10px">🔍</button>`:''}
-              ${['gradedUS','gradedSilver','gradedForeign'].includes(item.sheet)&&isPCGSGraded(item.raw.gradingAuth)?`<button onclick="event.stopPropagation();lookupPCGS(ALL_ITEMS[${ALL_ITEMS.indexOf(item)}])" title="Look up on PCGS CoinFacts" class="lookup-btn" id="pcgs-btn-${cn(item.id)}" style="padding:2px 5px;font-size:10px;background:var(--accent-pcgs-bg);border-color:var(--accent-pcgs-bd);color:var(--accent-pcgs)">🏆</button>`:''}
-              ${['gradedUS','gradedSilver','gradedForeign'].includes(item.sheet)&&/^icg$/i.test(String(item.raw.gradingAuth||'').trim())?`<button onclick="event.stopPropagation();lookupICG(ALL_ITEMS[${ALL_ITEMS.indexOf(item)}])" title="Look up on ICG Verification" class="lookup-btn" id="icg-btn-${cn(item.id)}" style="padding:2px 5px;font-size:10px;background:var(--accent-icg-bg);border-color:var(--accent-icg-bd);color:var(--accent-icg)">🔵</button>`:''}
-              ${['gradedUS','rawUS','gradedSilver','rawSilver'].includes(item.sheet)?`<button onclick="event.stopPropagation();lookupNGC(ALL_ITEMS[${ALL_ITEMS.indexOf(item)}])" title="NGC Price Guide &amp; Cert Lookup" class="lookup-btn" id="ngc-btn-${cn(item.id)}" style="padding:2px 5px;font-size:10px;background:rgba(0,154,68,.1);border-color:var(--accent-ngc-bd);color:var(--accent-ngc)">📗</button>`:''}
+              ${(item.raw.type||item.raw.series||['gradedUS','rawUS'].includes(item.sheet))?`<button onclick="event.stopPropagation();lookupRecord(ALL_ITEMS[${ALL_ITEMS.indexOf(item)}])" title="${_didCRef?'Coin Reference applied — click to update':'Lookup in US Coin Reference'}" class="lookup-btn${_didCRef?' tpg-done':''}" id="lookup-btn-${cn(item.id)}" style="padding:2px 5px;font-size:10px">🔍</button>`:''}
+              ${['gradedUS','gradedSilver','gradedForeign'].includes(item.sheet)&&isPCGSGraded(item.raw.gradingAuth)?`<button onclick="event.stopPropagation();lookupPCGS(ALL_ITEMS[${ALL_ITEMS.indexOf(item)}])" title="${_didPCGS?'PCGS applied — click to update':'Look up on PCGS CoinFacts'}" class="lookup-btn${_didPCGS?' tpg-done':''}" id="pcgs-btn-${cn(item.id)}" style="padding:2px 5px;font-size:10px;background:var(--accent-pcgs-bg);border-color:var(--accent-pcgs-bd);color:var(--accent-pcgs)">🏆</button>`:''}
+              ${['gradedUS','gradedSilver','gradedForeign'].includes(item.sheet)&&/^icg$/i.test(String(item.raw.gradingAuth||'').trim())?`<button onclick="event.stopPropagation();lookupICG(ALL_ITEMS[${ALL_ITEMS.indexOf(item)}])" title="${_didICG?'ICG applied — click to update':'Look up on ICG Verification'}" class="lookup-btn${_didICG?' tpg-done':''}" id="icg-btn-${cn(item.id)}" style="padding:2px 5px;font-size:10px;background:var(--accent-icg-bg);border-color:var(--accent-icg-bd);color:var(--accent-icg)">🔵</button>`:''}
+              ${['gradedUS','rawUS','gradedSilver','rawSilver'].includes(item.sheet)?`<button onclick="event.stopPropagation();lookupNGC(ALL_ITEMS[${ALL_ITEMS.indexOf(item)}])" title="${_didNGC?'NGC applied — click to update':'NGC Price Guide &amp; Cert Lookup'}" class="lookup-btn${_didNGC?' tpg-done':''}" id="ngc-btn-${cn(item.id)}" style="padding:2px 5px;font-size:10px;background:rgba(0,154,68,.1);border-color:var(--accent-ngc-bd);color:var(--accent-ngc)">📗</button>`:''}
 
             </div>
           </td>
@@ -3690,10 +3702,13 @@ function showDetail(item){
     const usSheets = ['gradedUS','rawUS','gradedSilver','rawSilver','gradedForeign','rawForeign'];
     if (usSheets.includes(item.sheet) || item.raw.type || item.raw.series) {
       const lookBtn = document.createElement('button');
-      lookBtn.className = 'lookup-btn';
+      const _doneCRef = !!_tpgWasApplied(item,'coinref');
+      lookBtn.className = 'lookup-btn' + (_doneCRef ? ' tpg-done' : '');
       lookBtn.id = 'lookup-btn-' + cn(item.id);
       lookBtn.textContent = '🔍 Lookup';
-      lookBtn.title = 'Cross-reference with US Coin Reference sheet and fill missing fields';
+      lookBtn.title = _doneCRef
+        ? 'Coin Reference applied — click to re-run and update'
+        : 'Cross-reference with US Coin Reference sheet and fill missing fields';
       lookBtn.onclick = () => lookupRecord(item);
       actions.appendChild(lookBtn);
     }
@@ -3701,10 +3716,13 @@ function showDetail(item){
     const numistaSheets = ['gradedUS','rawUS','gradedSilver','rawSilver','gradedForeign','rawForeign','ancient','usNotes','foreignNotes','confederate','obsolete','other'];
     if (numistaSheets.includes(item.sheet) || item.raw.type || item.raw.series) {
       const nBtn = document.createElement('button');
-      nBtn.className = 'lookup-btn';
+      const _doneNum = !!_tpgWasApplied(item,'numista');
+      nBtn.className = 'lookup-btn' + (_doneNum ? ' tpg-done' : '');
       nBtn.id = 'numista-btn-' + cn(item.id);
       nBtn.textContent = '🌐 Numista';
-      nBtn.title = 'Search Numista catalogue for this coin and fill missing fields';
+      nBtn.title = _doneNum
+        ? 'Numista applied — click to re-run and update'
+        : 'Search Numista catalogue for this coin and fill missing fields';
       nBtn.style.cssText = 'background:rgba(74,144,226,.15);border-color:var(--accent-icg-bd);color:var(--accent-icg)';
       nBtn.onclick = () => lookupNumista(item);
       actions.appendChild(nBtn);
@@ -3713,10 +3731,13 @@ function showDetail(item){
     const ngcSheets = ['gradedUS','rawUS','gradedSilver','rawSilver'];
     if (ngcSheets.includes(item.sheet)) {
       const ngcBtn = document.createElement('button');
-      ngcBtn.className = 'lookup-btn';
+      const _doneNGC = !!_tpgWasApplied(item,'ngc');
+      ngcBtn.className = 'lookup-btn' + (_doneNGC ? ' tpg-done' : '');
       ngcBtn.id = 'ngc-btn-' + cn(item.id);
       ngcBtn.textContent = '📗 NGC';
-      ngcBtn.title = 'NGC Price Guide & Cert Lookup — pictures and pricing for US coins';
+      ngcBtn.title = _doneNGC
+        ? 'NGC applied — click to re-run and update'
+        : 'NGC Price Guide & Cert Lookup — pictures and pricing for US coins';
       ngcBtn.style.cssText = 'background:var(--accent-ngc-bg);border-color:var(--accent-ngc-bd);color:var(--accent-ngc)';
       ngcBtn.onclick = () => lookupNGC(item);
       actions.appendChild(ngcBtn);
@@ -3725,11 +3746,14 @@ function showDetail(item){
     const gradedSheets   = ['gradedUS','gradedSilver','gradedForeign'];
     if (gradedSheets.includes(item.sheet) && isPCGSGraded(item.raw.gradingAuth)) {
       const pcgsIs = isPCGSGraded(item.raw.gradingAuth);
+      const _donePCGS = !!_tpgWasApplied(item,'pcgs');
       const pcgsBtn = document.createElement('button');
-      pcgsBtn.className = 'lookup-btn';
+      pcgsBtn.className = 'lookup-btn' + (_donePCGS ? ' tpg-done' : '');
       pcgsBtn.id = 'pcgs-btn-' + cn(item.id);
       pcgsBtn.textContent = '🏆 PCGS';
-      pcgsBtn.title = 'Look up on PCGS CoinFacts' + (pcgsIs ? '' : ' (Grading Auth: ' + (item.raw.gradingAuth||'not set') + ')');
+      pcgsBtn.title = _donePCGS
+        ? 'PCGS applied — click to re-run and update'
+        : 'Look up on PCGS CoinFacts' + (pcgsIs ? '' : ' (Grading Auth: ' + (item.raw.gradingAuth||'not set') + ')');
       pcgsBtn.style.cssText = 'background:var(--accent-pcgs-bg);border-color:var(--accent-pcgs-bd);color:var(--accent-pcgs)';
       pcgsBtn.onclick = () => lookupPCGS(item);
       actions.appendChild(pcgsBtn);
@@ -3737,10 +3761,13 @@ function showDetail(item){
     // ICG button — show for ICG-graded records on graded sheets
     if (gradedSheets.includes(item.sheet) && /^icg$/i.test(String(item.raw.gradingAuth||'').trim())) {
       const icgBtn = document.createElement('button');
-      icgBtn.className = 'lookup-btn';
+      const _doneICG = !!_tpgWasApplied(item,'icg');
+      icgBtn.className = 'lookup-btn' + (_doneICG ? ' tpg-done' : '');
       icgBtn.id = 'icg-btn-' + cn(item.id);
       icgBtn.textContent = '🔵 ICG';
-      icgBtn.title = 'Look up on ICG Verification';
+      icgBtn.title = _doneICG
+        ? 'ICG applied — click to re-run and update'
+        : 'Look up on ICG Verification';
       icgBtn.style.cssText = 'background:var(--accent-icg-bg);border-color:var(--accent-icg-bd);color:var(--accent-icg)';
       icgBtn.onclick = () => lookupICG(item);
       actions.appendChild(icgBtn);
@@ -3815,11 +3842,49 @@ async function deleteRecordFromSheets(sheetKey, id) {
 // All four TPG functions (ICG/NGC/PCGS/Numista) used to be ~25-line near-duplicates
 // that drifted in details (one used cvToast, others used alert, one checked Supabase
 // AND Sheets, others only Sheets). Now they're 1-line wrappers around this.
+
+// Maps a tpgLabel passed to _tpgApply to a stable short key used in _tpgApplied.
+// Keep these in sync with _tpgIcons (used to render badges in inventory + detail).
+const _TPG_KEY_MAP = {
+  'PCGS': 'pcgs',
+  'NGC': 'ngc',
+  'ICG': 'icg',
+  'Numista': 'numista',
+  'Coin Reference': 'coinref'
+};
+
+// Returns truthy (ISO timestamp string) if the given TPG lookup has been applied
+// to this record, falsy otherwise. Looks at record._tpgApplied[key]. Records that
+// predate this feature simply have no _tpgApplied object yet — those return null.
+function _tpgWasApplied(item, key) {
+  const r = (item && item.raw) || item || {};
+  const ta = r._tpgApplied;
+  return (ta && typeof ta === 'object' && ta[key]) ? ta[key] : null;
+}
+
+// Returns true if a record has any image URL set. Checks all variant key names
+// (camelCase, lowercase, snake_case) that have appeared in our data historically.
+function _hasImages(item) {
+  const r = (item && item.raw) || item || {};
+  return !!(r.imageFrontUrl || r.imagefronturl || r.image_front_url ||
+            r.imageBackUrl  || r.imagebackurl  || r.image_back_url);
+}
+
 async function _tpgApply(item, updates, tpgLabel) {
   const arr = D[item.sheet];
   if (!arr) return;
   const idx = arr.findIndex(r => String(r.id) === String(item.id));
   if (idx < 0) return;
+
+  // Stamp which TPG was just applied so the inventory/detail can show a "done"
+  // indicator. Merge with any existing _tpgApplied object so previously-run TPGs
+  // stay marked even after running a different one.
+  const tpgKey = _TPG_KEY_MAP[tpgLabel] || String(tpgLabel || '').toLowerCase().replace(/\s+/g, '');
+  if (tpgKey) {
+    const existing = (arr[idx] && arr[idx]._tpgApplied) || {};
+    updates._tpgApplied = Object.assign({}, existing, { [tpgKey]: new Date().toISOString() });
+  }
+
   Object.assign(arr[idx], updates);
   Object.assign(item.raw, updates);
   _touchRecord(arr[idx]);
