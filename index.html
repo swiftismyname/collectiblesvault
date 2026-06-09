@@ -3568,6 +3568,11 @@ function showDetail(item){
   const _seenNorm = new Set();
   const rows=Object.entries(raw).filter(([k,v])=>{
     if (v===null || v==='' || v===undefined || k==='id') return false;
+    // Internal/system fields use a leading underscore as a convention (e.g.
+    // _modifiedAt, _modifiedBy, _tpgApplied). These are rendered elsewhere
+    // (Summary section's "Last Modified" row, lookup buttons' green dot)
+    // and should never appear in the All Fields listing.
+    if (typeof k === 'string' && k.charAt(0) === '_') return false;
     if (_hiddenFields.has(k)) return false;
     const norm = k.toLowerCase();
     if (_seenNorm.has(norm)) return false;  // skip duplicate key (different case)
@@ -3677,7 +3682,12 @@ function showDetail(item){
     ${liveMelt>0?`<div class="dp-row"><span class="dp-label">Live Melt Value</span><span class="dp-value mono" style="color:var(--gold)" title="${e(meltLabel)}">${fmt$(liveMelt)}</span></div>`:''}
     ${(function(){
       const mod = _fmtModified(item.raw);
-      return mod ? `<div class="dp-row"><span class="dp-label">Last Modified</span><span class="dp-value" style="color:var(--dim);font-size:11px">${e(mod)}</span></div>` : '';
+      if (!mod) return '';
+      // Tooltip shows exact local timestamp; visible text shows relative ("2h ago")
+      const rawTs = item.raw && item.raw._modifiedAt;
+      let full = '';
+      try { full = rawTs ? new Date(rawTs).toLocaleString() : ''; } catch(_) {}
+      return `<div class="dp-row"><span class="dp-label">Last Modified</span><span class="dp-value" style="color:var(--dim);font-size:11px" title="${e(full)}">${e(mod)}</span></div>`;
     })()}
     <div class="dp-section">All Fields</div>
     ${rows}
@@ -7781,7 +7791,12 @@ function openEditModal(item) {
   const ex = document.getElementById('edit-modal');
   if (ex) ex.remove();
   const raw = item.raw || {};
-  const fields = Object.entries(raw).filter(([k,v]) => v != null && v !== '');
+  // Filter out empties AND internal underscore-prefixed fields (_modifiedAt,
+  // _modifiedBy, _tpgApplied, etc.) — these are managed by the app and must
+  // not be editable as plain text.
+  const fields = Object.entries(raw).filter(([k,v]) =>
+    v != null && v !== '' && !(typeof k === 'string' && k.charAt(0) === '_')
+  );
   const modal = document.createElement('div');
   modal.id = 'edit-modal';
   modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.7);z-index:1000;display:flex;align-items:center;justify-content:center';
