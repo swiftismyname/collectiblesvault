@@ -24,6 +24,12 @@
   --gold:#c9a84c;--gold2:rgba(201,168,76,.12);--gold3:rgba(201,168,76,.25);
   --text:#dfd5bc;--muted:#8a7f6a;--dim:#4a4030;
   --border:#252018;--green:#4a9a6a;--red:#c0504a;
+  /* Semantic accents — kept consistent across themes for brand recognition.
+     Used by TPG lookup buttons (PCGS/NGC/ICG) and info indicators. */
+  --accent-pcgs:var(--accent-pcgs); --accent-pcgs-bg:var(--accent-pcgs-bg); --accent-pcgs-bd:var(--accent-pcgs-bd);
+  --accent-ngc:var(--accent-ngc);  --accent-ngc-bg:var(--accent-ngc-bg);    --accent-ngc-bd:var(--accent-ngc-bd);
+  --accent-icg:var(--accent-icg);  --accent-icg-bg:var(--accent-icg-bg);  --accent-icg-bd:var(--accent-icg-bd);
+  --accent-info:var(--accent-info); --accent-info-bg:var(--accent-info-bg); --accent-info-bd:var(--accent-info-bd);
 }
 body{background:var(--bg);color:var(--text);font-family:var(--font-body,'Karla',sans-serif);height:100vh;overflow:hidden;display:flex}
 #app{display:flex;width:100%;height:100vh;overflow:hidden}
@@ -844,7 +850,7 @@ body.theme-modern-dark select option{
   padding:18px 22px; border-bottom:1px solid var(--border);
   display:flex; align-items:center; justify-content:space-between;
 }
-.ai-modal-title{font-family:'Cormorant Garamond',serif; font-size:22px; color:var(--text); font-weight:300}
+.ai-modal-title{font-family:var(--font-display,'Cormorant Garamond',serif); font-size:22px; color:var(--text); font-weight:300}
 .ai-modal-title em{color:var(--gold); font-style:italic}
 .ai-modal-close{
   width:30px; height:30px; border:1px solid var(--border);
@@ -1066,7 +1072,24 @@ body.theme-modern-dark select option{
 <div id="app">
 <div id="sb">
   <div class="logo">
-    <div class="logo-name">Collectibles Vault</div>
+    <div class="logo-name" aria-label="Collectibles Vault">
+      <svg viewBox="0 0 220 60" xmlns="http://www.w3.org/2000/svg" role="img" aria-hidden="true" style="width:100%;height:auto;display:block;max-height:60px">
+        <!-- Coin-seal emblem (left) -->
+        <g transform="translate(28, 30)">
+          <circle r="23" fill="none" stroke="currentColor" stroke-width="0.6"/>
+          <circle r="19" fill="none" stroke="currentColor" stroke-width="0.8" stroke-dasharray="1.5 2.2"/>
+          <text x="0" y="7.5" text-anchor="middle" font-size="20" font-weight="600"
+                fill="currentColor" style="font-family:inherit;letter-spacing:.04em">CV</text>
+        </g>
+        <!-- Faint vertical divider -->
+        <line x1="62" y1="14" x2="62" y2="46" stroke="currentColor" stroke-width="0.4" opacity="0.4"/>
+        <!-- Wordmark (right) -->
+        <g fill="currentColor" style="font-family:inherit">
+          <text x="72" y="26" font-size="17" font-weight="600">Collectibles</text>
+          <text x="72" y="46" font-size="17" font-weight="600">Vault</text>
+        </g>
+      </svg>
+    </div>
     <div class="logo-sub">Currency 2026</div>
   </div>
   <nav>
@@ -1128,6 +1151,71 @@ body.theme-modern-dark select option{
 </div>
 
 <script>
+/* ════════════════════════════════════════════════════════════════════════════════════
+   COLLECTIBLES VAULT — TABLE OF CONTENTS
+   ────────────────────────────────────────────────────────────────────────────────────
+   This file is a single-file PWA hosted at collectiblesvault.github.io. Major
+   sections are listed below; search the file for the bracketed marker text (e.g.
+   "[TPG-ICG]") to jump to any section. In VS Code / Sublime / IntelliJ, the
+   `// #region` markers wrapping each major band are foldable — `Ctrl+K Ctrl+0`
+   in VS Code collapses everything for a bird's-eye view.
+
+   §1  FOUNDATION — Cross-cutting infrastructure
+       [SETUP-URL]         One-tap cross-device config import via URL hash
+       [TOASTS]            Non-blocking notification system (cvToast)
+       [ERROR-LOG]         Background error capture to Supabase error_log
+       [TIMESTAMPS]        _modifiedAt / _modifiedBy on records (_touchRecord)
+       [SYNC-LOCK]         Track active sync operations (cvIsSyncing)
+       [ERROR-LOG-VIEWER]  Settings → Error Log panel
+       [HOISTED-STATE]     State vars declared early to avoid TDZ
+       [PENDING-STATE]     Unified persistence for all pending queues
+       [SNAPSHOTS]         Value-history snapshot sync
+       [LABEL-QUEUE]       Cross-device label queue sync
+
+   §2  CORE DATA & HELPERS
+       [SCHEMAS]           Field definitions per sheet (SCHEMAS object)
+       [HELPERS-FORMAT]    fmt$, cn, normId, etc.
+       [HELPERS-VALUE]     Live melt computation, weight conversions
+       [DATA-MODEL]        D{...}, ALL_ITEMS, buildFlat()
+
+   §3  UI — VIEWS (rendered into #content)
+       [NAV]               Navigation router (nav())
+       [DASHBOARD]         renderDash() — totals, charts, value history
+       [INVENTORY]         renderInv() — list view with search/filter
+       [DETAIL-PANEL]      showDetail() — single-record drill-in
+       [ADD-RECORD]        renderAdd(), submitAdd()
+       [LABELS]            Labels-to-print queue view
+       [DUPLICATES]        Duplicate-detection view
+       [RENUMBER]          Change-record-number dialog
+       [SETTINGS]          renderSettings() — all settings cards
+
+   §4  TPG LOOKUPS — Third-party grading service integrations
+       [TPG-APPLY]         _tpgApply() — single shared save path for all TPGs
+       [TPG-ICG]           showICGModal, _icgApply
+       [TPG-NGC]           showNGCModal, _ngcApply
+       [TPG-PCGS]          showPCGSModal, _pcgsApply (API-driven)
+       [TPG-NUMISTA]       Numista API + apply
+       [TPG-COIN-REF]      US Coin Reference (Google Sheet) lookup
+
+   §5  DATA LAYER — Sync to backends
+       [SUPABASE]          loadFromSupabase, insertInSupabase, updateInSupabase
+       [GSHEETS]           loadFromSheets + Apps Script integration
+       [STORAGE]           uploadImageToSupabase, orphan cleanup
+       [SYNC-BANNER]       updateSyncBanner — top status indicator
+       [SYNC-NOW]          manualSyncNow, retryPendingSync (sync hub)
+
+   §6  APPEARANCE
+       [THEME]             setTheme + theme CSS class swap
+       [FONT]              setFont + applyFont (CSS variables)
+       [PICKERS]           _renderThemePicker, _renderFontPicker
+
+   §7  AI SCAN
+       [AI-SCAN]           Modal, capture, send to Gemini/Claude, parse response
+
+   §8  BOOT
+       [BOOT]              Initial load sequence (bottom of script)
+   ════════════════════════════════════════════════════════════════════════════════════ */
+
 // ════════════════════════════════════════════════════════════════════
 //  SETUP URL HANDLING — One-tap cross-device config import.
 //  Generate on Device A: Settings → Sync Settings → "Setup Link / QR".
@@ -1163,6 +1251,7 @@ function b64UrlDecode(str) {
   return decodeURIComponent(escape(atob(str)));
 }
 
+// #region [TOASTS]
 // ─── TOAST NOTIFICATIONS ────────────────────────────────────────────
 // Non-blocking notification used in async hot paths (uploads, syncs,
 // errors during background ops). Usage:
@@ -1197,6 +1286,9 @@ function cvToast(message, type, opts) {
   return { dismiss: remove };
 }
 
+// #endregion [TOASTS]
+
+// #region [ERROR-LOG]
 // ─── ERROR LOGGING ──────────────────────────────────────────────────
 // Captures background failures to a Supabase `error_log` table so we can
 // investigate later. Without this, console.warn output is invisible on
@@ -1226,6 +1318,56 @@ function cvDeviceId() {
   }
   return id;
 }
+
+// #endregion [ERROR-LOG]
+
+// #region [TIMESTAMPS]
+// ─── RECORD MODIFICATION TIMESTAMP ──────────────────────────────────
+// Stamps a record with when it was last modified and by which device.
+// Provides cross-device visibility: detail panel shows "modified 2h ago
+// (this device)" or "modified yesterday (other device)" so the user can
+// see which of their devices last touched a record. Foundation for
+// future automatic conflict detection. Lives inside the JSONB data
+// column — no schema changes needed.
+function _touchRecord(record) {
+  if (!record || typeof record !== 'object') return;
+  record._modifiedAt = new Date().toISOString();
+  record._modifiedBy = cvDeviceId().slice(0, 8);
+}
+
+// Returns a human-readable string like "2h ago (this device)" or "—" if no timestamp.
+// Used by the detail panel's "Last Modified" row.
+function _fmtModified(record) {
+  if (!record || !record._modifiedAt) return '';
+  const dt = new Date(record._modifiedAt);
+  if (isNaN(dt.getTime())) return '';
+  const rel = (typeof _cvRelativeTime === 'function') ? _cvRelativeTime(dt) : dt.toLocaleString();
+  const by = record._modifiedBy || '';
+  const myId = cvDeviceId().slice(0, 8);
+  const where = by ? (by === myId ? 'this device' : 'other device') : '';
+  return where ? rel + ' · ' + where : rel;
+}
+
+// #endregion [TIMESTAMPS]
+
+// #region [SYNC-LOCK]
+// ─── SYNC LOCK ──────────────────────────────────────────────────────
+// Tracks which sync operations are currently in flight. Multiple syncs
+// can be active concurrently (e.g., a Supabase pull while a Sheets push
+// is happening), so we use a Set rather than a boolean. Each entry-point
+// acquires a named lock at start and releases it in a `finally` block to
+// guarantee cleanup even on error.
+//
+// What this enables:
+//   - cvIsSyncing() — true if ANY sync is in flight
+//   - cvActiveSyncs() — list of currently active sync names (diagnostics)
+//   - Future deferral logic can check cvIsSyncing() before writing
+//   - Error log entries can include sync state via context.activeSyncs
+const SYNC_LOCK = new Set();
+function _syncLockAcquire(name) { SYNC_LOCK.add(name); }
+function _syncLockRelease(name) { SYNC_LOCK.delete(name); }
+function cvIsSyncing() { return SYNC_LOCK.size > 0; }
+function cvActiveSyncs() { return Array.from(SYNC_LOCK); }
 
 async function cvLogError(message, context, level) {
   level = level || 'error';
@@ -1266,6 +1408,10 @@ async function cvLogError(message, context, level) {
     page: (typeof ST !== 'undefined' && ST && ST.view) ? ST.view : (location.hash || 'boot'),
     device_id: cvDeviceId()
   };
+  // Annotate context with active sync state for diagnostics
+  if (typeof cvIsSyncing === 'function' && cvIsSyncing()) {
+    payload.context = Object.assign({}, payload.context || {}, { activeSyncs: cvActiveSyncs() });
+  }
 
   try {
     await fetch(sbUrl + '/rest/v1/error_log', {
@@ -1304,6 +1450,9 @@ async function cvTrimErrorLog() {
   }
 }
 
+// #endregion [SYNC-LOCK]
+
+// #region [ERROR-LOG-VIEWER]
 // ─── ERROR LOG VIEWER (called from Settings) ───────────────────────
 async function cvLoadErrorLog() {
   const container = document.getElementById('error-log-list');
@@ -1465,6 +1614,9 @@ const PLAT_OZ        =   0.0965;  // platinum in troy oz
 const PALL_OZ        =   0.0322;  // palladium in troy oz
 const COPPER_LB      =   2.8800;  // copper in pounds
 
+// #endregion [ERROR-LOG-VIEWER]
+
+// #region [HOISTED-STATE]
 // ── Hoisted state vars (declared early to avoid TDZ in init) ──────────────────
 let GSHEETS_URL = localStorage.getItem('cv_gsheets_url') || ''; // optional: PCGS proxy only
 let SB_URL      = localStorage.getItem('cv_sb_url')      || ''; // Supabase project URL
@@ -1482,22 +1634,73 @@ const COIN_REF_GID      = '126318907';  // US Coin Reference tab gid
 
 // Manual sheet-name overrides (key -> actual tab name)
 let SHEET_OVERRIDES = JSON.parse(localStorage.getItem('cv_sheet_overrides') || '{}');
+
+// #endregion [HOISTED-STATE]
+
+// #region [PENDING-STATE]
+// ── UNIFIED PENDING-STATE PERSISTENCE ──────────────────────────────
+// All pending state (edits, retries, deletes, snapshots, label ops,
+// new records) shares ONE localStorage key now: `cv_pending_state`.
+// Previously each had its own key (`cv_pending_edits`, etc.) which
+// drifted: some had save wrappers, others wrote localStorage directly.
+// The IN-MEMORY variables (PENDING_EDITS, NEW_RECORDS, etc.) are
+// unchanged — every reference site keeps working. Only persistence
+// is unified.
+//
+// Migration: on first load after v60, _initPendingVar() reads the new
+// unified key. If absent, it falls back to the legacy per-variable key
+// so pre-v60 data is preserved. On next save, _savePendingState() writes
+// the unified key. Legacy keys are NOT deleted (harmless to leave; safe
+// on downgrade).
+const PENDING_STATE_KEY = 'cv_pending_state';
+
+function _initPendingVar(field, oldKey, defaultVal) {
+  try {
+    const raw = localStorage.getItem(PENDING_STATE_KEY);
+    if (raw) {
+      const s = JSON.parse(raw);
+      if (s && typeof s === 'object' && Object.prototype.hasOwnProperty.call(s, field)) return s[field];
+    }
+  } catch (_) { /* fall through */ }
+  try {
+    const raw = localStorage.getItem(oldKey);
+    if (raw) return JSON.parse(raw);
+  } catch (_) { /* fall through */ }
+  return defaultVal;
+}
+
+function _savePendingState() {
+  try {
+    const state = {
+      edits:       (typeof PENDING_EDITS         !== 'undefined') ? PENDING_EDITS        : {},
+      editRetries: (typeof PENDING_EDIT_RETRIES  !== 'undefined') ? PENDING_EDIT_RETRIES : {},
+      deletes:     (typeof PENDING_DELETES       !== 'undefined') ? PENDING_DELETES      : [],
+      snapshots:   (typeof PENDING_SNAPSHOTS     !== 'undefined') ? PENDING_SNAPSHOTS    : [],
+      labelOps:    (typeof PENDING_LABEL_OPS     !== 'undefined') ? PENDING_LABEL_OPS    : [],
+      newRecords:  (typeof NEW_RECORDS           !== 'undefined') ? NEW_RECORDS          : []
+    };
+    localStorage.setItem(PENDING_STATE_KEY, JSON.stringify(state));
+  } catch (e) {
+    try { console.warn('[pending-state] save failed:', e.message); } catch(_) {}
+  }
+}
+
 // Local edits that haven't been confirmed synced to Google Sheets yet.
 // These persist across reloads and get re-applied after every loadFromSheets,
 // so a failed Apps Script sync doesn't make your edits vanish.
-let PENDING_EDITS = JSON.parse(localStorage.getItem('cv_pending_edits') || '{}');
+let PENDING_EDITS = _initPendingVar('edits', 'cv_pending_edits', {});
 // Track retry attempts per pending edit (key -> count), cleared on success
-let PENDING_EDIT_RETRIES = JSON.parse(localStorage.getItem('cv_pending_edit_retries') || '{}');
+let PENDING_EDIT_RETRIES = _initPendingVar('editRetries', 'cv_pending_edit_retries', {});
 const MAX_EDIT_RETRIES = 5;
 // Local deletes that haven't been confirmed in Google Sheets yet
-let PENDING_DELETES = JSON.parse(localStorage.getItem('cv_pending_deletes') || '[]');
+let PENDING_DELETES = _initPendingVar('deletes', 'cv_pending_deletes', []);
 // Value history tracking — snapshots of collection value over time
 let VALUE_HISTORY = JSON.parse(localStorage.getItem('cv_value_history') || '[]');
 function saveValueHistory() { localStorage.setItem('cv_value_history', JSON.stringify(VALUE_HISTORY)); }
 
 // Pending snapshots — queued for retry when Supabase is unreachable
-let PENDING_SNAPSHOTS = JSON.parse(localStorage.getItem('cv_pending_snapshots') || '[]');
-function savePendingSnapshots() { localStorage.setItem('cv_pending_snapshots', JSON.stringify(PENDING_SNAPSHOTS)); }
+let PENDING_SNAPSHOTS = _initPendingVar('snapshots', 'cv_pending_snapshots', []);
+function savePendingSnapshots() { _savePendingState(); }
 
 // Record a value snapshot (called on each dashboard render)
 function recordValueSnapshot() {
@@ -1541,6 +1744,9 @@ function recordValueSnapshot() {
   }
 }
 
+// #endregion [PENDING-STATE]
+
+// #region [SNAPSHOTS]
 // ── SNAPSHOT SYNC (Supabase) ────────────────────────────────────────
 // Persists snapshots cross-device so trend charts (Daily/Monthly/Yearly)
 // show consistent history regardless of which device you open the app from.
@@ -1660,6 +1866,9 @@ async function loadSnapshotsFromSupabase() {
   }
 }
 
+// #endregion [SNAPSHOTS]
+
+// #region [LABEL-QUEUE]
 // ═════════════════════════════════════════════════════════════════════
 //  LABEL QUEUE SYNC — Cross-device sync of the "labels to print" set.
 //  Mirror of the snapshot-sync pattern: each toggle pushes/removes one row
@@ -1667,10 +1876,9 @@ async function loadSnapshotsFromSupabase() {
 //  we load the remote queue and merge with local-only entries.
 // ═════════════════════════════════════════════════════════════════════
 const SB_LABELS_TABLE = 'label_queue';
-let PENDING_LABEL_OPS = JSON.parse(localStorage.getItem('cv_pending_label_ops') || '[]');
-
+let PENDING_LABEL_OPS = _initPendingVar('labelOps', 'cv_pending_label_ops', []);
 function savePendingLabelOps() {
-  localStorage.setItem('cv_pending_label_ops', JSON.stringify(PENDING_LABEL_OPS));
+  _savePendingState();
 }
 
 async function pushLabelToSupabase(sheet, id) {
@@ -1788,9 +1996,9 @@ async function loadLabelQueueFromSupabase() {
   }
 }
 
-function savePendingDeletes() { localStorage.setItem('cv_pending_deletes', JSON.stringify(PENDING_DELETES)); }
-
-function savePendingEdits() { localStorage.setItem('cv_pending_edits', JSON.stringify(PENDING_EDITS)); }
+function savePendingDeletes()     { _savePendingState(); }
+function savePendingEdits()       { _savePendingState(); }
+function savePendingEditRetries() { _savePendingState(); }
 function applyPendingEditsToD() {
   // Re-apply unsynced edits on top of D (called after loadFromSheets)
   let applied = 0;
@@ -1943,8 +2151,8 @@ function cn(id) {
 }
 
 // NEW_RECORDS: records added through the Add Record form (pending sync)
-let NEW_RECORDS = JSON.parse(localStorage.getItem('cv_new_records') || '[]');
-function saveNR() { localStorage.setItem('cv_new_records', JSON.stringify(NEW_RECORDS)); }
+let NEW_RECORDS = _initPendingVar('newRecords', 'cv_new_records', []);
+function saveNR() { _savePendingState(); }
 
 // MANUAL_LABELS: records the user has flagged for label reprint
 let MANUAL_LABELS = new Set(JSON.parse(localStorage.getItem('cv_manual_labels') || '[]'));
@@ -2380,25 +2588,25 @@ function renderTrendChart() {
     statsDiv.innerHTML = `
       <div>
         <div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--dim);margin-bottom:4px">Period Change</div>
-        <div style="font-size:20px;font-family:Cormorant Garamond,serif;color:${isPositive ? 'var(--green)' : 'var(--red)'}">
+        <div style="font-size:20px;font-family:var(--font-display,'Cormorant Garamond',serif);color:${isPositive ? 'var(--green)' : 'var(--red)'}">
           ${isPositive ? '+' : ''}${fmt$(change)}
         </div>
       </div>
       <div>
         <div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--dim);margin-bottom:4px">% Change</div>
-        <div style="font-size:20px;font-family:Cormorant Garamond,serif;color:${isPositive ? 'var(--green)' : 'var(--red)'}">
+        <div style="font-size:20px;font-family:var(--font-display,'Cormorant Garamond',serif);color:${isPositive ? 'var(--green)' : 'var(--red)'}">
           ${isPositive ? '+' : ''}${changePct.toFixed(2)}%
         </div>
       </div>
       <div>
         <div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--dim);margin-bottom:4px">Start Value</div>
-        <div style="font-size:20px;font-family:Cormorant Garamond,serif;color:var(--text)">
+        <div style="font-size:20px;font-family:var(--font-display,'Cormorant Garamond',serif);color:var(--text)">
           ${fmt$(earliest)}
         </div>
       </div>
       <div>
         <div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--dim);margin-bottom:4px">Current Value</div>
-        <div style="font-size:20px;font-family:Cormorant Garamond,serif;color:var(--gold)">
+        <div style="font-size:20px;font-family:var(--font-display,'Cormorant Garamond',serif);color:var(--gold)">
           ${fmt$(latest)}
         </div>
       </div>
@@ -2593,6 +2801,9 @@ function fmtOz(n){
 }
 function e(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
+// #endregion [LABEL-QUEUE]
+
+// #region [NAV]
 // ── NAVIGATION ────────────────────────────────────────────────────────────────
 function nav(v){
   ST.view=v; ST.page=1; ST.selItem=null;
@@ -2657,6 +2868,9 @@ function nav(v){
   }, { passive: true });
 })();
 
+// #endregion [NAV]
+
+// #region [DASHBOARD]
 // ── DASHBOARD ─────────────────────────────────────────────────────────────────
 
 // ── Unified totals computation (used by sidebar + dashboard) ──────────────────
@@ -2897,7 +3111,7 @@ function renderDash(){
   <!-- SILVER -->
   <div style="background:var(--bg3);border:1px solid var(--border);border-radius:7px;padding:16px">
     <div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--dim);margin-bottom:4px">Silver (XAG)</div>
-    <div style="font-size:22px;font-family:Cormorant Garamond,serif;color:var(--text);margin-bottom:12px">${SPOTS?fmt$(SPOTS.silver)+'<span style="font-size:12px;color:var(--dim)">/oz</span>':'<span style="color:var(--dim);font-size:14px">loading…</span>'}</div>
+    <div style="font-size:22px;font-family:var(--font-display,\'Cormorant Garamond\',serif);color:var(--text);margin-bottom:12px">${SPOTS?fmt$(SPOTS.silver)+'<span style="font-size:12px;color:var(--dim)">/oz</span>':'<span style="color:var(--dim);font-size:14px">loading…</span>'}</div>
     <div style="font-size:11px;color:var(--muted);line-height:2;border-top:1px solid var(--border);padding-top:10px">
       <div style="display:flex;justify-content:space-between"><span>Bullion</span><span class="mono">${fmtOz(T.silverBulOz)}</span></div>
       <div style="display:flex;justify-content:space-between"><span>Graded coins</span><span class="mono">${fmtOz(T.silverGradOz)}</span></div>
@@ -2910,7 +3124,7 @@ function renderDash(){
   <!-- GOLD -->
   <div style="background:var(--bg3);border:1px solid var(--border);border-radius:7px;padding:16px">
     <div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--dim);margin-bottom:4px">Gold (XAU)</div>
-    <div style="font-size:22px;font-family:Cormorant Garamond,serif;color:var(--text);margin-bottom:12px">${SPOTS?fmt$(SPOTS.gold)+'<span style="font-size:12px;color:var(--dim)">/oz</span>':'<span style="color:var(--dim);font-size:14px">loading…</span>'}</div>
+    <div style="font-size:22px;font-family:var(--font-display,\'Cormorant Garamond\',serif);color:var(--text);margin-bottom:12px">${SPOTS?fmt$(SPOTS.gold)+'<span style="font-size:12px;color:var(--dim)">/oz</span>':'<span style="color:var(--dim);font-size:14px">loading…</span>'}</div>
     <div style="font-size:11px;color:var(--muted);line-height:2;border-top:1px solid var(--border);padding-top:10px">
       <div style="display:flex;justify-content:space-between"><span>All 24k (186 items)</span><span class="mono">${fmtOz(T.goldOzPure)}</span></div>
       <div style="display:flex;justify-content:space-between;border-top:1px solid var(--border);margin-top:4px;padding-top:4px;color:var(--text)"><span><strong>Total</strong></span><span class="mono"><strong>${fmtOz(T.goldOzPure)}</strong></span></div>
@@ -2921,7 +3135,7 @@ function renderDash(){
   <!-- PLATINUM -->
   <div style="background:var(--bg3);border:1px solid var(--border);border-radius:7px;padding:16px">
     <div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--dim);margin-bottom:4px">Platinum (XPT)</div>
-    <div style="font-size:22px;font-family:Cormorant Garamond,serif;color:var(--text);margin-bottom:12px">${SPOTS?fmt$(SPOTS.platinum)+'<span style="font-size:12px;color:var(--dim)">/oz</span>':'<span style="color:var(--dim);font-size:14px">loading…</span>'}</div>
+    <div style="font-size:22px;font-family:var(--font-display,\'Cormorant Garamond\',serif);color:var(--text);margin-bottom:12px">${SPOTS?fmt$(SPOTS.platinum)+'<span style="font-size:12px;color:var(--dim)">/oz</span>':'<span style="color:var(--dim);font-size:14px">loading…</span>'}</div>
     <div style="font-size:11px;color:var(--muted);line-height:2;border-top:1px solid var(--border);padding-top:10px">
       <div style="display:flex;justify-content:space-between"><span>3 items</span><span class="mono">${fmtOz(T.platOz)}</span></div>
       <div style="display:flex;justify-content:space-between;border-top:1px solid var(--border);margin-top:4px;padding-top:4px;color:var(--text)"><span><strong>Total</strong></span><span class="mono"><strong>${fmtOz(T.platOz)}</strong></span></div>
@@ -2932,7 +3146,7 @@ function renderDash(){
   <!-- PALLADIUM -->
   <div style="background:var(--bg3);border:1px solid var(--border);border-radius:7px;padding:16px">
     <div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--dim);margin-bottom:4px">Palladium (XPD)</div>
-    <div style="font-size:22px;font-family:Cormorant Garamond,serif;color:var(--text);margin-bottom:12px">${SPOTS?fmt$(SPOTS.palladium)+'<span style="font-size:12px;color:var(--dim)">/oz</span>':'<span style="color:var(--dim);font-size:14px">loading…</span>'}</div>
+    <div style="font-size:22px;font-family:var(--font-display,\'Cormorant Garamond\',serif);color:var(--text);margin-bottom:12px">${SPOTS?fmt$(SPOTS.palladium)+'<span style="font-size:12px;color:var(--dim)">/oz</span>':'<span style="color:var(--dim);font-size:14px">loading…</span>'}</div>
     <div style="font-size:11px;color:var(--muted);line-height:2;border-top:1px solid var(--border);padding-top:10px">
       <div style="display:flex;justify-content:space-between"><span>1 item</span><span class="mono">${fmtOz(T.pallOz)}</span></div>
       <div style="display:flex;justify-content:space-between;border-top:1px solid var(--border);margin-top:4px;padding-top:4px;color:var(--text)"><span><strong>Total</strong></span><span class="mono"><strong>${fmtOz(T.pallOz)}</strong></span></div>
@@ -2943,7 +3157,7 @@ function renderDash(){
   <!-- COPPER -->
   <div style="background:var(--bg3);border:1px solid var(--border);border-radius:7px;padding:16px">
     <div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--dim);margin-bottom:4px">Copper (XCU)</div>
-    <div style="font-size:22px;font-family:Cormorant Garamond,serif;color:var(--text);margin-bottom:12px">${SPOTS&&SPOTS.copper?fmt$(SPOTS.copper)+'<span style="font-size:12px;color:var(--dim)">/lb</span>':'<span style="color:var(--dim);font-size:14px">loading…</span>'}</div>
+    <div style="font-size:22px;font-family:var(--font-display,\'Cormorant Garamond\',serif);color:var(--text);margin-bottom:12px">${SPOTS&&SPOTS.copper?fmt$(SPOTS.copper)+'<span style="font-size:12px;color:var(--dim)">/lb</span>':'<span style="color:var(--dim);font-size:14px">loading…</span>'}</div>
     <div style="font-size:11px;color:var(--muted);line-height:2;border-top:1px solid var(--border);padding-top:10px">
       <div style="display:flex;justify-content:space-between"><span>10 items</span><span class="mono">${T.copperLb.toFixed(3)} lb</span></div>
       <div style="display:flex;justify-content:space-between;border-top:1px solid var(--border);margin-top:4px;padding-top:4px;color:var(--text)"><span><strong>Total</strong></span><span class="mono"><strong>${T.copperLb.toFixed(3)} lb</strong></span></div>
@@ -3150,6 +3364,9 @@ function renderDashCharts(gs,totVal){
   }
 }
 
+// #endregion [DASHBOARD]
+
+// #region [INVENTORY]
 // ── INVENTORY ─────────────────────────────────────────────────────────────────
 function renderInv(){
   let items=[...ALL_ITEMS];
@@ -3270,9 +3487,9 @@ function renderInv(){
             <div style="display:flex;gap:3px;justify-content:center;align-items:center">
               <button onclick="toggleLabelQueue('${item.sheet}','${item.id}',event)" title="${inQ?'Remove from label queue':'Add to label print queue'}" style="background:${inQ?'var(--gold2)':'transparent'};border:1px solid ${inQ?'var(--gold)':'var(--border)'};color:${inQ?'var(--gold)':'var(--dim)'};border-radius:4px;width:26px;height:24px;cursor:pointer;font-size:13px;line-height:1;padding:0">${inQ?'\u2713':'+'}</button>
               ${(item.raw.type||item.raw.series||['gradedUS','rawUS'].includes(item.sheet))?`<button onclick="event.stopPropagation();lookupRecord(ALL_ITEMS[${ALL_ITEMS.indexOf(item)}])" title="Lookup in US Coin Reference" class="lookup-btn" id="lookup-btn-${cn(item.id)}" style="padding:2px 5px;font-size:10px">🔍</button>`:''}
-              ${['gradedUS','gradedSilver','gradedForeign'].includes(item.sheet)&&isPCGSGraded(item.raw.gradingAuth)?`<button onclick="event.stopPropagation();lookupPCGS(ALL_ITEMS[${ALL_ITEMS.indexOf(item)}])" title="Look up on PCGS CoinFacts" class="lookup-btn" id="pcgs-btn-${cn(item.id)}" style="padding:2px 5px;font-size:10px;background:rgba(212,175,55,.12);border-color:rgba(212,175,55,.45);color:#d4af37">🏆</button>`:''}
-              ${['gradedUS','gradedSilver','gradedForeign'].includes(item.sheet)&&/^icg$/i.test(String(item.raw.gradingAuth||'').trim())?`<button onclick="event.stopPropagation();lookupICG(ALL_ITEMS[${ALL_ITEMS.indexOf(item)}])" title="Look up on ICG Verification" class="lookup-btn" id="icg-btn-${cn(item.id)}" style="padding:2px 5px;font-size:10px;background:rgba(74,144,226,.12);border-color:rgba(74,144,226,.45);color:#6ab0ff">🔵</button>`:''}
-              ${['gradedUS','rawUS','gradedSilver','rawSilver'].includes(item.sheet)?`<button onclick="event.stopPropagation();lookupNGC(ALL_ITEMS[${ALL_ITEMS.indexOf(item)}])" title="NGC Price Guide &amp; Cert Lookup" class="lookup-btn" id="ngc-btn-${cn(item.id)}" style="padding:2px 5px;font-size:10px;background:rgba(0,154,68,.1);border-color:rgba(0,154,68,.35);color:#4caf7d">📗</button>`:''}
+              ${['gradedUS','gradedSilver','gradedForeign'].includes(item.sheet)&&isPCGSGraded(item.raw.gradingAuth)?`<button onclick="event.stopPropagation();lookupPCGS(ALL_ITEMS[${ALL_ITEMS.indexOf(item)}])" title="Look up on PCGS CoinFacts" class="lookup-btn" id="pcgs-btn-${cn(item.id)}" style="padding:2px 5px;font-size:10px;background:var(--accent-pcgs-bg);border-color:var(--accent-pcgs-bd);color:var(--accent-pcgs)">🏆</button>`:''}
+              ${['gradedUS','gradedSilver','gradedForeign'].includes(item.sheet)&&/^icg$/i.test(String(item.raw.gradingAuth||'').trim())?`<button onclick="event.stopPropagation();lookupICG(ALL_ITEMS[${ALL_ITEMS.indexOf(item)}])" title="Look up on ICG Verification" class="lookup-btn" id="icg-btn-${cn(item.id)}" style="padding:2px 5px;font-size:10px;background:var(--accent-icg-bg);border-color:var(--accent-icg-bd);color:var(--accent-icg)">🔵</button>`:''}
+              ${['gradedUS','rawUS','gradedSilver','rawSilver'].includes(item.sheet)?`<button onclick="event.stopPropagation();lookupNGC(ALL_ITEMS[${ALL_ITEMS.indexOf(item)}])" title="NGC Price Guide &amp; Cert Lookup" class="lookup-btn" id="ngc-btn-${cn(item.id)}" style="padding:2px 5px;font-size:10px;background:rgba(0,154,68,.1);border-color:var(--accent-ngc-bd);color:var(--accent-ngc)">📗</button>`:''}
 
             </div>
           </td>
@@ -3309,6 +3526,9 @@ function setSort(col){
   renderInv();
 }
 
+// #endregion [INVENTORY]
+
+// #region [DETAIL-PANEL]
 // ── DETAIL PANEL ──────────────────────────────────────────────────────────────
 function showDetail(item){
   ST.selItem=item;
@@ -3443,6 +3663,10 @@ function showDetail(item){
     ${item.cost>0&&item.value>0?`<div class="dp-row"><span class="dp-label">Gain / Loss</span><span class="dp-value ${gain>=0?'grn':'red'}">${gain>=0?'+':''}${fmt$(gain)}</span></div>`:''}
     ${displayWeight?`<div class="dp-row"><span class="dp-label">Weight</span><span class="dp-value">${e(displayWeight)}</span></div>`:''}
     ${liveMelt>0?`<div class="dp-row"><span class="dp-label">Live Melt Value</span><span class="dp-value mono" style="color:var(--gold)" title="${e(meltLabel)}">${fmt$(liveMelt)}</span></div>`:''}
+    ${(function(){
+      const mod = _fmtModified(item.raw);
+      return mod ? `<div class="dp-row"><span class="dp-label">Last Modified</span><span class="dp-value" style="color:var(--dim);font-size:11px">${e(mod)}</span></div>` : '';
+    })()}
     <div class="dp-section">All Fields</div>
     ${rows}
     ${imagesHtml}
@@ -3481,7 +3705,7 @@ function showDetail(item){
       nBtn.id = 'numista-btn-' + cn(item.id);
       nBtn.textContent = '🌐 Numista';
       nBtn.title = 'Search Numista catalogue for this coin and fill missing fields';
-      nBtn.style.cssText = 'background:rgba(74,144,226,.15);border-color:rgba(74,144,226,.4);color:#6ab0ff';
+      nBtn.style.cssText = 'background:rgba(74,144,226,.15);border-color:var(--accent-icg-bd);color:var(--accent-icg)';
       nBtn.onclick = () => lookupNumista(item);
       actions.appendChild(nBtn);
     }
@@ -3493,7 +3717,7 @@ function showDetail(item){
       ngcBtn.id = 'ngc-btn-' + cn(item.id);
       ngcBtn.textContent = '📗 NGC';
       ngcBtn.title = 'NGC Price Guide & Cert Lookup — pictures and pricing for US coins';
-      ngcBtn.style.cssText = 'background:rgba(0,154,68,.12);border-color:rgba(0,154,68,.4);color:#4caf7d';
+      ngcBtn.style.cssText = 'background:var(--accent-ngc-bg);border-color:var(--accent-ngc-bd);color:var(--accent-ngc)';
       ngcBtn.onclick = () => lookupNGC(item);
       actions.appendChild(ngcBtn);
     }
@@ -3506,7 +3730,7 @@ function showDetail(item){
       pcgsBtn.id = 'pcgs-btn-' + cn(item.id);
       pcgsBtn.textContent = '🏆 PCGS';
       pcgsBtn.title = 'Look up on PCGS CoinFacts' + (pcgsIs ? '' : ' (Grading Auth: ' + (item.raw.gradingAuth||'not set') + ')');
-      pcgsBtn.style.cssText = 'background:rgba(212,175,55,.12);border-color:rgba(212,175,55,.45);color:#d4af37';
+      pcgsBtn.style.cssText = 'background:var(--accent-pcgs-bg);border-color:var(--accent-pcgs-bd);color:var(--accent-pcgs)';
       pcgsBtn.onclick = () => lookupPCGS(item);
       actions.appendChild(pcgsBtn);
     }
@@ -3517,7 +3741,7 @@ function showDetail(item){
       icgBtn.id = 'icg-btn-' + cn(item.id);
       icgBtn.textContent = '🔵 ICG';
       icgBtn.title = 'Look up on ICG Verification';
-      icgBtn.style.cssText = 'background:rgba(74,144,226,.12);border-color:rgba(74,144,226,.45);color:#6ab0ff';
+      icgBtn.style.cssText = 'background:var(--accent-icg-bg);border-color:var(--accent-icg-bd);color:var(--accent-icg)';
       icgBtn.onclick = () => lookupICG(item);
       actions.appendChild(icgBtn);
     }
@@ -3583,6 +3807,46 @@ async function deleteRecordFromSheets(sheetKey, id) {
   }
 }
 
+// #endregion [DETAIL-PANEL]
+
+// #region [TPG-APPLY]
+// ── SHARED TPG LOOKUP HELPER ─────────────────────────────────────────────────
+// Single source of truth for "apply fields from a TPG lookup to a record."
+// All four TPG functions (ICG/NGC/PCGS/Numista) used to be ~25-line near-duplicates
+// that drifted in details (one used cvToast, others used alert, one checked Supabase
+// AND Sheets, others only Sheets). Now they're 1-line wrappers around this.
+async function _tpgApply(item, updates, tpgLabel) {
+  const arr = D[item.sheet];
+  if (!arr) return;
+  const idx = arr.findIndex(r => String(r.id) === String(item.id));
+  if (idx < 0) return;
+  Object.assign(arr[idx], updates);
+  Object.assign(item.raw, updates);
+  _touchRecord(arr[idx]);
+  // item.raw is usually the same reference as arr[idx], but guard against the rare
+  // case where it isn't (the helper is a no-op if it's the same object).
+  if (item.raw !== arr[idx]) _touchRecord(item.raw);
+  buildFlat();
+  if (ST.view === 'inv') renderInv();
+  if (ST.selItem === item) showDetail(item);
+  const n = Object.keys(updates).length;
+  const fieldStr = n + ' field' + (n !== 1 ? 's' : '') + ' from ' + tpgLabel;
+  // Try to sync — prefer Supabase, fall back to Sheets, accept either being present
+  if (GSHEETS_URL || (SB_URL && SB_KEY)) {
+    try {
+      await updateRecordInSheets(item.sheet, cn(item.id), updates);
+      cvToast('#' + cn(item.id) + ' — ' + fieldStr + ' saved', 'ok');
+    } catch (ex) {
+      cvToast('Saved locally — sync failed: ' + ex.message, 'warn');
+    }
+  } else {
+    cvToast('#' + cn(item.id) + ' — ' + fieldStr + ' saved locally', 'ok');
+  }
+}
+
+// #endregion [TPG-APPLY]
+
+// #region [TPG-ICG]
 // ── ICG VERIFICATION LOOKUP ──────────────────────────────────────────────────
 // ICG blocks all server-side requests (403). Workflow: open the ICG verification
 // page in a new tab with the cert number, then enter what you see in the form.
@@ -3646,7 +3910,7 @@ function showICGModal(item) {
     <div class="ref-modal-box" style="width:min(680px,96vw);max-height:90vh">
       <div class="ref-modal-head">
         <div>
-          <div style="font-family:'Cormorant Garamond',serif;font-size:17px;font-weight:600">ICG Verification — #${cn(item.id)}</div>
+          <div style="font-family:var(--font-display,'Cormorant Garamond',serif);font-size:17px;font-weight:600">ICG Verification — #${cn(item.id)}</div>
           <div style="font-size:11px;color:var(--muted);margin-top:2px">${e(raw.type||raw.category||'')}${grade?' · '+e(grade):''}</div>
         </div>
         <button class="rb" onclick="document.getElementById('icg-modal').remove()" style="font-size:18px">✕</button>
@@ -3657,9 +3921,9 @@ function showICGModal(item) {
         <div style="background:rgba(30,144,255,.06);border:1px solid rgba(30,144,255,.2);border-radius:6px;padding:12px 14px;margin-bottom:14px">
           <div style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin-bottom:6px">Step 1 — Open ICG Verification</div>
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-            <code style="font-size:12px;color:#4d9fff;flex:1">${e(serial||'(no serial on record)')}</code>
+            <code style="font-size:12px;color:var(--accent-info);flex:1">${e(serial||'(no serial on record)')}</code>
             <a href="${e(verUrl)}" target="_blank" rel="noopener">
-              <button class="bp" style="background:rgba(30,144,255,.15);border-color:rgba(30,144,255,.4);color:#4d9fff;height:30px;font-size:12px">
+              <button class="bp" style="background:rgba(30,144,255,.15);border-color:var(--accent-info-bd);color:var(--accent-info);height:30px;font-size:12px">
                 Open ICG Lookup ↗
               </button>
             </a>
@@ -3714,42 +3978,24 @@ function showICGModal(item) {
           </div>
         </div>
         <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);cursor:pointer">
-          <input type="checkbox" id="icg-use-as-value" style="accent-color:#4d9fff">
+          <input type="checkbox" id="icg-use-as-value" style="accent-color:var(--accent-info)">
           Also update record Value with Estimated Price
         </label>
       </div>
       <div style="padding:12px 20px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end">
         <button class="bg" onclick="document.getElementById('icg-modal').remove()">Cancel</button>
-        <button class="bp" style="background:rgba(30,144,255,.15);border-color:rgba(30,144,255,.4);color:#4d9fff" onclick="window._icg_apply()">Save to Record</button>
+        <button class="bp" style="background:rgba(30,144,255,.15);border-color:var(--accent-info-bd);color:var(--accent-info)" onclick="window._icg_apply()">Save to Record</button>
       </div>
     </div>`;
 }
 
 async function _icgApply(item, updates) {
-  const arr = D[item.sheet];
-  if (!arr) return;
-  const idx = arr.findIndex(r => String(r.id) === String(item.id));
-  if (idx < 0) return;
-  const usePrice = document.getElementById('icg-use-as-value');
-  if (usePrice && usePrice.checked && updates.value) updates.value = updates.value;
-  Object.assign(arr[idx], updates);
-  Object.assign(item.raw, updates);
-  buildFlat();
-  if (ST.view === 'inv') renderInv();
-  if (ST.selItem === item) showDetail(item);
-  const n = Object.keys(updates).length;
-  if (GSHEETS_URL || (SB_URL && SB_KEY)) {
-    try {
-      await updateRecordInSheets(item.sheet, cn(item.id), updates);
-      alert('✅ #' + cn(item.id) + ' — ' + n + ' ICG field' + (n!==1?'s':'') + ' saved ✓');
-    } catch(ex) {
-      cvToast('Updated locally — sync failed: ' + ex.message, 'warn');
-    }
-  } else {
-    alert('✅ #' + cn(item.id) + ' — ' + n + ' ICG field' + (n!==1?'s':'') + ' saved.');
-  }
+  return _tpgApply(item, updates, 'ICG');
 }
 
+// #endregion [TPG-ICG]
+
+// #region [TPG-NGC]
 // ── NGC PRICE GUIDE & CERT LOOKUP ────────────────────────────────────────────
 // NGC blocks all server-side requests (403 from GAS/UrlFetchApp) so we cannot
 // proxy through the Apps Script. Instead we:
@@ -3830,9 +4076,9 @@ function showNGCModal(item) {
     <div style="background:rgba(0,154,68,.06);border:1px solid rgba(0,154,68,.2);border-radius:6px;padding:10px 14px;margin-bottom:12px">
       <div style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin-bottom:6px">NGC Cert Lookup</div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-        <code style="font-size:12px;color:#4caf7d;flex:1">${e(raw.serial||'—')}</code>
+        <code style="font-size:12px;color:var(--accent-ngc);flex:1">${e(raw.serial||'—')}</code>
         <a href="${e(certUrl)}" target="_blank" rel="noopener">
-          <button class="bp" style="background:rgba(0,154,68,.15);border-color:rgba(0,154,68,.4);color:#4caf7d;height:30px;font-size:12px">
+          <button class="bp" style="background:rgba(0,154,68,.15);border-color:var(--accent-ngc-bd);color:var(--accent-ngc);height:30px;font-size:12px">
             Open Cert Page ↗
           </button>
         </a>
@@ -3844,7 +4090,7 @@ function showNGCModal(item) {
     <div class="ref-modal-box" style="width:min(680px,96vw);max-height:90vh">
       <div class="ref-modal-head">
         <div>
-          <div style="font-family:'Cormorant Garamond',serif;font-size:17px;font-weight:600">NGC Price Guide — #${cn(item.id)}</div>
+          <div style="font-family:var(--font-display,'Cormorant Garamond',serif);font-size:17px;font-weight:600">NGC Price Guide — #${cn(item.id)}</div>
           <div style="font-size:11px;color:var(--muted);margin-top:2px">${e(type)}${year?' · '+e(year):''}${grade?' · '+e(grade):''}</div>
         </div>
         <button class="rb" onclick="document.getElementById('ngc-modal').remove()" style="font-size:18px">✕</button>
@@ -3858,7 +4104,7 @@ function showNGCModal(item) {
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
             <span style="font-size:12px;color:var(--muted);flex:1">Find grades, bid/ask prices, and coin images</span>
             <a href="${e(pgUrl)}" target="_blank" rel="noopener">
-              <button class="bp" style="background:rgba(0,154,68,.15);border-color:rgba(0,154,68,.4);color:#4caf7d;height:30px;font-size:12px">
+              <button class="bp" style="background:rgba(0,154,68,.15);border-color:var(--accent-ngc-bd);color:var(--accent-ngc);height:30px;font-size:12px">
                 Open Price Guide ↗
               </button>
             </a>
@@ -3908,41 +4154,25 @@ function showNGCModal(item) {
             style="width:100%;box-sizing:border-box;padding:7px 9px;background:var(--bg4);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:13px">
         </div>
         <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);cursor:pointer;margin-bottom:4px">
-          <input type="checkbox" id="ngc-use-as-value" style="accent-color:#4caf7d">
+          <input type="checkbox" id="ngc-use-as-value" style="accent-color:var(--accent-ngc)">
           Also update record Value with the NGC Bid Price
         </label>
       </div>
       <div style="padding:12px 20px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end">
         <button class="bg" onclick="document.getElementById('ngc-modal').remove()">Cancel</button>
-        <button class="bp" style="background:rgba(0,154,68,.15);border-color:rgba(0,154,68,.4);color:#4caf7d" onclick="window._ngc_apply()">Save to Record</button>
+        <button class="bp" style="background:rgba(0,154,68,.15);border-color:var(--accent-ngc-bd);color:var(--accent-ngc)" onclick="window._ngc_apply()">Save to Record</button>
       </div>
     </div>`;
 }
 
 /** Apply NGC data to the record and sync to Sheets. */
 async function _ngcApply(item, updates) {
-  const arr = D[item.sheet];
-  if (!arr) return;
-  const idx = arr.findIndex(r => String(r.id) === String(item.id));
-  if (idx < 0) return;
-  Object.assign(arr[idx], updates);
-  Object.assign(item.raw, updates);
-  buildFlat();
-  if (ST.view === 'inv') renderInv();
-  if (ST.selItem === item) showDetail(item);
-  const n = Object.keys(updates).length;
-  if (GSHEETS_URL) {
-    try {
-      await updateRecordInSheets(item.sheet, cn(item.id), updates);
-      alert('✅ #' + cn(item.id) + ' — ' + n + ' NGC field' + (n!==1?'s':'') + ' saved ✓');
-    } catch(ex) {
-      cvToast('Saved to Supabase — Sheets backup failed: ' + ex.message, 'warn');
-    }
-  } else {
-    alert('✅ #' + cn(item.id) + ' — ' + n + ' NGC field' + (n!==1?'s':'') + ' saved.');
-  }
+  return _tpgApply(item, updates, 'NGC');
 }
 
+// #endregion [TPG-NGC]
+
+// #region [SUPABASE]
 // ── SUPABASE DATA LAYER ───────────────────────────────────────────────────────
 // Primary database — replaces Google Sheets for all CRUD operations.
 // Uses Supabase PostgREST (auto-generated REST API). No SDK needed.
@@ -3970,6 +4200,7 @@ async function sbFetch(path, opts = {}) {
  *  Paginates in batches of 1000 to get past Supabase's default row limit. */
 async function loadFromSupabase() {
   if (!SB_URL || !SB_KEY) return false;
+  _syncLockAcquire('supabase-pull');
   updateSyncBanner('syncing', 'Loading from Supabase…');
   try {
     const PAGE = 1000;
@@ -4080,6 +4311,8 @@ async function loadFromSupabase() {
     updateSyncBanner('error', hint);
     console.error('[Supabase] load error:', err);
     return false;
+  } finally {
+    _syncLockRelease('supabase-pull');
   }
 }
 
@@ -4184,6 +4417,9 @@ async function loadReferenceFromSupabase() {
   } catch { return null; }
 }
 
+// #endregion [SUPABASE]
+
+// #region [TPG-PCGS]
 // ── PCGS API ──────────────────────────────────────────────────────────────────
 // PCGS blocks direct browser requests (IP allowlist). Calls are routed through
 // the Google Apps Script proxy (action=pcgsLookup). Requires GAS to be deployed.
@@ -4382,7 +4618,7 @@ function _pcgsFieldRows(data, raw) {
     ${imgUrl?`<img src="${e(imgUrl)}" style="height:72px;border-radius:4px;background:#111;flex-shrink:0" onerror="this.style.display='none'">`:`<div style="width:52px;height:52px;background:#1a1a1a;border-radius:4px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:22px">🏆</div>`}
     <div>
       <div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--dim)">PCGS CoinFacts</div>
-      <div style="color:#d4af37;font-family:'Cormorant Garamond',serif;font-size:15px;margin-top:2px">${e(coinName)}</div>
+      <div style="color:var(--accent-pcgs);font-family:var(--font-display,'Cormorant Garamond',serif);font-size:15px;margin-top:2px">${e(coinName)}</div>
       <div style="font-size:12px;color:var(--muted);margin-top:3px">${[gradeStr,popStr].filter(Boolean).join(' · ')}</div>
     </div>
   </div>`;
@@ -4392,20 +4628,20 @@ function _pcgsFieldRows(data, raw) {
   }
 
   html += `<div style="display:grid;grid-template-columns:20px 1fr 1fr 1fr;gap:4px 10px;padding:4px 8px 6px;font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--dim);border-bottom:1px solid var(--border);margin-bottom:2px">
-    <span></span><span>Field</span><span>Current on Record</span><span style="color:#d4af37">PCGS Value</span>
+    <span></span><span>Field</span><span>Current on Record</span><span style="color:var(--accent-pcgs)">PCGS Value</span>
   </div>`;
   for (const f of fields) {
     const uid = 'pf-'+f.field, vStr = String(f.refVal).replace(/"/g,'&quot;');
     html += `<div style="display:grid;grid-template-columns:20px 1fr 1fr 1fr;gap:4px 10px;padding:7px 8px;border-bottom:1px solid rgba(255,255,255,.03);align-items:center;${f.isEmpty?'':'opacity:.75'}">
-      <input type="checkbox" id="${uid}" data-pfield="${e(f.field)}" data-pvalue="${vStr}" ${f.isEmpty?'checked':''} style="cursor:pointer;width:14px;height:14px;accent-color:#d4af37">
+      <input type="checkbox" id="${uid}" data-pfield="${e(f.field)}" data-pvalue="${vStr}" ${f.isEmpty?'checked':''} style="cursor:pointer;width:14px;height:14px;accent-color:var(--accent-pcgs)">
       <label for="${uid}" style="font-size:12px;cursor:pointer;color:var(--text)">${e(f.label)}</label>
       <span style="font-size:12px;color:var(--dim)">${e(f.curVal||'—')}</span>
-      <span style="font-size:12px;color:#d4af37;font-weight:500">${e(f.refVal)}</span>
+      <span style="font-size:12px;color:var(--accent-pcgs);font-weight:500">${e(f.refVal)}</span>
     </div>`;
   }
   html += `<div style="padding:8px 8px 0;border-top:1px solid var(--border);margin-top:6px">
     <label style="cursor:pointer;display:flex;align-items:center;gap:7px;font-size:12px;color:var(--muted)">
-      <input type="checkbox" style="cursor:pointer;accent-color:#d4af37"
+      <input type="checkbox" style="cursor:pointer;accent-color:var(--accent-pcgs)"
         onchange="document.querySelectorAll('#pcgs-modal input[data-pfield]').forEach(cb=>cb.checked=this.checked)">
       Select / deselect all
     </label>
@@ -4517,7 +4753,7 @@ function showPCGSModal(item, data, errType, errMsg) {
       </div>
       ${manualForm}`;
       footer = `<button class="bg" onclick="document.getElementById('pcgs-modal').remove()">Cancel</button>
-        <button id="pm-btn" class="bp" style="background:rgba(212,175,55,.15);border-color:rgba(212,175,55,.4);color:#d4af37" onclick="window._pcgs_manualLookup()">Look Up</button>`;
+        <button id="pm-btn" class="bp" style="background:rgba(212,175,55,.15);border-color:rgba(212,175,55,.4);color:var(--accent-pcgs)" onclick="window._pcgs_manualLookup()">Look Up</button>`;
 
     } else if (errType === 'NO_GAS') {
       body = `<div style="background:rgba(192,80,74,.08);border:1px solid rgba(192,80,74,.25);border-radius:6px;padding:14px 16px;font-size:13px;color:var(--text);line-height:1.8">
@@ -4537,7 +4773,7 @@ function showPCGSModal(item, data, errType, errMsg) {
       </div>
       ${manualForm}`;
       footer = `<button class="bg" onclick="document.getElementById('pcgs-modal').remove()">Cancel</button>
-        <button id="pm-btn" class="bp" style="background:rgba(212,175,55,.15);border-color:rgba(212,175,55,.4);color:#d4af37" onclick="window._pcgs_manualLookup()">Look Up</button>`;
+        <button id="pm-btn" class="bp" style="background:rgba(212,175,55,.15);border-color:rgba(212,175,55,.4);color:var(--accent-pcgs)" onclick="window._pcgs_manualLookup()">Look Up</button>`;
 
     } else if (!data) {
       body = `<div style="background:rgba(212,175,55,.06);border:1px solid rgba(212,175,55,.2);border-radius:6px;padding:12px 14px;font-size:13px;color:var(--text);line-height:1.7;margin-bottom:10px">
@@ -4545,7 +4781,7 @@ function showPCGSModal(item, data, errType, errMsg) {
       </div>
       ${manualForm}`;
       footer = `<button class="bg" onclick="document.getElementById('pcgs-modal').remove()">Cancel</button>
-        <button id="pm-btn" class="bp" style="background:rgba(212,175,55,.15);border-color:rgba(212,175,55,.4);color:#d4af37" onclick="window._pcgs_manualLookup()">Look Up</button>`;
+        <button id="pm-btn" class="bp" style="background:rgba(212,175,55,.15);border-color:rgba(212,175,55,.4);color:var(--accent-pcgs)" onclick="window._pcgs_manualLookup()">Look Up</button>`;
 
     } else {
       title    = 'Select Fields to Apply — #' + cn(item.id);
@@ -4553,14 +4789,14 @@ function showPCGSModal(item, data, errType, errMsg) {
       subtitle = e(data.CoinName||data.Name||subtitle) + (g2?' · '+e(g2):'');
       body     = _pcgsFieldRows(data, raw);
       footer   = `<button class="bg" onclick="document.getElementById('pcgs-modal').remove()">Cancel</button>
-        <button class="bp" style="background:rgba(212,175,55,.15);border-color:rgba(212,175,55,.4);color:#d4af37" onclick="window._pcgs_apply()">Apply Selected Fields</button>`;
+        <button class="bp" style="background:rgba(212,175,55,.15);border-color:rgba(212,175,55,.4);color:var(--accent-pcgs)" onclick="window._pcgs_apply()">Apply Selected Fields</button>`;
     }
 
     modal.innerHTML = `
       <div class="ref-modal-box" style="width:min(700px,96vw);max-height:90vh">
         <div class="ref-modal-head">
           <div>
-            <div style="font-family:'Cormorant Garamond',serif;font-size:17px;font-weight:600">${title}</div>
+            <div style="font-family:var(--font-display,'Cormorant Garamond',serif);font-size:17px;font-weight:600">${title}</div>
             <div style="font-size:11px;color:var(--muted);margin-top:2px">${subtitle}</div>
           </div>
           <button class="rb" onclick="document.getElementById('pcgs-modal').remove()" style="font-size:18px">✕</button>
@@ -4573,28 +4809,12 @@ function showPCGSModal(item, data, errType, errMsg) {
 }
 
 async function _pcgsApply(item, updates) {
-  const arr = D[item.sheet];
-  if (!arr) return;
-  const idx = arr.findIndex(r => String(r.id) === String(item.id));
-  if (idx < 0) return;
-  Object.assign(arr[idx], updates);
-  Object.assign(item.raw, updates);
-  buildFlat();
-  if (ST.view === 'inv') renderInv();
-  if (ST.selItem === item) showDetail(item);
-  const n = Object.keys(updates).length;
-  if (GSHEETS_URL) {
-    try {
-      await updateRecordInSheets(item.sheet, cn(item.id), updates);
-      alert('✅ #' + cn(item.id) + ' — ' + n + ' field' + (n!==1?'s':'') + ' from PCGS saved ✓');
-    } catch(ex) {
-      cvToast('Saved to Supabase — Sheets backup failed: ' + ex.message, 'warn');
-    }
-  } else {
-    alert('✅ #' + cn(item.id) + ' — ' + n + ' field' + (n!==1?'s':'') + ' applied from PCGS.');
-  }
+  return _tpgApply(item, updates, 'PCGS');
 }
 
+// #endregion [TPG-PCGS]
+
+// #region [TPG-NUMISTA]
 // ── NUMISTA API ───────────────────────────────────────────────────────────────
 const NUMISTA_KEY  = 'K0Q79A62UJhoHiRwpowpVnPGTqaZPRSdoqEQTnu0';
 const NUMISTA_BASE = 'https://api.numista.com/v3';
@@ -4666,10 +4886,10 @@ function _numistaCards(types) {
     const objType = t.object_type ? t.object_type.name : '';
     return `<div onclick="window._numi_select(${idx})"
       style="display:flex;gap:10px;align-items:center;background:var(--bg4);border:1px solid var(--border);border-radius:6px;padding:10px 12px;margin-bottom:8px;cursor:pointer;transition:border-color .12s"
-      onmouseover="this.style.borderColor='#6ab0ff'" onmouseout="this.style.borderColor='var(--border)'">
+      onmouseover="this.style.borderColor='var(--accent-icg)'" onmouseout="this.style.borderColor='var(--border)'">
       ${thumb ? `<img src="${e(thumb)}" style="width:46px;height:46px;object-fit:contain;border-radius:3px;background:#111;flex-shrink:0" onerror="this.style.display='none'">` : `<div style="width:46px;height:46px;background:#1a1a1a;border-radius:3px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:18px">🪙</div>`}
       <div style="min-width:0">
-        <div style="font-family:'Cormorant Garamond',serif;font-size:14px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${e(t.title)}</div>
+        <div style="font-family:var(--font-display,'Cormorant Garamond',serif);font-size:14px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${e(t.title)}</div>
         <div style="font-size:11px;color:var(--muted);margin-top:3px">${[issuer,years,objType].filter(Boolean).join(' · ')}</div>
         <div style="font-size:10px;color:var(--dim);margin-top:2px">Numista #${t.id}</div>
       </div>
@@ -4756,7 +4976,7 @@ async function _numistaFieldRows(type, raw, rawSheet) {
 
   let html = imgRow;
   html += `<div style="display:grid;grid-template-columns:20px 1fr 1fr 1fr;gap:4px 10px;padding:4px 8px 6px;font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--dim);border-bottom:1px solid var(--border);margin-bottom:2px">
-    <span></span><span>Field</span><span>Current on Record</span><span style="color:#6ab0ff">Numista Value</span>
+    <span></span><span>Field</span><span>Current on Record</span><span style="color:var(--accent-icg)">Numista Value</span>
   </div>`;
 
   for (const f of fields) {
@@ -4766,16 +4986,16 @@ async function _numistaFieldRows(type, raw, rawSheet) {
     const refDp = e(f.refDisplay || String(f.refVal));
     const curDp = e(f.curVal || '—');
     html += `<div style="display:grid;grid-template-columns:20px 1fr 1fr 1fr;gap:4px 10px;padding:7px 8px;border-bottom:1px solid rgba(255,255,255,.03);align-items:center;${isEmpty?'':'opacity:.75'}">
-      <input type="checkbox" id="${uid}" data-nfield="${e(f.field)}" data-nvalue="${vStr}" ${isEmpty?'checked':''} style="cursor:pointer;width:14px;height:14px;accent-color:#6ab0ff">
+      <input type="checkbox" id="${uid}" data-nfield="${e(f.field)}" data-nvalue="${vStr}" ${isEmpty?'checked':''} style="cursor:pointer;width:14px;height:14px;accent-color:var(--accent-icg)">
       <label for="${uid}" style="font-size:12px;cursor:pointer;color:var(--text)">${e(f.label)}</label>
       <span style="font-size:12px;color:var(--dim)">${curDp}</span>
-      <span style="font-size:12px;color:#6ab0ff;font-weight:500">${refDp}</span>
+      <span style="font-size:12px;color:var(--accent-icg);font-weight:500">${refDp}</span>
     </div>`;
   }
 
   html += `<div style="padding:8px 8px 0;border-top:1px solid var(--border);margin-top:6px">
     <label style="cursor:pointer;display:flex;align-items:center;gap:7px;font-size:12px;color:var(--muted)">
-      <input type="checkbox" style="cursor:pointer;accent-color:#6ab0ff"
+      <input type="checkbox" style="cursor:pointer;accent-color:var(--accent-icg)"
         onchange="document.querySelectorAll('#numista-modal input[data-nfield]').forEach(cb=>cb.checked=this.checked)">
       Select / deselect all
     </label>
@@ -4836,7 +5056,7 @@ function showNumistaModal(item, types, corsErr, errMsg) {
         <b>Browser CORS restriction.</b><br><br>
         The Numista API doesn't allow direct browser requests from local HTML files due to Cross-Origin policy.<br><br>
         <b>To use Numista lookup:</b> host this app on a web server (even a local one like <code>python -m http.server</code>), or use the 
-        <a href="https://en.numista.com" target="_blank" style="color:#6ab0ff">Numista website</a> directly to look up your coin.
+        <a href="https://en.numista.com" target="_blank" style="color:var(--accent-icg)">Numista website</a> directly to look up your coin.
       </div>`;
       footer = `<button class="bg" onclick="document.getElementById('numista-modal').remove()">Close</button>
         <a href="https://en.numista.com/catalogue/index.php" target="_blank" style="text-decoration:none"><button class="bp" style="background:rgba(74,144,226,.2);border-color:rgba(74,144,226,.5)">Open Numista ↗</button></a>`;
@@ -4858,18 +5078,18 @@ function showNumistaModal(item, types, corsErr, errMsg) {
       const t = _numistaModalTypes[selIdx];
       title = 'Select Fields to Apply — #' + cn(item.id);
       subtitle = e(t.title) + (t.issuer ? ' · ' + e(t.issuer.name) : '')
-        + (types.length > 1 ? ' &nbsp;<span onclick="window._numi_back()" style="cursor:pointer;text-decoration:underline;color:#6ab0ff">← change</span>' : '');
+        + (types.length > 1 ? ' &nbsp;<span onclick="window._numi_back()" style="cursor:pointer;text-decoration:underline;color:var(--accent-icg)">← change</span>' : '');
       body  = fieldsHtml || '';
       footer = (types.length > 1 ? `<button class="bg" onclick="window._numi_back()">← Back</button>` : '')
         + `<button class="bg" onclick="document.getElementById('numista-modal').remove()">Cancel</button>`
-        + `<button class="bp" style="background:rgba(74,144,226,.2);border-color:rgba(74,144,226,.5);color:#6ab0ff" onclick="window._numi_apply()">Apply Selected Fields</button>`;
+        + `<button class="bp" style="background:rgba(74,144,226,.2);border-color:rgba(74,144,226,.5);color:var(--accent-icg)" onclick="window._numi_apply()">Apply Selected Fields</button>`;
     }
 
     modal.innerHTML = `
       <div class="ref-modal-box" style="width:min(680px,96vw);max-height:90vh">
         <div class="ref-modal-head">
           <div>
-            <div style="font-family:'Cormorant Garamond',serif;font-size:17px;font-weight:600">${title}</div>
+            <div style="font-family:var(--font-display,'Cormorant Garamond',serif);font-size:17px;font-weight:600">${title}</div>
             <div style="font-size:11px;color:var(--muted);margin-top:2px">${subtitle}</div>
           </div>
           <button class="rb" onclick="document.getElementById('numista-modal').remove()" style="font-size:18px">✕</button>
@@ -4884,28 +5104,12 @@ function showNumistaModal(item, types, corsErr, errMsg) {
 
 /** Apply selected Numista fields to the record. */
 async function _numistaApply(item, updates) {
-  const arr = D[item.sheet];
-  if (!arr) return;
-  const idx = arr.findIndex(r => String(r.id) === String(item.id));
-  if (idx < 0) return;
-  Object.assign(arr[idx], updates);
-  Object.assign(item.raw, updates);
-  buildFlat();
-  if (ST.view === 'inv') renderInv();
-  if (ST.selItem === item) showDetail(item);
-  const n = Object.keys(updates).length;
-  if (GSHEETS_URL) {
-    try {
-      await updateRecordInSheets(item.sheet, cn(item.id), updates);
-      alert('✅ Record #' + cn(item.id) + ' — ' + n + ' field' + (n!==1?'s':'') + ' from Numista saved ✓');
-    } catch(ex) {
-      cvToast('Updated locally — Google Sheets sync failed: ' + ex.message, 'warn');
-    }
-  } else {
-    alert('✅ Record #' + cn(item.id) + ' — ' + n + ' field' + (n!==1?'s':'') + ' applied from Numista. Connect Google Sheets to sync.');
-  }
+  return _tpgApply(item, updates, 'Numista');
 }
 
+// #endregion [TPG-NUMISTA]
+
+// #region [TPG-COIN-REF]
 // ── US COIN REFERENCE LOOKUP ──────────────────────────────────────────────────
 
 /** Load the "US Coin Reference" tab via Anthropic API + Google Drive MCP.
@@ -5189,6 +5393,8 @@ async function bulkLookupUSCoins() {
     if (idx < 0) { errors++; continue; }
     Object.assign(arr[idx], updates);
     Object.assign(raw, updates);
+    _touchRecord(arr[idx]);
+    if (raw !== arr[idx]) _touchRecord(raw);
     updateLog.push({ id: cn(item.id), sheet: item.sheet, fields: Object.keys(updates), updates });
     updated++;
   }
@@ -5274,7 +5480,7 @@ function _lmCandidateCards(scored) {
       style="background:var(--bg4);border:1px solid var(--border);border-radius:6px;padding:12px 14px;margin-bottom:8px;cursor:pointer;transition:border-color .12s"
       onmouseover="this.style.borderColor='var(--gold)'" onmouseout="this.style.borderColor='var(--border)'">
       <div style="display:flex;justify-content:space-between;align-items:center">
-        <div style="font-family:'Cormorant Garamond',serif;font-size:15px;color:var(--text)">${e(type)}${year?' · '+e(year):''}${mint?' · '+e(mint):''}</div>
+        <div style="font-family:var(--font-display,'Cormorant Garamond',serif);font-size:15px;color:var(--text)">${e(type)}${year?' · '+e(year):''}${mint?' · '+e(mint):''}</div>
         <span style="font-size:10px;color:${sc};background:${sc}18;border:1px solid ${sc}40;border-radius:3px;padding:2px 8px;flex-shrink:0;margin-left:10px">Score ${score}</span>
       </div>
       ${meta ? `<div style="font-size:11px;color:var(--muted);margin-top:4px">${e(meta)}</div>` : ''}
@@ -5292,7 +5498,7 @@ function _lmFieldRows(ref, raw, grade) {
 
   let html = `<div style="background:var(--bg4);border-radius:6px;padding:10px 14px;margin-bottom:12px">
     <div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--dim);margin-bottom:3px">Selected Reference Record</div>
-    <div style="color:var(--gold);font-family:'Cormorant Garamond',serif;font-size:15px">${e(refName)}${refYear!=='—'?' · '+e(refYear):''}${refMint!=='—'?' · '+e(refMint):''}</div>
+    <div style="color:var(--gold);font-family:var(--font-display,'Cormorant Garamond',serif);font-size:15px">${e(refName)}${refYear!=='—'?' · '+e(refYear):''}${refMint!=='—'?' · '+e(refMint):''}</div>
   </div>
   <div style="display:grid;grid-template-columns:20px 1fr 1fr 1fr;gap:4px 10px;padding:4px 8px 6px;font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--dim);border-bottom:1px solid var(--border);margin-bottom:2px">
     <span></span><span>Field (Reference Column)</span><span>Current on Record</span><span style="color:var(--green)">Reference Value</span>
@@ -5440,7 +5646,7 @@ function showLookupModal(item, scored, errorMsg) {
       <div class="ref-modal-box" style="width:min(700px,96vw);max-height:90vh">
         <div class="ref-modal-head">
           <div>
-            <div style="font-family:'Cormorant Garamond',serif;font-size:17px;font-weight:600">${title}</div>
+            <div style="font-family:var(--font-display,'Cormorant Garamond',serif);font-size:17px;font-weight:600">${title}</div>
             <div style="font-size:11px;color:var(--muted);margin-top:2px">${subtitle}</div>
           </div>
           <button class="rb" onclick="document.getElementById('lookup-modal').remove()" style="font-size:18px">✕</button>
@@ -5457,28 +5663,7 @@ function showLookupModal(item, scored, errorMsg) {
 
 /** Apply selected field updates to the record. */
 async function _lmApply(item, updates) {
-  const arr = D[item.sheet];
-  if (!arr) return;
-  const idx = arr.findIndex(r => String(r.id) === String(item.id));
-  if (idx < 0) return;
-
-  Object.assign(arr[idx], updates);
-  Object.assign(item.raw, updates);
-  buildFlat();
-  if (ST.view === 'inv') renderInv();
-  if (ST.selItem === item) showDetail(item);
-
-  const n = Object.keys(updates).length;
-  if (GSHEETS_URL) {
-    try {
-      await updateRecordInSheets(item.sheet, cn(item.id), updates);
-      alert('✅ Record #' + cn(item.id) + ' — ' + n + ' field' + (n!==1?'s':'') + ' saved ✓');
-    } catch(ex) {
-      cvToast('Updated locally — Google Sheets sync failed: ' + ex.message, 'warn');
-    }
-  } else {
-    alert('✅ Record #' + cn(item.id) + ' — ' + n + ' field' + (n!==1?'s':'') + ' applied! Connect Google Sheets to sync.');
-  }
+  return _tpgApply(item, updates, 'Coin Reference');
 }
 
 // Keep old name as alias so any stale HTML onclick references don't break
@@ -5543,6 +5728,9 @@ function closeDetail(){
   document.getElementById('detail-panel').classList.remove('open');
 }
 
+// #endregion [TPG-COIN-REF]
+
+// #region [LABELS]
 // ── LABELS ────────────────────────────────────────────────────────────────────
 let labelsPrinted = new Set(JSON.parse(localStorage.getItem('cv_labels_printed')||'[]'));
 function saveLabelsPrinted(){ localStorage.setItem('cv_labels_printed',JSON.stringify([...labelsPrinted])); }
@@ -5707,7 +5895,7 @@ function showAddRangeToLabels() {
   modal.innerHTML = `
     <div class="ref-modal-box" style="width:min(480px,94vw)">
       <div class="ref-modal-head">
-        <div style="font-family:'Cormorant Garamond',serif;font-size:17px;font-weight:600">Add Range to Labels Queue</div>
+        <div style="font-family:var(--font-display,'Cormorant Garamond',serif);font-size:17px;font-weight:600">Add Range to Labels Queue</div>
         <button class="rb" onclick="document.getElementById('range-label-modal').remove()" style="font-size:18px">✕</button>
       </div>
       <div class="ref-modal-body" style="padding:20px">
@@ -5944,6 +6132,9 @@ function removeFromLabelQueue(id, source, sheetKey) {
 
 
 
+// #endregion [LABELS]
+
+// #region [DUPLICATES]
 // ── DUPLICATES ────────────────────────────────────────────────────────────────
 
 function renderBreakdown() {
@@ -6001,7 +6192,7 @@ function renderBreakdown() {
     const pct = (stats.count / T.totCount * 100).toFixed(1);
     h += '<div style="background:var(--bg3);border:1px solid var(--border);border-radius:7px;padding:14px;cursor:pointer" onclick="scrollToCat(\'' + cat + '\')">';
     h += '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--dim);margin-bottom:4px">' + e(labels[cat] || cat) + '</div>';
-    h += '<div style="font-size:24px;font-family:Cormorant Garamond,serif;color:var(--text);margin-bottom:4px">' + stats.count.toLocaleString() + '</div>';
+    h += '<div style="font-size:24px;font-family:var(--font-display,\'Cormorant Garamond\',serif);color:var(--text);margin-bottom:4px">' + stats.count.toLocaleString() + '</div>';
     h += '<div style="font-size:11px;color:var(--muted)">' + pct + '% of collection</div>';
     h += '</div>';
   });
@@ -6159,6 +6350,9 @@ function filterDupsBySearch(q) {
   });
 }
 
+// #endregion [DUPLICATES]
+
+// #region [RENUMBER]
 // ── Renumber modal — focused dialog just for changing a record number ─────────
 function openRenumberModal(sheetKey, rawId, groupNid) {
   const ex = document.getElementById('renumber-modal');
@@ -6189,7 +6383,7 @@ function openRenumberModal(sheetKey, rawId, groupNid) {
     '<div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;width:420px;padding:26px;box-shadow:0 8px 32px rgba(0,0,0,.5)">'
     + '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:18px">'
     +   '<div>'
-    +     '<div style="font-family:Cormorant Garamond,serif;font-size:20px;color:var(--gold)">Change Record Number</div>'
+    +     '<div style="font-family:var(--font-display,\'Cormorant Garamond\',serif);font-size:20px;color:var(--gold)">Change Record Number</div>'
     +     '<div style="font-size:11px;color:var(--dim);margin-top:4px">' + e(catLabel) + (recDesc ? ' — ' + e(String(recDesc).substring(0, 50)) : '') + '</div>'
     +   '</div>'
     +   '<button onclick="document.getElementById(\'renumber-modal\').remove()" style="background:none;border:none;color:var(--muted);font-size:22px;cursor:pointer;line-height:1">&times;</button>'
@@ -6554,6 +6748,8 @@ function updateSyncBanner(state, detail) {
 // Returns counts of {edits, adds, deletes} successfully synced.
 async function retryPendingSync() {
   if (!GSHEETS_URL) return { edits:0, adds:0, deletes:0, total:0 };
+  _syncLockAcquire('retry-push');
+  try {
   let edits = 0, adds = 0, deletes = 0;
 
   // Retry pending edits — push to Supabase first when configured, then GAS
@@ -6569,7 +6765,7 @@ async function retryPendingSync() {
       continue;
     }
     PENDING_EDIT_RETRIES[key] = retryCount;
-    localStorage.setItem('cv_pending_edit_retries', JSON.stringify(PENDING_EDIT_RETRIES));
+    savePendingEditRetries();
 
     const [sheetKey, id] = key.split('|');
     let ok = false;
@@ -6587,7 +6783,7 @@ async function retryPendingSync() {
       delete PENDING_EDITS[key];
       delete PENDING_EDIT_RETRIES[key];
       savePendingEdits();
-      localStorage.setItem('cv_pending_edit_retries', JSON.stringify(PENDING_EDIT_RETRIES));
+      savePendingEditRetries();
       edits++;
     }
   }
@@ -6617,6 +6813,9 @@ async function retryPendingSync() {
 
   const total = edits + adds + deletes;
   return { edits, adds, deletes, total };
+  } finally {
+    _syncLockRelease('retry-push');
+  }
 }
 
 
@@ -6633,7 +6832,7 @@ function clearStuckEdits() {
     delete PENDING_EDIT_RETRIES[k];
   });
   savePendingEdits();
-  localStorage.setItem('cv_pending_edit_retries', JSON.stringify(PENDING_EDIT_RETRIES));
+  savePendingEditRetries();
   checkSyncState();
   if (ST.view === 'settings') renderSettings();
   alert('Cleared ' + stuck.length + ' stuck edit(s) from retry queue.');
@@ -6650,6 +6849,8 @@ async function manualSyncNow() {
     return;
   }
 
+  _syncLockAcquire('manual-sync');
+  try {
   updateSyncBanner('syncing', 'Syncing…');
 
   const results = { sb: null, sheets: null };
@@ -6731,6 +6932,9 @@ async function manualSyncNow() {
     const remaining = Object.keys(PENDING_EDITS).length + NEW_RECORDS.length + PENDING_DELETES.length;
     if (remaining > 0) msg += '\n⚠ ' + remaining + ' operation(s) still pending';
     alert(msg);
+  }
+  } finally {
+    _syncLockRelease('manual-sync');
   }
 }
 
@@ -6864,6 +7068,9 @@ function downloadAppsScript(){
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='CollectiblesVault.gs';a.click();
 }
 
+// #endregion [RENUMBER]
+
+// #region [FONT-AND-THEME]
 // ── Font system ───────────────────────────────────────────────────────────────
 const FONT_PAIRS = {
   vault:    { label:'Vault',       body:'Karla:wght@300;400;500;600',
@@ -6904,7 +7111,13 @@ function applyFont(key) {
 function setFont(key) {
   localStorage.setItem('cv_font', key);
   applyFont(key);
-  if (ST && ST.view === 'settings') renderSettings();
+  // Targeted update: only the font picker re-renders, the rest of the
+  // Settings panel keeps its state (half-typed inputs, scroll, etc.)
+  if (ST && ST.view === 'settings') {
+    const picker = document.getElementById('cv-font-picker');
+    if (picker) picker.innerHTML = _renderFontPicker(key);
+    else renderSettings();  // fallback if picker not on screen
+  }
 }
 
 // Apply saved font on load
@@ -6921,7 +7134,14 @@ function setTheme(t){
   else if (t === 'theme-modern-dark')   document.body.classList.add('theme-modern-dark');
   else document.body.classList.add('dark');  // default dark gold (classic)
   localStorage.setItem('cv_theme', t);
-  if (ST && ST.view === 'settings') renderSettings();
+  // Targeted update: only the theme picker re-renders. CSS variables on
+  // body already drove all the visible theme change. Preserves form
+  // state (API key inputs, passcode entry, etc.) across theme swaps.
+  if (ST && ST.view === 'settings') {
+    const picker = document.getElementById('cv-theme-picker');
+    if (picker) picker.innerHTML = _renderThemePicker(t);
+    else renderSettings();  // fallback if picker not on screen
+  }
 }
 
 
@@ -6985,76 +7205,17 @@ function saveSupabaseConfig() {
   loadFromSupabase();
 }
 
-function renderSettings(){
-  const theme=localStorage.getItem('cv_theme')||'dark';
-  const copper=parseFloat(localStorage.getItem('cv_copper_price'))||4.50;
-  const isConn=!!GSHEETS_URL;
-  const sbConn=!!(SB_URL && SB_KEY);
-  const nr=(typeof NEW_RECORDS!=='undefined')?NEW_RECORDS.length:0;
+// #endregion [FONT-AND-THEME]
 
-  // ── Supabase section ──────────────────────────────────────────────────────
-  let sbPanel;
-  if(sbConn){
-    sbPanel='<div style="font-size:13px;color:var(--green);margin-bottom:8px">✓ Connected to Supabase</div>'
-     +'<div style="font-size:11px;color:var(--muted);word-break:break-all;margin-bottom:10px">'+SB_URL+'</div>'
-     +'<div style="display:flex;gap:8px;flex-wrap:wrap">'
-     +'<button class="bp green" onclick="loadFromSupabase()">Reload Data</button>'
-     +'<button class="bg" onclick="migrateToSupabase()" style="font-size:12px">⬆ Re-import embedded data</button>'+'<button class="bg" onclick="migrateFromSheetsToSupabase()" style="font-size:12px;border-color:rgba(0,154,68,.4);color:#4caf7d">⬆ Migrate from Google Sheets</button>'
-     +'<button class="bg" style="color:var(--red)" onclick="SB_URL=\'\';SB_KEY=\'\';localStorage.removeItem(\'cv_sb_url\');localStorage.removeItem(\'cv_sb_key\');renderSettings();">Disconnect</button>'
-     +'</div>';
-  }else{
-    sbPanel='<div style="font-size:12px;color:var(--muted);line-height:1.8;margin-bottom:12px">'
-     +'Get your <strong>Project URL</strong> and <strong>Anon/Public Key</strong> from<br>'
-     +'Supabase Dashboard → Project Settings → API</div>'
-     +'<div style="display:grid;grid-template-columns:1fr;gap:6px;margin-bottom:10px">'
-     +'<input id="sb-url-input" type="url" placeholder="https://yourproject.supabase.co" value="'+SB_URL+'"'
-     +' style="padding:8px 10px;background:var(--bg4);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:13px">'
-     +'<input id="sb-key-input" type="text" placeholder="eyJ... (anon public key)" value="'+SB_KEY+'"'
-     +' style="padding:8px 10px;background:var(--bg4);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:13px">'
-     +'</div>'
-     +'<div style="display:flex;gap:8px;margin-bottom:8px">'
-     +'<button class="bp" onclick="saveSupabaseConfig()" style="flex:1">Save & Connect</button>'
-     +'<button class="bg" onclick="migrateFromSheetsToSupabase()" style="flex:1;font-size:12px;border-color:rgba(0,154,68,.4);color:#4caf7d">⬆ Migrate from Google Sheets</button>'
-     +'</div>';
-  }
+// #region [PICKERS]
+// ─── PICKER HELPERS ─────────────────────────────────────────────────
+// Theme + font pickers are factored out so setTheme() and setFont() can
+// update ONLY the picker container instead of re-rendering the entire
+// Settings panel. That preserves form state (half-typed API keys, etc.)
+// when the user switches appearance options.
 
-  // ── GAS section (PCGS proxy only) ─────────────────────────────────────────
-  let g;
-  if(isConn){
-    g='<div style="font-size:12px;color:var(--green);margin-bottom:6px">✓ GAS connected (PCGS proxy)</div>'
-     +'<div style="font-size:11px;color:var(--muted);word-break:break-all;margin-bottom:8px">'+GSHEETS_URL+'</div>'
-     +'<button class="bg" style="color:var(--red);font-size:12px" onclick="GSHEETS_URL=\'\';localStorage.removeItem(\'cv_gsheets_url\');renderSettings();">Disconnect GAS</button>';
-  }else{
-    g='<div style="font-size:12px;color:var(--muted);margin-bottom:8px">Optional — only needed for the PCGS 🏆 coin lookup. All data now uses Supabase.</div>'
-     +'<div style="display:flex;gap:8px">'
-     +'<input type="text" id="gsheets-url-input" placeholder="https://script.google.com/macros/s/.../exec" style="flex:1;padding:8px 10px;background:var(--bg4);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:13px">'
-     +'<button class="bp" onclick="connectSheets()">Connect</button></div>'
-     +'<div style="margin-top:8px">'
-     +'<button class="bg" onclick="downloadAppsScript()" style="width:100%;font-size:12px">Download CollectiblesVault.gs (for PCGS proxy)</button>'
-     +'</div>';
-  }
-
-  const cb=sbConn?'rgba(74,154,106,.3)':isConn?'var(--gold3)':'var(--border)';
-  const cs=sbConn?'<span style="color:var(--green)">Supabase ✓</span>':isConn?'<span style="color:var(--gold)">GAS only</span>':'<span style="color:var(--red)">Not configured</span>';
-  const tb=function(t,i,l){const a=theme===t;return '<button onclick="setTheme(\''+t+'\')" style="flex:1;padding:14px;border-radius:6px;cursor:pointer;font-size:13px;background:'+(a?'var(--gold2)':'transparent')+';border:1px solid '+(a?'var(--gold)':'var(--border)')+';color:'+(a?'var(--gold)':'var(--muted)')+'">'+'<div style="font-size:18px;margin-bottom:5px">'+i+'</div>'+l+'</button>';};
-  const sp=SPOTS?'<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">'
-   +'<div style="background:var(--bg2);padding:8px;border-radius:4px;font-size:12px">Gold <b>'+fmt$(SPOTS.gold)+'</b></div>'
-   +'<div style="background:var(--bg2);padding:8px;border-radius:4px;font-size:12px">Silver <b>'+fmt$(SPOTS.silver)+'</b></div>'
-   +'<div style="background:var(--bg2);padding:8px;border-radius:4px;font-size:12px">Platinum <b>'+fmt$(SPOTS.platinum)+'</b></div>'
-   +'<div style="background:var(--bg2);padding:8px;border-radius:4px;font-size:12px">Palladium <b>'+fmt$(SPOTS.palladium)+'</b></div></div>':'';
-  document.getElementById('content').innerHTML=[
-    '<div class="vh"><div><div class="vt">Settings</div><div class="vsub">Preferences &amp; Google Sheets</div></div></div>',
-    '<div class="stt">Database '+cs+'</div>',
-    '<div style="background:var(--bg3);border:1px solid rgba(0,154,68,.35);border-radius:7px;padding:18px;margin-bottom:16px">'
-    +'<div style="font-size:12px;font-weight:600;color:#4caf7d;margin-bottom:10px;text-transform:uppercase;letter-spacing:.06em">⚡ Supabase</div>'
-    +sbPanel+'</div>',
-    '<div style="background:var(--bg3);border:1px solid '+cb+';border-radius:7px;padding:18px;margin-bottom:24px">'
-    +'<div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:10px;text-transform:uppercase;letter-spacing:.06em">Google Apps Script (Sheets Backup)</div>'
-    +g
-    +(isConn ? _sheetsBackupStatusHTML() : '')
-    +'</div>',
-    '<div class="stt">Appearance</div>',
-    '<div style="background:var(--bg3);border:1px solid var(--border);border-radius:7px;padding:18px;margin-bottom:24px">'
+function _renderThemePicker(theme) {
+  return '<div style="background:var(--bg3);border:1px solid var(--border);border-radius:7px;padding:18px;margin-bottom:24px">'
     +'<div style="font-size:11px;color:var(--dim);margin-bottom:14px">Click a theme to switch instantly. Your choice is saved.</div>'
 
     // ── MODERN section ──
@@ -7115,28 +7276,105 @@ function renderSettings(){
     +'<div style="font-size:9px;color:#254830;margin-top:2px">Dark · forest &amp; deep</div>'
     +'</div></div>'
 
-    +'</div></div>',
+    +'</div></div>';
+}
+
+function _renderFontPicker(activeFont) {
+  let html = '<div style="background:var(--bg3);border:1px solid var(--border);border-radius:7px;padding:18px;margin-bottom:24px">';
+  html += '<div style="font-size:12px;color:var(--dim);margin-bottom:14px">Choose the font pairing for headings and body text across the app.</div>';
+  html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px">';
+  Object.entries(FONT_PAIRS).forEach(function(entry) {
+    const key = entry[0], f = entry[1];
+    const active = activeFont === key;
+    html += '<button onclick="setFont(\'' + key + '\')" style="'
+      + 'padding:14px 12px;border-radius:7px;cursor:pointer;text-align:left;'
+      + 'background:' + (active ? 'var(--gold2)' : 'transparent') + ';'
+      + 'border:1px solid ' + (active ? 'var(--gold)' : 'var(--border)') + ';'
+      + 'color:' + (active ? 'var(--gold)' : 'var(--muted)') + ';'
+      + 'transition:all .12s">';
+    html += '<div style="font-size:17px;margin-bottom:5px;font-family:' + f.cssDisplay + ';font-weight:600;color:' + (active ? 'var(--gold)' : 'var(--text)') + '">' + f.preview + '</div>';
+    html += '<div style="font-size:11px;font-family:' + f.cssBody + ';letter-spacing:.02em">' + f.label + '</div>';
+    html += '</button>';
+  });
+  html += '</div></div>';
+  return html;
+}
+
+// #endregion [PICKERS]
+
+// #region [SETTINGS]
+function renderSettings(){
+  const theme=localStorage.getItem('cv_theme')||'dark';
+  const copper=parseFloat(localStorage.getItem('cv_copper_price'))||4.50;
+  const isConn=!!GSHEETS_URL;
+  const sbConn=!!(SB_URL && SB_KEY);
+  const nr=(typeof NEW_RECORDS!=='undefined')?NEW_RECORDS.length:0;
+
+  // ── Supabase section ──────────────────────────────────────────────────────
+  let sbPanel;
+  if(sbConn){
+    sbPanel='<div style="font-size:13px;color:var(--green);margin-bottom:8px">✓ Connected to Supabase</div>'
+     +'<div style="font-size:11px;color:var(--muted);word-break:break-all;margin-bottom:10px">'+SB_URL+'</div>'
+     +'<div style="display:flex;gap:8px;flex-wrap:wrap">'
+     +'<button class="bp green" onclick="loadFromSupabase()">Reload Data</button>'
+     +'<button class="bg" onclick="migrateToSupabase()" style="font-size:12px">⬆ Re-import embedded data</button>'+'<button class="bg" onclick="migrateFromSheetsToSupabase()" style="font-size:12px;border-color:var(--accent-ngc-bd);color:var(--accent-ngc)">⬆ Migrate from Google Sheets</button>'
+     +'<button class="bg" style="color:var(--red)" onclick="SB_URL=\'\';SB_KEY=\'\';localStorage.removeItem(\'cv_sb_url\');localStorage.removeItem(\'cv_sb_key\');renderSettings();">Disconnect</button>'
+     +'</div>';
+  }else{
+    sbPanel='<div style="font-size:12px;color:var(--muted);line-height:1.8;margin-bottom:12px">'
+     +'Get your <strong>Project URL</strong> and <strong>Anon/Public Key</strong> from<br>'
+     +'Supabase Dashboard → Project Settings → API</div>'
+     +'<div style="display:grid;grid-template-columns:1fr;gap:6px;margin-bottom:10px">'
+     +'<input id="sb-url-input" type="url" placeholder="https://yourproject.supabase.co" value="'+SB_URL+'"'
+     +' style="padding:8px 10px;background:var(--bg4);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:13px">'
+     +'<input id="sb-key-input" type="text" placeholder="eyJ... (anon public key)" value="'+SB_KEY+'"'
+     +' style="padding:8px 10px;background:var(--bg4);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:13px">'
+     +'</div>'
+     +'<div style="display:flex;gap:8px;margin-bottom:8px">'
+     +'<button class="bp" onclick="saveSupabaseConfig()" style="flex:1">Save & Connect</button>'
+     +'<button class="bg" onclick="migrateFromSheetsToSupabase()" style="flex:1;font-size:12px;border-color:var(--accent-ngc-bd);color:var(--accent-ngc)">⬆ Migrate from Google Sheets</button>'
+     +'</div>';
+  }
+
+  // ── GAS section (PCGS proxy only) ─────────────────────────────────────────
+  let g;
+  if(isConn){
+    g='<div style="font-size:12px;color:var(--green);margin-bottom:6px">✓ GAS connected (PCGS proxy)</div>'
+     +'<div style="font-size:11px;color:var(--muted);word-break:break-all;margin-bottom:8px">'+GSHEETS_URL+'</div>'
+     +'<button class="bg" style="color:var(--red);font-size:12px" onclick="GSHEETS_URL=\'\';localStorage.removeItem(\'cv_gsheets_url\');renderSettings();">Disconnect GAS</button>';
+  }else{
+    g='<div style="font-size:12px;color:var(--muted);margin-bottom:8px">Optional — only needed for the PCGS 🏆 coin lookup. All data now uses Supabase.</div>'
+     +'<div style="display:flex;gap:8px">'
+     +'<input type="text" id="gsheets-url-input" placeholder="https://script.google.com/macros/s/.../exec" style="flex:1;padding:8px 10px;background:var(--bg4);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:13px">'
+     +'<button class="bp" onclick="connectSheets()">Connect</button></div>'
+     +'<div style="margin-top:8px">'
+     +'<button class="bg" onclick="downloadAppsScript()" style="width:100%;font-size:12px">Download CollectiblesVault.gs (for PCGS proxy)</button>'
+     +'</div>';
+  }
+
+  const cb=sbConn?'rgba(74,154,106,.3)':isConn?'var(--gold3)':'var(--border)';
+  const cs=sbConn?'<span style="color:var(--green)">Supabase ✓</span>':isConn?'<span style="color:var(--gold)">GAS only</span>':'<span style="color:var(--red)">Not configured</span>';
+  const tb=function(t,i,l){const a=theme===t;return '<button onclick="setTheme(\''+t+'\')" style="flex:1;padding:14px;border-radius:6px;cursor:pointer;font-size:13px;background:'+(a?'var(--gold2)':'transparent')+';border:1px solid '+(a?'var(--gold)':'var(--border)')+';color:'+(a?'var(--gold)':'var(--muted)')+'">'+'<div style="font-size:18px;margin-bottom:5px">'+i+'</div>'+l+'</button>';};
+  const sp=SPOTS?'<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">'
+   +'<div style="background:var(--bg2);padding:8px;border-radius:4px;font-size:12px">Gold <b>'+fmt$(SPOTS.gold)+'</b></div>'
+   +'<div style="background:var(--bg2);padding:8px;border-radius:4px;font-size:12px">Silver <b>'+fmt$(SPOTS.silver)+'</b></div>'
+   +'<div style="background:var(--bg2);padding:8px;border-radius:4px;font-size:12px">Platinum <b>'+fmt$(SPOTS.platinum)+'</b></div>'
+   +'<div style="background:var(--bg2);padding:8px;border-radius:4px;font-size:12px">Palladium <b>'+fmt$(SPOTS.palladium)+'</b></div></div>':'';
+  document.getElementById('content').innerHTML=[
+    '<div class="vh"><div><div class="vt">Settings</div><div class="vsub">Preferences &amp; Google Sheets</div></div></div>',
+    '<div class="stt">Database '+cs+'</div>',
+    '<div style="background:var(--bg3);border:1px solid var(--accent-ngc-bd);border-radius:7px;padding:18px;margin-bottom:16px">'
+    +'<div style="font-size:12px;font-weight:600;color:var(--accent-ngc);margin-bottom:10px;text-transform:uppercase;letter-spacing:.06em">⚡ Supabase</div>'
+    +sbPanel+'</div>',
+    '<div style="background:var(--bg3);border:1px solid '+cb+';border-radius:7px;padding:18px;margin-bottom:24px">'
+    +'<div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:10px;text-transform:uppercase;letter-spacing:.06em">Google Apps Script (Sheets Backup)</div>'
+    +g
+    +(isConn ? _sheetsBackupStatusHTML() : '')
+    +'</div>',
+    '<div class="stt">Appearance</div>',
+    '<div id="cv-theme-picker">' + _renderThemePicker(theme) + '</div>',
     '<div class="stt">Typography</div>',
-    (function(){
-      const activeFont = localStorage.getItem('cv_font') || 'vault';
-      let html = '<div style="background:var(--bg3);border:1px solid var(--border);border-radius:7px;padding:18px;margin-bottom:24px">';
-      html += '<div style="font-size:12px;color:var(--dim);margin-bottom:14px">Choose the font pairing for headings and body text across the app.</div>';
-      html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px">';
-      Object.entries(FONT_PAIRS).forEach(([key, f]) => {
-        const active = activeFont === key;
-        html += '<button onclick="setFont(\'' + key + '\')" style="'
-          + 'padding:14px 12px;border-radius:7px;cursor:pointer;text-align:left;'
-          + 'background:' + (active ? 'var(--gold2)' : 'transparent') + ';'
-          + 'border:1px solid ' + (active ? 'var(--gold)' : 'var(--border)') + ';'
-          + 'color:' + (active ? 'var(--gold)' : 'var(--muted)') + ';'
-          + 'transition:all .12s">';
-        html += '<div style="font-size:17px;margin-bottom:5px;font-family:' + f.cssDisplay + ';font-weight:600;color:' + (active ? 'var(--gold)' : 'var(--text)') + '">' + f.preview + '</div>';
-        html += '<div style="font-size:11px;font-family:' + f.cssBody + ';letter-spacing:.02em">' + f.label + '</div>';
-        html += '</button>';
-      });
-      html += '</div></div>';
-      return html;
-    })(),
+    '<div id="cv-font-picker">' + _renderFontPicker(localStorage.getItem('cv_font') || 'vault') + '</div>',
     '<div class="stt">Spot Prices</div>',
     '<div style="background:var(--bg3);border:1px solid var(--border);border-radius:7px;padding:18px;margin-bottom:24px">'+sp+'<button class="bg" onclick="loadSpotPrices()" style="width:100%">Refresh Prices</button><div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)"><label style="font-size:11px;color:var(--dim);display:block;margin-bottom:5px">Copper $/lb</label><div style="display:flex;gap:8px"><input type="number" step="0.01" id="cpi" value="'+copper+'" style="flex:1"><button class="bp" onclick="setCopperPrice(document.getElementById(\'cpi\').value)">Save</button></div></div></div>',
     '<div class="stt">Data</div>',
@@ -7405,7 +7643,9 @@ function renderSettings(){
     })()
   ].join('\n');
 }
+// #endregion [SETTINGS]
 
+// #region [BOOT]
 setTheme(localStorage.getItem('cv_theme') || 'dark');
 updateBadges();
 renderDash();
@@ -7489,7 +7729,7 @@ function openEditModal(item) {
   modal.innerHTML =
     '<div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;width:480px;max-height:80vh;overflow-y:auto;padding:24px">'
     + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">'
-    + '<div style="font-family:Cormorant Garamond,serif;font-size:20px;color:var(--gold)">'
+    + '<div style="font-family:var(--font-display,\'Cormorant Garamond\',serif);font-size:20px;color:var(--gold)">'
     + SHEET_MAP[item.sheet].label + ' #' + cn(item.id) + '</div>'
     + '<button onclick="document.getElementById(\'edit-modal\').remove()" style="background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer">&times;</button>'
     + '</div>'
@@ -7920,6 +8160,7 @@ async function submitAdd(){
     rec.id = String(Math.max(...allIdsNum, MAX_EXISTING_ID, 0) + 1);
   }
   rec._localId = Date.now();
+  _touchRecord(rec);
 
   arr.push(rec);
   D[sheet] = arr;
@@ -9135,6 +9376,7 @@ async function syncShowQRCode() {
     if (msg) { msg.textContent = 'QR generation failed: ' + e.message + ' — use the link instead.'; msg.style.color = 'var(--red)'; }
   }
 }
+// #endregion [BOOT]
 </script>
 <div id="mobile-tabs">
   <button data-v="dash" onclick="nav('dash')"><span class="ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/></svg></span><span>Dashboard</span></button>
