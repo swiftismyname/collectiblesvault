@@ -1197,6 +1197,235 @@ function cvToast(message, type, opts) {
   return { dismiss: remove };
 }
 
+// ─── ERROR LOGGING ──────────────────────────────────────────────────
+// Captures background failures to a Supabase `error_log` table so we can
+// investigate later. Without this, console.warn output is invisible on
+// mobile (no DevTools) and we'd never know what's silently breaking.
+//
+// Usage:
+//   cvLogError('Supabase insert failed', { sheet: 'gradedUS', id: 123, stack: err.stack })
+//   cvLogError('Stuck edit gave up', { key: 'gradedUS|123' }, 'warn')
+//
+// The third argument is the level: 'error' (default) | 'warn' | 'info'.
+const _cvErrorDedup = {};   // dedup window: message → last-seen timestamp
+const _CV_ERROR_DEDUP_MS = 5000;
+let   _cvLogInFlight = false;  // guard against recursive logging
+
+function cvDeviceId() {
+  let id = localStorage.getItem('cv_device_id');
+  if (!id) {
+    // Use crypto.randomUUID where available, fall back to a manual UUID v4
+    if (window.crypto && crypto.randomUUID) {
+      id = crypto.randomUUID();
+    } else {
+      id = ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g, function(c) {
+        return (c ^ (crypto.getRandomValues(new Uint8Array(1))[0] & 15) >> (c / 4)).toString(16);
+      });
+    }
+    localStorage.setItem('cv_device_id', id);
+  }
+  return id;
+}
+
+async function cvLogError(message, context, level) {
+  level = level || 'error';
+  const msg = String(message || '').slice(0, 1000);
+
+  // Always log to console — DevTools still works for live debugging
+  try { (console[level === 'warn' ? 'warn' : level === 'info' ? 'info' : 'error'])('[cv]', msg, context || ''); } catch(_) {}
+
+  // Dedup window: if the exact same message + level fired in last 5s, skip
+  const dedupKey = level + '|' + msg;
+  const now = Date.now();
+  if (_cvErrorDedup[dedupKey] && (now - _cvErrorDedup[dedupKey]) < _CV_ERROR_DEDUP_MS) return;
+  _cvErrorDedup[dedupKey] = now;
+
+  // Skip if Supabase not configured (nowhere to send it)
+  const sbUrl = (localStorage.getItem('cv_sb_url') || '').replace(/\/+$/, '');
+  const sbKey = localStorage.getItem('cv_sb_key') || '';
+  if (!sbUrl || !sbKey) return;
+
+  // Prevent recursive logging if the log push itself throws
+  if (_cvLogInFlight) return;
+  _cvLogInFlight = true;
+
+  // Pull stack out of context if it was passed in; truncate to keep payload small
+  let stack = null;
+  if (context && context.stack) {
+    stack = String(context.stack).slice(0, 5000);
+    context = Object.assign({}, context);
+    delete context.stack;
+  }
+
+  const payload = {
+    level: level,
+    message: msg,
+    context: context || null,
+    stack: stack,
+    user_agent: (navigator.userAgent || '').slice(0, 500),
+    page: (typeof ST !== 'undefined' && ST && ST.view) ? ST.view : (location.hash || 'boot'),
+    device_id: cvDeviceId()
+  };
+
+  try {
+    await fetch(sbUrl + '/rest/v1/error_log', {
+      method: 'POST',
+      headers: {
+        'apikey': sbKey,
+        'authorization': 'Bearer ' + sbKey,
+        'content-type': 'application/json',
+        'prefer': 'return=minimal'
+      },
+      body: JSON.stringify(payload)
+    });
+  } catch (e) {
+    // Never recursively log — just emit to console
+    try { console.warn('[cv] error_log push failed:', e.message); } catch(_) {}
+  } finally {
+    _cvLogInFlight = false;
+  }
+}
+
+// Once per app boot, ask Supabase to delete log rows older than 30 days.
+// Keeps the table from growing indefinitely. Fire-and-forget — failure is
+// fine (rows just live longer).
+async function cvTrimErrorLog() {
+  const sbUrl = (localStorage.getItem('cv_sb_url') || '').replace(/\/+$/, '');
+  const sbKey = localStorage.getItem('cv_sb_key') || '';
+  if (!sbUrl || !sbKey) return;
+  const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+  try {
+    await fetch(sbUrl + '/rest/v1/error_log?created_at=lt.' + encodeURIComponent(cutoff), {
+      method: 'DELETE',
+      headers: { 'apikey': sbKey, 'authorization': 'Bearer ' + sbKey }
+    });
+  } catch (e) {
+    // Silent; this is housekeeping
+  }
+}
+
+// ─── ERROR LOG VIEWER (called from Settings) ───────────────────────
+async function cvLoadErrorLog() {
+  const container = document.getElementById('error-log-list');
+  if (!container) return;
+  const sbUrl = (localStorage.getItem('cv_sb_url') || '').replace(/\/+$/, '');
+  const sbKey = localStorage.getItem('cv_sb_key') || '';
+  if (!sbUrl || !sbKey) {
+    container.innerHTML = '<div style="font-size:12px;color:var(--dim);padding:14px 0">Supabase not configured — no error log available.</div>';
+    return;
+  }
+  container.innerHTML = '<div style="font-size:12px;color:var(--dim);padding:14px 0">Loading…</div>';
+  try {
+    const url = sbUrl + '/rest/v1/error_log?select=*&order=created_at.desc&limit=50';
+    const r = await fetch(url, {
+      headers: {
+        'apikey': sbKey, 'authorization': 'Bearer ' + sbKey, 'content-type': 'application/json'
+      }
+    });
+    if (!r.ok) {
+      const body = await r.text();
+      if (r.status === 404 || /not exist|PGRST/i.test(body)) {
+        container.innerHTML = '<div style="font-size:12px;color:var(--gold);padding:14px 0">Table not found. Run <code>20260609_error_log.sql</code> in your Supabase SQL Editor first.</div>';
+        return;
+      }
+      container.innerHTML = '<div style="font-size:12px;color:var(--red);padding:14px 0">Load failed: ' + r.status + '</div>';
+      return;
+    }
+    const rows = await r.json();
+    if (!Array.isArray(rows) || rows.length === 0) {
+      container.innerHTML = '<div style="font-size:12px;color:var(--green);padding:14px 0">✓ No errors logged. Everything has been working cleanly.</div>';
+      return;
+    }
+    const myDevice = cvDeviceId();
+    const levelColor = { error: 'var(--red)', warn: '#e0a500', info: 'var(--dim)' };
+    const html = rows.map(function(row) {
+      const dt = new Date(row.created_at);
+      const rel = _cvRelativeTime(dt);
+      const isThis = (row.device_id === myDevice);
+      const ctx = row.context ? JSON.stringify(row.context, null, 2) : '';
+      const stack = row.stack || '';
+      const detailsId = 'errlog-d-' + row.id;
+      return ''
+        + '<div style="border-bottom:1px solid var(--border);padding:10px 0">'
+        +   '<div style="display:flex;align-items:flex-start;gap:8px">'
+        +     '<span style="font-size:9px;font-family:DM Mono,monospace;text-transform:uppercase;letter-spacing:.08em;padding:2px 6px;border-radius:3px;background:'+(levelColor[row.level] || 'var(--dim)')+';color:#fff;flex-shrink:0;min-width:42px;text-align:center">'+row.level+'</span>'
+        +     '<div style="flex:1;min-width:0">'
+        +       '<div style="font-size:13px;color:var(--text);word-break:break-word">'+_e(row.message || '')+'</div>'
+        +       '<div style="font-size:11px;color:var(--dim);margin-top:3px;font-family:DM Mono,monospace">'
+        +         rel + ' · ' + (row.page || '—') + (isThis ? ' · this device' : ' · other device')
+        +       '</div>'
+        +     '</div>'
+        +     ((ctx || stack)
+              ? '<button onclick="document.getElementById(\''+detailsId+'\').style.display=document.getElementById(\''+detailsId+'\').style.display===\'block\'?\'none\':\'block\'" style="background:transparent;border:1px solid var(--border);color:var(--dim);padding:2px 8px;border-radius:3px;font-size:10px;cursor:pointer;flex-shrink:0">Details</button>'
+              : '')
+        +   '</div>'
+        +   ((ctx || stack)
+            ? '<pre id="'+detailsId+'" style="display:none;margin:8px 0 0;padding:10px;background:var(--bg4);border-radius:5px;font-family:DM Mono,monospace;font-size:10px;color:var(--text);white-space:pre-wrap;word-break:break-all;line-height:1.5;max-height:280px;overflow:auto">'
+                + (ctx ? _e(ctx) : '')
+                + (stack ? (ctx ? '\n\n--- Stack ---\n' : '') + _e(stack) : '')
+              +'</pre>'
+            : '')
+        + '</div>';
+    }).join('');
+    container.innerHTML = html;
+  } catch (err) {
+    container.innerHTML = '<div style="font-size:12px;color:var(--red);padding:14px 0">Load error: ' + _e(err.message) + '</div>';
+  }
+}
+
+async function cvClearErrorLog() {
+  if (!confirm('Delete all error log entries? This cannot be undone.')) return;
+  const sbUrl = (localStorage.getItem('cv_sb_url') || '').replace(/\/+$/, '');
+  const sbKey = localStorage.getItem('cv_sb_key') || '';
+  if (!sbUrl || !sbKey) { cvToast('Supabase not configured.', 'error'); return; }
+  try {
+    // Delete all rows. The dot-greater-than-zero trick: id is always >= 1.
+    const r = await fetch(sbUrl + '/rest/v1/error_log?id=gt.0', {
+      method: 'DELETE',
+      headers: { 'apikey': sbKey, 'authorization': 'Bearer ' + sbKey }
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    cvToast('Error log cleared.', 'ok');
+    cvLoadErrorLog();
+  } catch (err) {
+    cvToast('Clear failed: ' + err.message, 'error');
+  }
+}
+
+// Helpers used by the viewer
+function _e(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+function _cvRelativeTime(dt) {
+  const diff = (Date.now() - dt.getTime()) / 1000;
+  if (diff < 60) return Math.round(diff) + 's ago';
+  if (diff < 3600) return Math.round(diff / 60) + 'm ago';
+  if (diff < 86400) return Math.round(diff / 3600) + 'h ago';
+  if (diff < 86400 * 7) return Math.round(diff / 86400) + 'd ago';
+  return dt.toLocaleDateString();
+}
+
+// Global handlers — catch errors that escape try/catch blocks
+window.addEventListener('error', function(e) {
+  cvLogError(e.message || 'Uncaught error', {
+    filename: e.filename,
+    lineno: e.lineno,
+    colno: e.colno,
+    stack: e.error && e.error.stack
+  });
+});
+window.addEventListener('unhandledrejection', function(e) {
+  const r = e.reason || {};
+  cvLogError('Unhandled promise rejection: ' + (r.message || String(r)), {
+    stack: r.stack
+  });
+});
+
+// Fire the once-per-boot trim after a short delay (don't slow startup)
+setTimeout(cvTrimErrorLog, 4000);
+
 (function checkSetupHashOnBoot() {
   try {
     const m = (location.hash || '').match(/^#cv-setup=(.+)$/);
@@ -6332,6 +6561,11 @@ async function retryPendingSync() {
     const retryCount = (PENDING_EDIT_RETRIES[key] || 0) + 1;
     if (retryCount > MAX_EDIT_RETRIES) {
       console.warn('[retryPendingSync] Giving up on stuck edit after', retryCount, 'attempts:', key);
+      cvLogError('Stuck edit abandoned after ' + retryCount + ' retries', {
+        key: key,
+        retries: retryCount,
+        edit: PENDING_EDITS[key]
+      }, 'warn');
       continue;
     }
     PENDING_EDIT_RETRIES[key] = retryCount;
@@ -7092,6 +7326,28 @@ function renderSettings(){
 
         +'</div>';
     })(),
+
+    // ── Error Log (cross-device error capture for debugging) ─────────
+    (function() {
+      // Schedule a load right after this Settings render mounts, so the viewer
+      // populates without the user having to click anything. Uses setTimeout
+      // to defer until the DOM is in place.
+      setTimeout(function() {
+        if (typeof cvLoadErrorLog === 'function') cvLoadErrorLog();
+      }, 0);
+      return '<div class="stt">Error Log</div>'
+        +'<div style="background:var(--bg3);border:1px solid var(--border);border-radius:7px;padding:18px;margin-bottom:24px">'
+        +'<div style="font-size:13px;color:var(--text);line-height:1.6;margin-bottom:14px">'
+        +'Background errors captured from all your devices — Supabase sync failures, AI scan errors, abandoned retries. Stored in your <code>error_log</code> table; entries older than 30 days auto-delete.'
+        +'</div>'
+        +'<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px">'
+        +'<button class="bp" onclick="cvLoadErrorLog()" style="font-size:12px">↻ Refresh</button>'
+        +'<button class="bg" onclick="cvClearErrorLog()" style="font-size:12px;color:var(--red);border-color:rgba(255,80,80,.3);margin-left:auto">Clear All</button>'
+        +'</div>'
+        +'<div id="error-log-list" style="max-height:520px;overflow-y:auto"></div>'
+        +'</div>';
+    })(),
+
     (function(){
       let h = '<div class="stt">Sheets Sync Diagnostic</div>';
       if (!window._lastLoadDiag) {
@@ -7702,6 +7958,12 @@ async function submitAdd(){
       cvToast('Record #' + cn(rec.id) + ' added to "' + SHEET_LABELS[sheet] + '"', 'ok');
     } catch(ex) {
       console.error('[submitAdd] Supabase insert failed:', ex);
+      cvLogError('Supabase insert failed during Add Record', {
+        sheet: sheet,
+        id: rec.id,
+        message: ex.message,
+        stack: ex.stack
+      });
       // Record is in local memory but not Supabase — keep it visible and warn
       buildFlat(); updateBadges(); refreshSidebarTotal(); renderDash();
       resetAdd(); nav('inv');
@@ -8171,6 +8433,15 @@ async function aiAnalyze() {
   } catch (err) {
     statusEl.textContent = 'Error: ' + err.message;
     statusEl.className = 'ai-status error';
+    cvLogError('AI scan failed', {
+      provider: provider,
+      model: model,
+      hasFront: !!AI_FRONT_IMG,
+      hasBack: !!AI_BACK_IMG,
+      mode: AI_CAPTURE_MODE,
+      message: err.message,
+      stack: err.stack
+    });
   } finally {
     btn.disabled = false;
   }
