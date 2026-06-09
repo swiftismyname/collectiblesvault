@@ -125,11 +125,11 @@ tbody tr.sel td{background:rgba(201,168,76,.06)}
 .dg{background:var(--bg3);border:1px solid var(--border);border-radius:7px;margin-bottom:14px;overflow:hidden}
 .dgh{display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--border);font-size:13px}
 /* Detail panel */
-#detail-panel{width:340px;min-width:280px;max-width:80vw;background:#0c0b09;border-left:1px solid var(--border);display:none;flex-direction:column;overflow:hidden;flex-shrink:0;position:relative;transition:width .15s}
+#detail-panel{width:340px;min-width:280px;max-width:80vw;background:var(--bg2);border-left:1px solid var(--border);display:none;flex-direction:column;overflow:hidden;flex-shrink:0;position:relative;transition:width .15s, background .2s ease}
 #detail-panel.open{display:flex}
 #detail-panel.expanded{width:620px}
 #dp-resize-handle{position:absolute;left:0;top:0;bottom:0;width:5px;cursor:col-resize;background:transparent;z-index:10;transition:background .15s}
-#dp-resize-handle:hover{background:rgba(212,175,55,.3)}
+#dp-resize-handle:hover{background:var(--gold3)}
 .dp-header{padding:16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
 .dp-title{font-family:var(--font-display,'Cormorant Garamond',serif);font-size:17px;font-weight:600;line-height:1.3}
 .dp-body{padding:16px;overflow-y:auto;flex:1}
@@ -165,7 +165,7 @@ tbody tr.sel td{background:rgba(201,168,76,.06)}
 @media (max-width:480px){
   .dp-images{grid-template-columns:1fr}
 }
-.dp-row{display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid rgba(255,255,255,.04);font-size:12px;gap:8px}
+.dp-row{display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border);font-size:12px;gap:8px;opacity:.95}
 .dp-row:last-child{border-bottom:none}
 .dp-label{color:var(--muted);flex-shrink:0}
 .dp-value{color:var(--text);text-align:right;word-break:break-all}
@@ -208,7 +208,7 @@ body.theme-antiquity #sb{background:#ede4ca;border-right:1px solid #cdc0a0}
 body.theme-antiquity input,body.theme-antiquity select,body.theme-antiquity textarea{background:#fdfaf0;color:#1e140a;border-color:#cdc0a0}
 body.theme-antiquity select option{background:#fdfaf0}
 body.theme-antiquity .dp-header{background:#ede4ca;border-bottom:1px solid #cdc0a0}
-body.theme-antiquity #sync-banner{font-family:'Cormorant Garamond',serif;letter-spacing:.03em}
+body.theme-antiquity #sync-bar{font-family:var(--font-display,'Cormorant Garamond',serif);letter-spacing:.03em}
 
 /* Steel Vault — cool dark, steel blue */
 body.theme-steel{
@@ -222,7 +222,7 @@ body.theme-steel input,body.theme-steel select,body.theme-steel textarea{backgro
 body.theme-steel select option{background:#131928}
 body.theme-steel .ni.on,.theme-steel .ni:hover{background:rgba(74,136,200,.15)!important}
 body.theme-steel .nbadge{background:rgba(74,136,200,.2)!important;color:#4a88c8!important}
-body.theme-steel #sync-banner{font-family:'Karla',sans-serif;letter-spacing:.05em;text-transform:uppercase;font-size:11px}
+body.theme-steel #sync-bar{font-family:var(--font-body,'Karla',sans-serif);letter-spacing:.05em;text-transform:uppercase;font-size:11px}
 
 /* Emerald — deep forest dark, emerald accents */
 body.theme-emerald{
@@ -400,8 +400,8 @@ body.theme-modern-dark .vt{
 }
 
 /* Sync banner */
-body.theme-modern-light #sync-banner,
-body.theme-modern-dark #sync-banner{
+body.theme-modern-light #sync-bar,
+body.theme-modern-dark #sync-bar{
   font-family:var(--font-body);
   letter-spacing:0;
   border-radius:0 0 12px 12px;
@@ -498,7 +498,7 @@ body.theme-modern-dark select option{
     flex-shrink: 0;
   }
   #mobile-header .brand {
-    font-family: 'Cormorant Garamond', serif;
+    font-family: var(--font-display, 'Cormorant Garamond', serif);
     font-size: 17px; color: var(--gold); flex: 1;
     letter-spacing: .02em;
   }
@@ -540,7 +540,8 @@ body.theme-modern-dark select option{
     white-space: nowrap;
   }
   #mobile-tabs button.on { color: var(--gold); }
-  #mobile-tabs button .ic { font-size: 18px; line-height: 1; }
+  #mobile-tabs button .ic { font-size: 18px; line-height: 1; display:flex; align-items:center; justify-content:center; }
+  #mobile-tabs button .ic svg { width: 20px; height: 20px; display: block; }
   #mobile-tabs button .bdg {
     background: var(--gold); color: #000; font-size: 9px; padding: 1px 5px;
     border-radius: 8px; font-weight: 700; min-width: 16px; text-align: center;
@@ -556,6 +557,7 @@ body.theme-modern-dark select option{
       gap: 2px;
     }
     #mobile-tabs button .ic { font-size: 16px; }
+    #mobile-tabs button .ic svg { width: 17px; height: 17px; }
   }
   /* Main area: pad enough below content to clear the tab bar (~64px tall buttons)
      PLUS the safe-area inset, PLUS a generous breathing-room buffer.
@@ -777,6 +779,49 @@ body.theme-modern-dark select option{
   .splash-title{font-size:26px}
 }
 
+/* ─── TOAST NOTIFICATIONS ────────────────────────────────────────────
+   Non-blocking replacement for alert() in async hot paths. Shows in
+   bottom-right (or bottom-center on mobile) and auto-dismisses. Use
+   cvToast(message, type) where type is 'ok' | 'error' | 'info' | 'warn'. */
+#cv-toast-stack{
+  position:fixed; z-index:9500;
+  right:18px; bottom:18px;
+  display:flex; flex-direction:column-reverse; gap:8px;
+  pointer-events:none;
+  max-width:380px; width:calc(100% - 36px);
+}
+.cv-toast{
+  pointer-events:auto;
+  background:var(--bg2); color:var(--text);
+  border:1px solid var(--border); border-left:3px solid var(--gold);
+  border-radius:10px;
+  padding:11px 14px; font-size:13px; line-height:1.45;
+  box-shadow:0 8px 24px rgba(0,0,0,.30), 0 2px 6px rgba(0,0,0,.18);
+  font-family:var(--font-body, inherit);
+  display:flex; align-items:flex-start; gap:10px;
+  animation:cv-toast-in .22s ease-out;
+  transition:opacity .25s ease, transform .25s ease;
+}
+.cv-toast.leaving{opacity:0; transform:translateY(8px)}
+.cv-toast.ok    {border-left-color:var(--green)}
+.cv-toast.error {border-left-color:var(--red)}
+.cv-toast.warn  {border-left-color:#e0a500}
+.cv-toast .icn  {font-size:16px; line-height:1; flex-shrink:0; margin-top:1px}
+.cv-toast .msg  {flex:1; word-break:break-word}
+.cv-toast .dismiss{
+  background:transparent; border:none; color:var(--dim);
+  cursor:pointer; font-size:14px; padding:0 4px; line-height:1;
+  margin-left:6px;
+}
+.cv-toast .dismiss:hover{color:var(--text)}
+@keyframes cv-toast-in{
+  from{opacity:0; transform:translateY(12px)}
+  to  {opacity:1; transform:translateY(0)}
+}
+@media (max-width:600px){
+  #cv-toast-stack{left:12px; right:12px; bottom:90px; width:auto; max-width:none}
+}
+
 /* ─── AI SCAN MODAL ─────────────────────────────────────────────── */
 .ai-modal-bg{
   position:fixed; inset:0; z-index:9000;
@@ -923,6 +968,9 @@ body.theme-modern-dark select option{
 </style>
 </head>
 <body>
+<!-- Non-blocking toast notification stack -->
+<div id="cv-toast-stack" aria-live="polite" aria-atomic="false"></div>
+
 <!-- ═══════ PASSCODE SPLASH ═══════ -->
 <div id="splash" class="splash" role="dialog" aria-modal="true" aria-label="Enter passcode">
   <div class="splash-brand">
@@ -1086,11 +1134,23 @@ body.theme-modern-dark select option{
 //  Send the link to Device B (text/AirDrop/email/QR). Tap it to auto-import
 //  Supabase, GAS, AI keys, theme, and passcode. No manual paste required.
 // ════════════════════════════════════════════════════════════════════
-const SYNC_KEYS_BOOT = [
-  'cv_sb_url','cv_sb_key','cv_gsheets_url','cv_copper_price',
-  'cv_theme','cv_font','cv_passcode_hash','cv_ai_provider',
-  'cv_ai_key_gemini','cv_ai_key_anthropic',
-  'cv_ai_model_gemini','cv_ai_model_anthropic','cv_sheet_overrides'
+// SINGLE SOURCE OF TRUTH — every localStorage key that participates in cross-device sync.
+// Used by the setup-link boot handler below AND by Settings → Sync Settings export/import.
+// When adding a new transferable setting, add the key here ONCE — both code paths pick it up.
+const SYNC_KEYS = [
+  'cv_sb_url',
+  'cv_sb_key',
+  'cv_gsheets_url',
+  'cv_copper_price',
+  'cv_theme',
+  'cv_font',
+  'cv_passcode_hash',
+  'cv_ai_provider',
+  'cv_ai_key_gemini',
+  'cv_ai_key_anthropic',
+  'cv_ai_model_gemini',
+  'cv_ai_model_anthropic',
+  'cv_sheet_overrides'
 ];
 
 function b64UrlEncode(str) {
@@ -1101,6 +1161,40 @@ function b64UrlDecode(str) {
   str = String(str).replace(/-/g, '+').replace(/_/g, '/');
   while (str.length % 4) str += '=';
   return decodeURIComponent(escape(atob(str)));
+}
+
+// ─── TOAST NOTIFICATIONS ────────────────────────────────────────────
+// Non-blocking notification used in async hot paths (uploads, syncs,
+// errors during background ops). Usage:
+//   cvToast('Saved')                       — default 'ok' style
+//   cvToast('Upload failed', 'error')
+//   cvToast('Heads up…', 'warn')
+//   cvToast('Working', 'info', {duration: 0}) — sticky until dismissed
+// Returns a handle with .dismiss() so callers can clear it manually.
+function cvToast(message, type, opts) {
+  type = type || 'ok';
+  opts = opts || {};
+  const duration = (opts.duration != null) ? opts.duration : (type === 'error' ? 6000 : 3500);
+  const stack = document.getElementById('cv-toast-stack');
+  if (!stack) { console.log('[toast]', type, message); return { dismiss: function(){} }; }
+  const el = document.createElement('div');
+  el.className = 'cv-toast ' + type;
+  const icons = { ok: '✓', error: '✕', warn: '⚠', info: 'ⓘ' };
+  el.innerHTML =
+    '<span class="icn">' + (icons[type] || '') + '</span>' +
+    '<span class="msg"></span>' +
+    '<button class="dismiss" aria-label="Dismiss">×</button>';
+  el.querySelector('.msg').textContent = String(message);
+  let removed = false;
+  function remove() {
+    if (removed) return; removed = true;
+    el.classList.add('leaving');
+    setTimeout(function() { if (el.parentNode) el.parentNode.removeChild(el); }, 280);
+  }
+  el.querySelector('.dismiss').addEventListener('click', remove);
+  stack.appendChild(el);
+  if (duration > 0) setTimeout(remove, duration);
+  return { dismiss: remove };
 }
 
 (function checkSetupHashOnBoot() {
@@ -1116,7 +1210,7 @@ function b64UrlDecode(str) {
     if (!confirm('SETUP LINK DETECTED\n\nApply ' + count + ' settings from another device?\n\nThis will overwrite Supabase config, API keys, theme, and passcode on this device with the values from the link.')) return;
     let applied = 0;
     Object.keys(parsed.data).forEach(function(k) {
-      if (SYNC_KEYS_BOOT.indexOf(k) === -1) return;
+      if (SYNC_KEYS.indexOf(k) === -1) return;
       if (typeof parsed.data[k] !== 'string') return;
       localStorage.setItem(k, parsed.data[k]);
       applied++;
@@ -3420,7 +3514,7 @@ async function _icgApply(item, updates) {
       await updateRecordInSheets(item.sheet, cn(item.id), updates);
       alert('✅ #' + cn(item.id) + ' — ' + n + ' ICG field' + (n!==1?'s':'') + ' saved ✓');
     } catch(ex) {
-      alert('Updated locally — sync failed: ' + ex.message);
+      cvToast('Updated locally — sync failed: ' + ex.message, 'warn');
     }
   } else {
     alert('✅ #' + cn(item.id) + ' — ' + n + ' ICG field' + (n!==1?'s':'') + ' saved.');
@@ -3613,7 +3707,7 @@ async function _ngcApply(item, updates) {
       await updateRecordInSheets(item.sheet, cn(item.id), updates);
       alert('✅ #' + cn(item.id) + ' — ' + n + ' NGC field' + (n!==1?'s':'') + ' saved ✓');
     } catch(ex) {
-      alert('Supabase save succeeded — Sheets backup failed: ' + ex.message);
+      cvToast('Saved to Supabase — Sheets backup failed: ' + ex.message, 'warn');
     }
   } else {
     alert('✅ #' + cn(item.id) + ' — ' + n + ' NGC field' + (n!==1?'s':'') + ' saved.');
@@ -4265,7 +4359,7 @@ async function _pcgsApply(item, updates) {
       await updateRecordInSheets(item.sheet, cn(item.id), updates);
       alert('✅ #' + cn(item.id) + ' — ' + n + ' field' + (n!==1?'s':'') + ' from PCGS saved ✓');
     } catch(ex) {
-      alert('Supabase save succeeded — Sheets backup failed: ' + ex.message);
+      cvToast('Saved to Supabase — Sheets backup failed: ' + ex.message, 'warn');
     }
   } else {
     alert('✅ #' + cn(item.id) + ' — ' + n + ' field' + (n!==1?'s':'') + ' applied from PCGS.');
@@ -4576,7 +4670,7 @@ async function _numistaApply(item, updates) {
       await updateRecordInSheets(item.sheet, cn(item.id), updates);
       alert('✅ Record #' + cn(item.id) + ' — ' + n + ' field' + (n!==1?'s':'') + ' from Numista saved ✓');
     } catch(ex) {
-      alert('Updated locally — Google Sheets sync failed: ' + ex.message);
+      cvToast('Updated locally — Google Sheets sync failed: ' + ex.message, 'warn');
     }
   } else {
     alert('✅ Record #' + cn(item.id) + ' — ' + n + ' field' + (n!==1?'s':'') + ' applied from Numista. Connect Google Sheets to sync.');
@@ -5151,7 +5245,7 @@ async function _lmApply(item, updates) {
       await updateRecordInSheets(item.sheet, cn(item.id), updates);
       alert('✅ Record #' + cn(item.id) + ' — ' + n + ' field' + (n!==1?'s':'') + ' saved ✓');
     } catch(ex) {
-      alert('Updated locally — Google Sheets sync failed: ' + ex.message);
+      cvToast('Updated locally — Google Sheets sync failed: ' + ex.message, 'warn');
     }
   } else {
     alert('✅ Record #' + cn(item.id) + ' — ' + n + ' field' + (n!==1?'s':'') + ' applied! Connect Google Sheets to sync.');
@@ -6217,7 +6311,7 @@ function updateSyncBanner(state, detail) {
     local: ['rgba(201,168,76,.1)','rgba(201,168,76,.3)','#c9a84c','&#9888; ' + (detail || 1) + ' record(s) pending sync']
   };
   const m = S[state] || S.none;
-  bar.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:7px 18px;font-size:12px;background:' + m[0] + ';border-bottom:1px solid ' + m[1] + ';color:' + m[2];
+  bar.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:7px 18px;font-size:12px;font-family:var(--font-body,inherit);background:' + m[0] + ';border-bottom:1px solid ' + m[1] + ';color:' + m[2];
   // Show sync button if either backend is connected (and not currently syncing)
   const showBtn = (GSHEETS_URL || (SB_URL && SB_KEY)) && state !== 'load' && state !== 'sync' && state !== 'syncing';
   const btn = showBtn
@@ -6856,7 +6950,7 @@ function renderSettings(){
           keyHost: 'aistudio.google.com',
           keyPrefix: 'AIza… or AQ…',
           keyHelp: 'Sign in with any Google account, click "Create API key", copy and paste below.',
-          models: ['gemini-flash-latest', 'gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash']
+          models: (typeof AI_MODELS !== 'undefined' ? AI_MODELS.gemini : ['gemini-flash-latest'])
         },
         anthropic: {
           label: 'Anthropic Claude',
@@ -6865,13 +6959,14 @@ function renderSettings(){
           keyHost: 'console.anthropic.com',
           keyPrefix: 'sk-ant-…',
           keyHelp: 'Create an Anthropic account, generate a key in Settings → API Keys.',
-          models: ['claude-sonnet-4-5', 'claude-opus-4-5', 'claude-haiku-4-5']
+          models: (typeof AI_MODELS !== 'undefined' ? AI_MODELS.anthropic : ['claude-sonnet-4-5'])
         }
       };
       const info = providerInfo[provider];
 
+      const recDefault = (typeof AI_MODEL_DEFAULTS !== 'undefined') ? AI_MODEL_DEFAULTS[provider] : info.models[0];
       const modelOpts = info.models.map(function(m){
-        const rec = (m === (provider === 'gemini' ? 'gemini-flash-latest' : 'claude-sonnet-4-5')) ? ' (recommended)' : '';
+        const rec = (m === recDefault) ? ' (recommended)' : '';
         return '<option value="'+m+'"'+(m===savedModel?' selected':'')+'>'+m+rec+'</option>';
       }).join('');
 
@@ -6924,6 +7019,7 @@ function renderSettings(){
         +'<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px">'
         +'<button class="bp" onclick="saveAIKey()">Save</button>'
         +(savedKey ? '<button class="bg" onclick="openAIScan()" style="font-size:12px">📸 Test Scan</button>' : '')
+        +(savedKey ? '<button class="bg" onclick="cleanOrphanedImages()" style="font-size:12px" title="Scan Supabase Storage and delete images not referenced by any record">🧹 Clean Orphaned Images</button>' : '')
         +(savedKey ? '<button class="bg" onclick="clearAIKey()" style="font-size:12px;color:var(--red);border-color:rgba(255,80,80,.3);margin-left:auto">Remove Key</button>' : '')
         +'</div>'
         +'</div>';
@@ -7603,24 +7699,24 @@ async function submitAdd(){
       renderDash();
       resetAdd();
       nav('inv');
-      alert('Record #' + cn(rec.id) + ' added to "' + SHEET_LABELS[sheet] + '" and saved to Supabase.');
+      cvToast('Record #' + cn(rec.id) + ' added to "' + SHEET_LABELS[sheet] + '"', 'ok');
     } catch(ex) {
       console.error('[submitAdd] Supabase insert failed:', ex);
       // Record is in local memory but not Supabase — keep it visible and warn
       buildFlat(); updateBadges(); refreshSidebarTotal(); renderDash();
       resetAdd(); nav('inv');
-      alert('⚠ Record #' + cn(rec.id) + ' was added locally but Supabase sync failed.\n\nError: ' + ex.message + '\n\nTry clicking Sync Now to retry.');
+      cvToast('Record #' + cn(rec.id) + ' added locally but Supabase sync failed — try Sync Now', 'error', {duration: 8000});
     }
   } else if (GSHEETS_URL) {
     const btn = document.querySelector('#content button.bp');
     if (btn) { btn.disabled = true; btn.textContent = 'Saving to Sheets...'; }
     syncRecordToSheets(sheet, {...rec}).then(sid => {
-      if (sid) alert('Record #' + cn(sid) + ' saved to Google Sheets in "' + SHEET_LABELS[sheet] + '" and queued for label.');
-      else     alert('Saved locally (ID: ' + cn(rec.id) + '). Sheets sync failed — check banner for details.');
+      if (sid) cvToast('Record #' + cn(sid) + ' saved to "' + SHEET_LABELS[sheet] + '"', 'ok');
+      else     cvToast('Saved locally (#' + cn(rec.id) + ') — Sheets sync failed', 'warn');
       renderAdd();
     });
   } else {
-    alert('Record #' + rec.id + ' added to ' + SHEET_LABELS[sheet] + '.\n\nConnect Supabase or Google Sheets in Settings to sync everywhere.');
+    cvToast('Record #' + rec.id + ' added locally — connect Supabase to sync', 'warn');
     resetAdd(); renderAdd();
   }
 }
@@ -8417,25 +8513,187 @@ async function uploadImageToSupabase(dataUrl, prefix) {
   return sbUrl + '/storage/v1/object/public/' + IMAGE_BUCKET + '/' + filename;
 }
 
+// ─── IMAGE ORPHAN CLEANUP ────────────────────────────────────────────
+// Lists all files in the coin-images bucket, compares to the set of URLs
+// referenced by any record, and deletes the leftovers. Pages through
+// Storage 100 files at a time. Skips files modified in the last 60 min
+// to avoid racing with in-flight scans whose record hasn't saved yet.
+function _extractStorageFilename(url) {
+  if (!url) return null;
+  const s = String(url);
+  const i = s.lastIndexOf('/' + IMAGE_BUCKET + '/');
+  if (i >= 0) return decodeURIComponent(s.slice(i + IMAGE_BUCKET.length + 2));
+  // Fallback: last path segment
+  const slash = s.lastIndexOf('/');
+  return slash >= 0 ? decodeURIComponent(s.slice(slash + 1)) : null;
+}
+
+async function _listStorageBucket(sbUrl, sbKey) {
+  const all = [];
+  const PAGE = 100;
+  let offset = 0;
+  for (let loops = 0; loops < 200; loops++) {  // hard cap at 20,000 files
+    const r = await fetch(sbUrl + '/storage/v1/object/list/' + IMAGE_BUCKET, {
+      method: 'POST',
+      headers: {
+        'apikey': sbKey,
+        'authorization': 'Bearer ' + sbKey,
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({
+        prefix: '',
+        limit: PAGE,
+        offset: offset,
+        sortBy: { column: 'name', order: 'asc' }
+      })
+    });
+    if (!r.ok) {
+      const txt = await r.text();
+      throw new Error('Could not list bucket (' + r.status + '): ' + txt.slice(0, 200));
+    }
+    const page = await r.json();
+    if (!Array.isArray(page) || page.length === 0) break;
+    all.push.apply(all, page);
+    if (page.length < PAGE) break;
+    offset += PAGE;
+  }
+  return all;
+}
+
+function _collectReferencedImageFilenames() {
+  // Walk every loaded record across every sheet, pull out image URLs,
+  // extract their filenames. Returns a Set for fast lookup.
+  const refs = new Set();
+  if (typeof ALL_ITEMS === 'undefined' || !ALL_ITEMS.length) return refs;
+  ALL_ITEMS.forEach(function(item) {
+    const raw = item.raw || {};
+    [raw.imageFrontUrl, raw.imagefronturl, raw.imageBackUrl, raw.imagebackurl,
+     raw.image_front_url, raw.image_back_url].forEach(function(u) {
+      const fn = _extractStorageFilename(u);
+      if (fn) refs.add(fn);
+    });
+  });
+  // Also catch any pending unsaved scan URLs from this session
+  if (window.PENDING_AI_IMAGES) {
+    const fn1 = _extractStorageFilename(window.PENDING_AI_IMAGES.front);
+    const fn2 = _extractStorageFilename(window.PENDING_AI_IMAGES.back);
+    if (fn1) refs.add(fn1);
+    if (fn2) refs.add(fn2);
+  }
+  return refs;
+}
+
+function _formatFileSize(bytes) {
+  if (!bytes) return '0 B';
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / 1024 / 1024).toFixed(2) + ' MB';
+}
+
+async function cleanOrphanedImages() {
+  const sbUrl = (localStorage.getItem('cv_sb_url') || '').replace(/\/$/, '');
+  const sbKey = localStorage.getItem('cv_sb_key') || '';
+  if (!sbUrl || !sbKey) {
+    cvToast('Supabase not configured — set URL/key in Settings → Database first.', 'error');
+    return;
+  }
+
+  // Safety check: refuse to run if records didn't load cleanly. If ALL_ITEMS
+  // is empty, we'd think every image is orphaned and nuke everything.
+  if (!ALL_ITEMS || ALL_ITEMS.length === 0) {
+    cvToast('Your collection hasn\'t loaded yet — wait for Supabase sync and try again.', 'error');
+    return;
+  }
+
+  const progress = cvToast('Scanning Storage bucket…', 'info', { duration: 0 });
+
+  let files;
+  try {
+    files = await _listStorageBucket(sbUrl, sbKey);
+  } catch (err) {
+    progress.dismiss();
+    cvToast('Bucket scan failed: ' + err.message, 'error');
+    return;
+  }
+
+  progress.dismiss();
+
+  if (!files.length) {
+    cvToast('Bucket is empty — nothing to clean.', 'ok');
+    return;
+  }
+
+  const refs = _collectReferencedImageFilenames();
+  const cutoff = Date.now() - 60 * 60 * 1000;  // 60 min ago — skip very recent files
+  const orphans = [];
+  let orphanBytes = 0;
+
+  files.forEach(function(f) {
+    if (!f || !f.name) return;
+    if (refs.has(f.name)) return;
+    // Skip recently-modified files (might be mid-upload race)
+    const ts = Date.parse(f.updated_at || f.created_at || '');
+    if (isFinite(ts) && ts > cutoff) return;
+    orphans.push(f.name);
+    orphanBytes += (f.metadata && f.metadata.size) || 0;
+  });
+
+  if (!orphans.length) {
+    cvToast('No orphans found — ' + files.length + ' file' + (files.length === 1 ? '' : 's') + ' all referenced.', 'ok');
+    return;
+  }
+
+  const sizeStr = _formatFileSize(orphanBytes);
+  if (!confirm(
+    'Delete ' + orphans.length + ' orphaned image' + (orphans.length === 1 ? '' : 's') +
+    ' (' + sizeStr + ')?\n\n' +
+    'These files exist in Storage but no record references them — they\'re from scans you didn\'t save, deleted records, or replaced images.\n\n' +
+    'This action cannot be undone. Files modified in the last 60 minutes are excluded.'
+  )) {
+    cvToast('Cleanup cancelled.', 'info');
+    return;
+  }
+
+  const delProg = cvToast('Deleting ' + orphans.length + ' file' + (orphans.length === 1 ? '' : 's') + '…', 'info', { duration: 0 });
+
+  // Supabase bulk-delete endpoint
+  let deleted = 0, errors = 0;
+  try {
+    const r = await fetch(sbUrl + '/storage/v1/object/' + IMAGE_BUCKET, {
+      method: 'DELETE',
+      headers: {
+        'apikey': sbKey,
+        'authorization': 'Bearer ' + sbKey,
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({ prefixes: orphans })
+    });
+    if (!r.ok) {
+      const txt = await r.text();
+      throw new Error('HTTP ' + r.status + ': ' + txt.slice(0, 200));
+    }
+    const result = await r.json();
+    deleted = Array.isArray(result) ? result.length : orphans.length;
+  } catch (err) {
+    errors = orphans.length;
+    console.error('[cleanOrphans] delete failed:', err);
+  }
+
+  delProg.dismiss();
+
+  if (errors) {
+    cvToast('Delete failed: ' + errors + ' file' + (errors === 1 ? '' : 's') + ' could not be removed. Check console.', 'error');
+  } else {
+    cvToast('✓ ' + deleted + ' orphan' + (deleted === 1 ? '' : 's') + ' deleted, ' + sizeStr + ' freed.', 'ok');
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════════
-//  SETTINGS SYNC — Export config from one device, import on another
+//  SETTINGS SYNC — Export config from one device, import on another.
 //  Covers Supabase config, API keys, passcode, theme, preferences.
+//  NOTE: The transferable key list lives in SYNC_KEYS at the top of
+//  this script (single source of truth). Don't declare it again here.
 // ═══════════════════════════════════════════════════════════════════
-const SYNC_KEYS = [
-  'cv_sb_url',
-  'cv_sb_key',
-  'cv_gsheets_url',
-  'cv_copper_price',
-  'cv_theme',
-  'cv_font',
-  'cv_passcode_hash',
-  'cv_ai_provider',
-  'cv_ai_key_gemini',
-  'cv_ai_key_anthropic',
-  'cv_ai_model_gemini',
-  'cv_ai_model_anthropic',
-  'cv_sheet_overrides'
-];
 
 function syncBuildExport() {
   const data = {};
@@ -8608,7 +8866,7 @@ async function syncShowQRCode() {
 }
 </script>
 <div id="mobile-tabs">
-  <button data-v="dash" onclick="nav('dash')"><span class="ic">📊</span><span>Dashboard</span></button>
+  <button data-v="dash" onclick="nav('dash')"><span class="ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/></svg></span><span>Dashboard</span></button>
   <button data-v="inv" onclick="nav('inv')"><span class="ic">📋</span><span>Inventory</span><span class="bdg" id="m-b-total">0</span></button>
   <button data-v="add" onclick="nav('add')"><span class="ic">＋</span><span>Add</span></button>
   <button data-v="labels" onclick="nav('labels')"><span class="ic">🏷️</span><span>Labels</span><span class="bdg" id="m-b-labels">0</span></button>
