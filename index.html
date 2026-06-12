@@ -3684,26 +3684,20 @@ function showDetail(item){
     ${displayWeight?`<div class="dp-row"><span class="dp-label">Weight</span><span class="dp-value">${e(displayWeight)}</span></div>`:''}
     ${liveMelt>0?`<div class="dp-row"><span class="dp-label">Live Melt Value</span><span class="dp-value mono" style="color:var(--gold)" title="${e(meltLabel)}">${fmt$(liveMelt)}</span></div>`:''}
     ${(function(){
-      const mod = _fmtModified(item.raw);
-      if (!mod) return '';
-      // Tooltip shows exact local timestamp; visible text shows relative ("2h ago")
-      const rawTs = item.raw && item.raw._modifiedAt;
-      let full = '';
-      try { full = rawTs ? new Date(rawTs).toLocaleString() : ''; } catch(_) {}
-      return `<div class="dp-row"><span class="dp-label">Last Modified</span><span class="dp-value" style="color:var(--dim);font-size:11px" title="${e(full)}">${e(mod)}</span></div>`;
-    })()}
-    ${(function(){
-      // eBay sold range — only render if we have at least min or max captured
+      // eBay sold range — sits with the other pricing rows so it's hard to miss.
+      // Magenta-tinted background distinguishes it from melt (gold) and value rows.
       const r = item.raw || {};
       const mn = r.ebayMinSold, mx = r.ebayMaxSold, av = r.ebayAvgSold, ct = r.ebayCount;
-      if (mn == null && mx == null) return '';
+      const hasMin = mn != null && !isNaN(parseFloat(mn));
+      const hasMax = mx != null && !isNaN(parseFloat(mx));
+      if (!hasMin && !hasMax) return '';
       let range;
-      if (mn != null && mx != null) range = fmt$(mn) + ' &ndash; ' + fmt$(mx);
-      else if (mn != null)          range = 'from ' + fmt$(mn);
-      else                          range = 'up to ' + fmt$(mx);
+      if (hasMin && hasMax) range = fmt$(mn) + ' &ndash; ' + fmt$(mx);
+      else if (hasMin)      range = 'from ' + fmt$(mn);
+      else                  range = 'up to ' + fmt$(mx);
       const extras = [];
-      if (av != null) extras.push('avg ' + fmt$(av));
-      if (ct != null) extras.push(ct + ' comp' + (ct === 1 ? '' : 's'));
+      if (av != null && !isNaN(parseFloat(av))) extras.push('avg ' + fmt$(av));
+      if (ct != null && !isNaN(parseFloat(ct))) extras.push(parseInt(ct,10) + ' comp' + (parseInt(ct,10) === 1 ? '' : 's'));
       // Show "checked X ago" from _tpgApplied.ebay timestamp
       const ts = (r._tpgApplied && r._tpgApplied.ebay) || null;
       if (ts) {
@@ -3714,8 +3708,18 @@ function showDetail(item){
           }
         } catch(_) {}
       }
-      const suffix = extras.length ? ' <span style="color:var(--dim);font-size:11px">(' + extras.join(', ') + ')</span>' : '';
-      return `<div class="dp-row"><span class="dp-label">eBay Sold Range</span><span class="dp-value mono" style="color:var(--accent-ebay)">${range}${suffix}</span></div>`;
+      const suffix = extras.length ? ' <span style="color:var(--dim);font-size:11px;font-weight:normal">(' + extras.join(', ') + ')</span>' : '';
+      const notesRow = r.ebayNotes ? `<div style="font-size:11px;color:var(--muted);font-style:italic;padding:4px 12px 8px;background:var(--accent-ebay-bg);border-left:3px solid var(--accent-ebay-bd);margin-top:-1px">"${e(r.ebayNotes)}"</div>` : '';
+      return `<div class="dp-row" style="background:var(--accent-ebay-bg);border-left:3px solid var(--accent-ebay-bd);padding-left:9px;margin-left:-3px"><span class="dp-label" style="color:var(--accent-ebay)">💵 eBay Sold</span><span class="dp-value mono" style="color:var(--accent-ebay);font-weight:600">${range}${suffix}</span></div>${notesRow}`;
+    })()}
+    ${(function(){
+      const mod = _fmtModified(item.raw);
+      if (!mod) return '';
+      // Tooltip shows exact local timestamp; visible text shows relative ("2h ago")
+      const rawTs = item.raw && item.raw._modifiedAt;
+      let full = '';
+      try { full = rawTs ? new Date(rawTs).toLocaleString() : ''; } catch(_) {}
+      return `<div class="dp-row"><span class="dp-label">Last Modified</span><span class="dp-value" style="color:var(--dim);font-size:11px" title="${e(full)}">${e(mod)}</span></div>`;
     })()}
     <div class="dp-section">All Fields</div>
     ${rows}
@@ -3824,6 +3828,34 @@ function showDetail(item){
       ebayBtn.style.cssText = 'background:var(--accent-ebay-bg);border-color:var(--accent-ebay-bd);color:var(--accent-ebay)';
       ebayBtn.onclick = () => lookupEbay(item);
       actions.appendChild(ebayBtn);
+    }
+    // Paper-money-only reference buttons — pure browse links, no data capture.
+    // Shown for usNotes / confederate / obsolete / fractional / foreignNotes.
+    const paperSheets = ['usNotes','confederate','obsolete','fractional','foreignNotes'];
+    if (paperSheets.includes(item.sheet)) {
+      const uspBtn = document.createElement('button');
+      uspBtn.className = 'lookup-btn';
+      uspBtn.textContent = '📖 USPaperMoney';
+      uspBtn.title = 'Open uspapermoney.info reference (free, comprehensive US paper money DB)';
+      uspBtn.style.cssText = 'background:var(--accent-info-bg);border-color:var(--accent-info-bd);color:var(--accent-info)';
+      uspBtn.onclick = () => lookupUSPaperMoney(item);
+      actions.appendChild(uspBtn);
+
+      const pmgBtn = document.createElement('button');
+      pmgBtn.className = 'lookup-btn';
+      pmgBtn.textContent = '🔍 PMG';
+      pmgBtn.title = 'Open PMG cert/search lookup';
+      pmgBtn.style.cssText = 'background:var(--accent-ngc-bg);border-color:var(--accent-ngc-bd);color:var(--accent-ngc)';
+      pmgBtn.onclick = () => lookupPMG(item);
+      actions.appendChild(pmgBtn);
+
+      const hcBtn = document.createElement('button');
+      hcBtn.className = 'lookup-btn';
+      hcBtn.textContent = '📚 Heritage';
+      hcBtn.title = 'Search the Heritage Currency auction archive for past realized prices';
+      hcBtn.style.cssText = 'background:var(--accent-pcgs-bg);border-color:var(--accent-pcgs-bd);color:var(--accent-pcgs)';
+      hcBtn.onclick = () => lookupHeritage(item);
+      actions.appendChild(hcBtn);
     }
     const delBtn = document.createElement('button');
     delBtn.className = 'bg';
@@ -5874,18 +5906,77 @@ function _ebayBuildQuery(item) {
     seen.add(k);
     parts.push(s);
   }
-  // Coins / currency: year, mint, denomination, series, variety, grade, auth
-  pushIfNew(r.year || r.Year);
-  pushIfNew(r.mint || r.Mint || r.mintMark);
-  pushIfNew(r.denomination || r.Denomination);
-  pushIfNew(r.series || r.Series || r.type);
-  pushIfNew(r.variety || r.Variety);
-  pushIfNew(r.grade || r.Grade);
-  const auth = r.gradingAuth || r['Grading Authority'];
-  if (auth && /^(PCGS|NGC|ICG|ANACS)$/i.test(String(auth).trim())) pushIfNew(auth);
+  const isPaperSheet = ['usNotes','confederate','obsolete','fractional','foreignNotes'].includes(item && item.sheet);
+  if (isPaperSheet) {
+    // Banknote-shaped query — eBay sold filter responds much better to
+    // catalog-number + series + denomination than to a free-form description.
+    pushIfNew(r.series || r.Series);
+    pushIfNew(r.denomination || r.Denomination);
+    pushIfNew(r.noteType);                          // "Silver Certificate", "Federal Reserve Note", etc.
+    pushIfNew(r.frNum || r.Friedberg);              // Fr.1606
+    pushIfNew(r.pickNumber);                        // P-75 (foreign)
+    pushIfNew(r.criswell);                          // Cr.540 (Confederate)
+    if (r.charter) pushIfNew('Charter ' + r.charter);   // "Charter 4321"
+    if (r.bankName) pushIfNew(r.bankName);
+    if (r.signatures) pushIfNew(r.signatures.split('/')[0].trim()); // first signer alone — full combo over-narrows
+    pushIfNew(r.country || r.Country);
+    pushIfNew(r.grade || r.Grade);
+    const auth = r.gradingAuth || r['Grading Authority'];
+    if (auth && /^(PMG|PCGS\s*Banknote|CGA|CGCS?)$/i.test(String(auth).trim())) pushIfNew(auth);
+  } else {
+    // Coins / currency: year, mint, denomination, series, variety, grade, auth
+    pushIfNew(r.year || r.Year);
+    pushIfNew(r.mint || r.Mint || r.mintMark);
+    pushIfNew(r.denomination || r.Denomination);
+    pushIfNew(r.series || r.Series || r.type);
+    pushIfNew(r.variety || r.Variety);
+    pushIfNew(r.grade || r.Grade);
+    const auth = r.gradingAuth || r['Grading Authority'];
+    if (auth && /^(PCGS|NGC|ICG|ANACS)$/i.test(String(auth).trim())) pushIfNew(auth);
+  }
   // Fall back to description if we got nothing useful
   if (parts.length < 2 && item && item.desc) pushIfNew(item.desc);
   return parts.join(' ').trim();
+}
+
+// Free external reference lookups for paper money. Each opens the resource in
+// a new tab with a sensible pre-built query — same pattern as the eBay button,
+// but no data capture (these are pure reference links, not edit flows).
+function _paperMoneyQuery(item) {
+  // A query string useful across reference sites: series + denomination + type/Friedberg
+  const r = (item && item.raw) || {};
+  const bits = [];
+  function push(v) { if (v != null && String(v).trim()) bits.push(String(v).trim()); }
+  push(r.frNum || r.pickNumber || r.criswell);
+  push(r.series); push(r.denomination); push(r.noteType);
+  if (!bits.length && item && item.desc) push(item.desc);
+  return bits.join(' ').trim();
+}
+
+function lookupUSPaperMoney(item) {
+  // uspapermoney.info is a free comprehensive US paper money reference but has
+  // limited deep-link URLs. Best path: Google site-search restricted to its domain.
+  const q = encodeURIComponent(_paperMoneyQuery(item));
+  window.open('https://www.google.com/search?q=site%3Auspapermoney.info+' + q, '_blank', 'noopener');
+}
+
+function lookupPMG(item) {
+  // PMG's free cert lookup. If we have a cert/serial, use it; otherwise fall back
+  // to the general search.
+  const r = (item && item.raw) || {};
+  const cert = String(r.serial || r.certNumber || '').replace(/\D+/g, '');
+  if (cert && /^[\d]{6,10}$/.test(cert)) {
+    window.open('https://www.pmgnotes.com/lookup/?CertNo=' + encodeURIComponent(cert), '_blank', 'noopener');
+  } else {
+    const q = encodeURIComponent(_paperMoneyQuery(item));
+    window.open('https://www.pmgnotes.com/search-results?searchterm=' + q, '_blank', 'noopener');
+  }
+}
+
+function lookupHeritage(item) {
+  // Heritage Currency archive — free auction history search with realized prices.
+  const q = encodeURIComponent(_paperMoneyQuery(item));
+  window.open('https://currency.ha.com/c/search/results.zx?Ntt=' + q, '_blank', 'noopener');
 }
 
 // Build the eBay search URL with the sold-filter applied. LH_Sold=1 limits to
@@ -6015,10 +6106,11 @@ async function _ebayApply(item, modal) {
   await _tpgApply(item, updates, 'eBay');
   if (modal) modal.remove();
   cvToast('eBay sold values saved', 'ok');
-  // Re-render detail panel if currently showing this item
-  if (typeof ST !== 'undefined' && ST.selItem === item && typeof showDetail === 'function') {
-    showDetail(item);
-  }
+  // Always show the detail panel after Apply so the user sees the captured
+  // values immediately — even when the eBay button was clicked from the
+  // inventory list (where _tpgApply's auto-re-render wouldn't have fired
+  // because ST.selItem wasn't this item at the time of click).
+  if (typeof showDetail === 'function') showDetail(item);
 }
 // #endregion [TPG-EBAY]
 
@@ -8238,11 +8330,11 @@ const SCHEMAS = {
   rawUS:         [{f:'type',l:'Type',t:'text',ph:'Cent, Nickel…'},{f:'series',l:'Series',t:'text',ph:'Lincoln Cent'},{f:'denomination',l:'Denomination',t:'text',ph:'$0.01'},{f:'grade',l:'Grade',t:'text',ph:'VF 20'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'Raw'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
   gradedForeign: [{f:'country',l:'Country',t:'text',ph:'UK'},{f:'series',l:'Series',t:'text',ph:'Sovereign'},{f:'denomination',l:'Denomination',t:'text',ph:'1 Pound'},{f:'grade',l:'Grade',t:'text',ph:'MS 63'},{f:'serial',l:'Serial #',t:'text',ph:''},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'NGC'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
   rawForeign:    [{f:'country',l:'Country',t:'text',ph:'UK'},{f:'series',l:'Series',t:'text',ph:'Sovereign'},{f:'denomination',l:'Denomination',t:'text',ph:'1 Pound'},{f:'grade',l:'Grade',t:'text',ph:'VF 20'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'Raw'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
-  usNotes:       [{f:'series',l:'Series',t:'text',ph:'1935'},{f:'denomination',l:'Denomination',t:'text',ph:'$1'},{f:'serial',l:'Serial #',t:'text',ph:''},{f:'grade',l:'Grade',t:'text',ph:'Fine 15'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'PMG'},{f:'type',l:'Type',t:'text',ph:'Silver Certificate'},{f:'frNum',l:'Fr#',t:'text',ph:'Fr. 1606'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
-  confederate:   [{f:'state',l:'State/Issuer',t:'text',ph:'Confederate States'},{f:'series',l:'Series',t:'text',ph:'T-68'},{f:'denomination',l:'Denomination',t:'text',ph:'$10'},{f:'serial',l:'Serial #',t:'text',ph:''},{f:'grade',l:'Grade',t:'text',ph:'VF 25'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'PMG'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
-  obsolete:      [{f:'state',l:'State',t:'text',ph:'Georgia'},{f:'series',l:'Bank/Issuer',t:'text',ph:'Bank of Georgia'},{f:'denomination',l:'Denomination',t:'text',ph:'$5'},{f:'serial',l:'Serial #',t:'text',ph:''},{f:'grade',l:'Grade',t:'text',ph:'Fine 12'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'PMG'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
-  foreignNotes:  [{f:'country',l:'Country',t:'text',ph:'Germany'},{f:'series',l:'Series',t:'text',ph:'Weimar Republic'},{f:'denomination',l:'Denomination',t:'text',ph:'1000 Mark'},{f:'serial',l:'Serial #',t:'text',ph:''},{f:'grade',l:'Grade',t:'text',ph:'VF 30'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'PMG'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
-  fractional:    [{f:'denomination',l:'Denomination',t:'text',ph:'50 Cents'},{f:'series',l:'Series',t:'text',ph:'5th Issue'},{f:'grade',l:'Grade',t:'text',ph:'CH UNC 65'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'PMG'},{f:'frNum',l:'Fr#',t:'text',ph:'Fr. 1309'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
+  usNotes:       [{f:'series',l:'Series',t:'text',ph:'1934A'},{f:'denomination',l:'Denomination',t:'text',ph:'$1'},{f:'noteType',l:'Note Type',t:'text',ph:'Federal Reserve Note, Silver Cert, Gold Cert, US Note, National…'},{f:'frNum',l:'Friedberg #',t:'text',ph:'Fr.1606'},{f:'signatures',l:'Signatures',t:'text',ph:'Tate / Mellon'},{f:'serial',l:'Serial #',t:'text',ph:''},{f:'blockLetter',l:'Block Letter',t:'text',ph:'B-A'},{f:'plate',l:'Plate Position',t:'text',ph:'A1, B2…'},{f:'sealColor',l:'Seal Color',t:'text',ph:'Blue, Green, Red, Brown'},{f:'frDistrict',l:'Federal Reserve District',t:'text',ph:'B2 / New York'},{f:'variety',l:'Variety',t:'text',ph:'Mule, Star, Web…'},{f:'charter',l:'Charter # (Nationals only)',t:'text',ph:'4321'},{f:'bankName',l:'Bank Name (Nationals)',t:'text',ph:'First National Bank of …'},{f:'city',l:'City (Nationals)',t:'text',ph:''},{f:'bankState',l:'State (Nationals)',t:'text',ph:'PA'},{f:'grade',l:'Grade',t:'text',ph:'VF 30 / CU 64'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'PMG, PCGS Banknote, raw…'},{f:'defects',l:'Defects',t:'text',ph:'Folds, pinholes, ink, tape…'},{f:'type',l:'Type (legacy)',t:'text',ph:'kept for backward compat'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
+  confederate:   [{f:'state',l:'State/Issuer',t:'text',ph:'Confederate States'},{f:'series',l:'Type/Series',t:'text',ph:'T-68'},{f:'denomination',l:'Denomination',t:'text',ph:'$10'},{f:'criswell',l:'Criswell #',t:'text',ph:'Cr.540'},{f:'frNum',l:'Friedberg #',t:'text',ph:'Fr.CSA-68'},{f:'signatures',l:'Signatures',t:'text',ph:'Treasurer / Register'},{f:'serial',l:'Serial #',t:'text',ph:''},{f:'plate',l:'Plate Position',t:'text',ph:''},{f:'variety',l:'Variety',t:'text',ph:''},{f:'grade',l:'Grade',t:'text',ph:'VF 25'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'PMG'},{f:'defects',l:'Defects',t:'text',ph:'Folds, pinholes, repairs…'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
+  obsolete:      [{f:'state',l:'State',t:'text',ph:'Georgia'},{f:'series',l:'Bank/Issuer',t:'text',ph:'Bank of Georgia'},{f:'denomination',l:'Denomination',t:'text',ph:'$5'},{f:'serial',l:'Serial #',t:'text',ph:''},{f:'signatures',l:'Signatures',t:'text',ph:'Cashier / President'},{f:'variety',l:'Variety',t:'text',ph:''},{f:'grade',l:'Grade',t:'text',ph:'Fine 12'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'PMG'},{f:'defects',l:'Defects',t:'text',ph:''},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
+  foreignNotes:  [{f:'country',l:'Country',t:'text',ph:'Germany'},{f:'series',l:'Series',t:'text',ph:'Weimar Republic'},{f:'denomination',l:'Denomination',t:'text',ph:'1000 Mark'},{f:'pickNumber',l:'Pick # (P-#)',t:'text',ph:'P-75'},{f:'signatures',l:'Signatures',t:'text',ph:''},{f:'serial',l:'Serial #',t:'text',ph:''},{f:'variety',l:'Variety',t:'text',ph:''},{f:'grade',l:'Grade',t:'text',ph:'VF 30'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'PMG'},{f:'defects',l:'Defects',t:'text',ph:''},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
+  fractional:    [{f:'denomination',l:'Denomination',t:'text',ph:'50 Cents'},{f:'series',l:'Issue',t:'text',ph:'5th Issue'},{f:'frNum',l:'Friedberg #',t:'text',ph:'Fr.1309'},{f:'signatures',l:'Signatures',t:'text',ph:'Colby / Spinner'},{f:'serial',l:'Serial #',t:'text',ph:''},{f:'variety',l:'Variety',t:'text',ph:''},{f:'grade',l:'Grade',t:'text',ph:'CH UNC 65'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'PMG'},{f:'defects',l:'Defects',t:'text',ph:''},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
   ancient:       [{f:'country',l:'Country/Empire',t:'text',ph:'Roman'},{f:'type',l:'Type',t:'text',ph:'Denarius'},{f:'series',l:'Emperor/Issuer',t:'text',ph:'Augustus'},{f:'grade',l:'Grade',t:'text',ph:'VF'},{f:'serial',l:'Cert #',t:'text',ph:'optional'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'NGC'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
   other:         [{f:'country',l:'Country',t:'text',ph:'USA'},{f:'type',l:'Type',t:'text',ph:'Token, Medal…'},{f:'series',l:'Series',t:'text',ph:''},{f:'denomination',l:'Denomination',t:'text',ph:'optional'},{f:'grade',l:'Grade',t:'text',ph:'optional'},{f:'serial',l:'Serial #',t:'text',ph:'optional'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
 };
@@ -8902,7 +8994,24 @@ Identify the item carefully and return ONLY valid JSON (no markdown, no preamble
   "features": "Notable details: varieties, errors, toning, designations like FBL, FS, DCAM, holder type, etc.",
   "estimatedValue": { "low": 0, "mid": 0, "high": 0 },
   "confidence": "high|medium|low",
-  "notes": "Brief one-sentence assessment"
+  "notes": "Brief one-sentence assessment",
+
+  /* PAPER MONEY ONLY — populate these when isBanknote=true; leave empty/null for coins: */
+  "frNum":       "Friedberg catalog #, e.g. Fr.1606 (US notes) or Fr.CSA-68 (Confederate). For fractional, also Friedberg-numbered.",
+  "pickNumber":  "Pick # from Standard Catalog of World Paper Money, e.g. P-75 (FOREIGN notes only)",
+  "criswell":    "Criswell catalog #, e.g. Cr.540 (CONFEDERATE notes only)",
+  "noteType":    "For US notes: 'Federal Reserve Note', 'Silver Certificate', 'Gold Certificate', 'US Note / Legal Tender', 'National Bank Note', 'Treasury Note', 'Demand Note', 'Federal Reserve Bank Note', 'MPC', etc.",
+  "signatures":  "Signature combination, e.g. 'Tate / Mellon' (US) or 'Treasurer / Register'",
+  "sealColor":   "Color of the Treasury seal: 'Blue', 'Green', 'Red', 'Brown', etc.",
+  "frDistrict":  "Federal Reserve district code + city for US FRNs, e.g. 'B2 / New York' or 'L12 / San Francisco'",
+  "blockLetter": "Serial number block letters, e.g. 'B-A' or 'F-*' (star note)",
+  "plate":       "Plate position if visible, e.g. 'A1' or 'F4'",
+  "variety":     "Variety notation: 'Mule', 'Star Note', 'Web Note', 'Inverted Back', etc.",
+  "charter":     "Charter # for NATIONAL BANK NOTES only, e.g. '4321'",
+  "bankName":    "Issuing bank name for Nationals, e.g. 'First National Bank of Reading'",
+  "city":        "Issuing bank city for Nationals",
+  "bankState":   "Issuing bank state for Nationals, 2-letter code preferred",
+  "defects":     "Condition issues beyond grade: folds, pinholes, tape, ink marks, repairs, stains, etc."
 }
 
 Rules:
@@ -9364,7 +9473,23 @@ async function aiApplyToForm() {
     features:      r.features,
     notes:         r.notes,
     state:         r.country,
-    description:   r.features
+    description:   r.features,
+    // Paper money fields (added v69) — only set when AI flags a banknote
+    frNum:         r.frNum,
+    pickNumber:    r.pickNumber,
+    criswell:      r.criswell,
+    noteType:      r.noteType,
+    signatures:    r.signatures,
+    sealColor:     r.sealColor,
+    frDistrict:    r.frDistrict,
+    blockLetter:   r.blockLetter,
+    plate:         r.plate,
+    variety:       r.variety,
+    charter:       r.charter,
+    bankName:      r.bankName,
+    city:          r.city,
+    bankState:     r.bankState,
+    defects:       r.defects
   };
   Object.keys(_aiMap).forEach(function(k) {
     const v = _aiMap[k];
