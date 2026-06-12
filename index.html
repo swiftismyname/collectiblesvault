@@ -25,11 +25,12 @@
   --text:#dfd5bc;--muted:#8a7f6a;--dim:#4a4030;
   --border:#252018;--green:#4a9a6a;--red:#c0504a;
   /* Semantic accents — kept consistent across themes for brand recognition.
-     Used by TPG lookup buttons (PCGS/NGC/ICG) and info indicators. */
-  --accent-pcgs:var(--accent-pcgs); --accent-pcgs-bg:var(--accent-pcgs-bg); --accent-pcgs-bd:var(--accent-pcgs-bd);
-  --accent-ngc:var(--accent-ngc);  --accent-ngc-bg:var(--accent-ngc-bg);    --accent-ngc-bd:var(--accent-ngc-bd);
-  --accent-icg:var(--accent-icg);  --accent-icg-bg:var(--accent-icg-bg);  --accent-icg-bd:var(--accent-icg-bd);
-  --accent-info:var(--accent-info); --accent-info-bg:var(--accent-info-bg); --accent-info-bd:var(--accent-info-bd);
+     Used by TPG lookup buttons (PCGS/NGC/ICG/Numista/eBay) and info indicators. */
+  --accent-pcgs:#d4af37; --accent-pcgs-bg:rgba(212,175,55,.12);  --accent-pcgs-bd:rgba(212,175,55,.4);
+  --accent-ngc:#4caf7d;  --accent-ngc-bg:rgba(76,175,125,.1);    --accent-ngc-bd:rgba(76,175,125,.4);
+  --accent-icg:#6ab0ff;  --accent-icg-bg:rgba(106,176,255,.12);  --accent-icg-bd:rgba(106,176,255,.4);
+  --accent-info:#4d9fff; --accent-info-bg:rgba(77,159,255,.1);   --accent-info-bd:rgba(77,159,255,.35);
+  --accent-ebay:#d63384; --accent-ebay-bg:rgba(214,51,132,.12);  --accent-ebay-bd:rgba(214,51,132,.4);
 }
 body{background:var(--bg);color:var(--text);font-family:var(--font-body,'Karla',sans-serif);height:100vh;overflow:hidden;display:flex}
 #app{display:flex;width:100%;height:100vh;overflow:hidden}
@@ -3478,6 +3479,7 @@ function renderInv(){
         const _didNGC  = !!_tpgWasApplied(item,'ngc');
         const _didICG  = !!_tpgWasApplied(item,'icg');
         const _didCRef = !!_tpgWasApplied(item,'coinref');
+        const _didEbay = !!_tpgWasApplied(item,'ebay');
         return `<tr class="${isEl?'sel':''}" onclick="showDetail(ALL_ITEMS[${ALL_ITEMS.indexOf(item)}])" style="cursor:pointer">
           <td style="font-size:11px;color:var(--dim);white-space:nowrap">${cn(item.id)}${_hasImg?`<span class="row-img-marker" title="Has images attached"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg></span>`:''}</td>
           <td>
@@ -3502,6 +3504,7 @@ function renderInv(){
               ${['gradedUS','gradedSilver','gradedForeign'].includes(item.sheet)&&isPCGSGraded(item.raw.gradingAuth)?`<button onclick="event.stopPropagation();lookupPCGS(ALL_ITEMS[${ALL_ITEMS.indexOf(item)}])" title="${_didPCGS?'PCGS applied — click to update':'Look up on PCGS CoinFacts'}" class="lookup-btn${_didPCGS?' tpg-done':''}" id="pcgs-btn-${cn(item.id)}" style="padding:2px 5px;font-size:10px;background:var(--accent-pcgs-bg);border-color:var(--accent-pcgs-bd);color:var(--accent-pcgs)">🏆</button>`:''}
               ${['gradedUS','gradedSilver','gradedForeign'].includes(item.sheet)&&/^icg$/i.test(String(item.raw.gradingAuth||'').trim())?`<button onclick="event.stopPropagation();lookupICG(ALL_ITEMS[${ALL_ITEMS.indexOf(item)}])" title="${_didICG?'ICG applied — click to update':'Look up on ICG Verification'}" class="lookup-btn${_didICG?' tpg-done':''}" id="icg-btn-${cn(item.id)}" style="padding:2px 5px;font-size:10px;background:var(--accent-icg-bg);border-color:var(--accent-icg-bd);color:var(--accent-icg)">🔵</button>`:''}
               ${['gradedUS','rawUS','gradedSilver','rawSilver'].includes(item.sheet)?`<button onclick="event.stopPropagation();lookupNGC(ALL_ITEMS[${ALL_ITEMS.indexOf(item)}])" title="${_didNGC?'NGC applied — click to update':'NGC Price Guide &amp; Cert Lookup'}" class="lookup-btn${_didNGC?' tpg-done':''}" id="ngc-btn-${cn(item.id)}" style="padding:2px 5px;font-size:10px;background:rgba(0,154,68,.1);border-color:var(--accent-ngc-bd);color:var(--accent-ngc)">📗</button>`:''}
+              <button onclick="event.stopPropagation();lookupEbay(ALL_ITEMS[${ALL_ITEMS.indexOf(item)}])" title="${_didEbay?'eBay sold prices captured — click to update':'Check eBay sold prices'}" class="lookup-btn${_didEbay?' tpg-done':''}" id="ebay-btn-${cn(item.id)}" style="padding:2px 5px;font-size:10px;background:var(--accent-ebay-bg);border-color:var(--accent-ebay-bd);color:var(--accent-ebay)">💵</button>
 
             </div>
           </td>
@@ -3689,6 +3692,31 @@ function showDetail(item){
       try { full = rawTs ? new Date(rawTs).toLocaleString() : ''; } catch(_) {}
       return `<div class="dp-row"><span class="dp-label">Last Modified</span><span class="dp-value" style="color:var(--dim);font-size:11px" title="${e(full)}">${e(mod)}</span></div>`;
     })()}
+    ${(function(){
+      // eBay sold range — only render if we have at least min or max captured
+      const r = item.raw || {};
+      const mn = r.ebayMinSold, mx = r.ebayMaxSold, av = r.ebayAvgSold, ct = r.ebayCount;
+      if (mn == null && mx == null) return '';
+      let range;
+      if (mn != null && mx != null) range = fmt$(mn) + ' &ndash; ' + fmt$(mx);
+      else if (mn != null)          range = 'from ' + fmt$(mn);
+      else                          range = 'up to ' + fmt$(mx);
+      const extras = [];
+      if (av != null) extras.push('avg ' + fmt$(av));
+      if (ct != null) extras.push(ct + ' comp' + (ct === 1 ? '' : 's'));
+      // Show "checked X ago" from _tpgApplied.ebay timestamp
+      const ts = (r._tpgApplied && r._tpgApplied.ebay) || null;
+      if (ts) {
+        try {
+          const dt = new Date(ts);
+          if (!isNaN(dt.getTime()) && typeof _cvRelativeTime === 'function') {
+            extras.push('checked ' + _cvRelativeTime(dt));
+          }
+        } catch(_) {}
+      }
+      const suffix = extras.length ? ' <span style="color:var(--dim);font-size:11px">(' + extras.join(', ') + ')</span>' : '';
+      return `<div class="dp-row"><span class="dp-label">eBay Sold Range</span><span class="dp-value mono" style="color:var(--accent-ebay)">${range}${suffix}</span></div>`;
+    })()}
     <div class="dp-section">All Fields</div>
     ${rows}
     ${imagesHtml}
@@ -3782,6 +3810,21 @@ function showDetail(item){
       icgBtn.onclick = () => lookupICG(item);
       actions.appendChild(icgBtn);
     }
+    // eBay sold-price button — show on every collectible (no eBay-irrelevant sheets;
+    // eBay sells everything from bullion to comics).
+    {
+      const ebayBtn = document.createElement('button');
+      const _doneEbay = !!_tpgWasApplied(item,'ebay');
+      ebayBtn.className = 'lookup-btn' + (_doneEbay ? ' tpg-done' : '');
+      ebayBtn.id = 'ebay-btn-' + cn(item.id);
+      ebayBtn.textContent = '💵 eBay';
+      ebayBtn.title = _doneEbay
+        ? 'eBay sold prices captured — click to update'
+        : 'Check eBay sold listings and capture min/max prices';
+      ebayBtn.style.cssText = 'background:var(--accent-ebay-bg);border-color:var(--accent-ebay-bd);color:var(--accent-ebay)';
+      ebayBtn.onclick = () => lookupEbay(item);
+      actions.appendChild(ebayBtn);
+    }
     const delBtn = document.createElement('button');
     delBtn.className = 'bg';
     delBtn.style.cssText = 'flex:1;color:var(--red);border-color:var(--red)';
@@ -3860,7 +3903,8 @@ const _TPG_KEY_MAP = {
   'NGC': 'ngc',
   'ICG': 'icg',
   'Numista': 'numista',
-  'Coin Reference': 'coinref'
+  'Coin Reference': 'coinref',
+  'eBay': 'ebay'
 };
 
 // Returns truthy (ISO timestamp string) if the given TPG lookup has been applied
@@ -5804,6 +5848,179 @@ function closeDetail(){
 }
 
 // #endregion [TPG-COIN-REF]
+
+// #region [TPG-EBAY]
+// ── EBAY SOLD-PRICE LOOKUP ────────────────────────────────────────────────────
+// eBay gates programmatic sold-listing access (Marketplace Insights API is
+// limited-release, the legacy Finding API is deprecated, and any direct API
+// call from a PWA is CORS-blocked anyway). This uses the same approach as
+// ICG verification: open eBay's sold-filter search in a new tab so the user
+// can see REAL sold data, then capture the min/max/avg/count manually into
+// the record. Values get persisted like any other field and the green-dot
+// indicator works via _tpgApplied.ebay.
+
+// Build a focused search query from record fields. Heuristic: pull the
+// structured fields if present, else fall back to the description.
+function _ebayBuildQuery(item) {
+  const r = (item && item.raw) || {};
+  const parts = [];
+  const seen = new Set();
+  function pushIfNew(v) {
+    if (v == null) return;
+    const s = String(v).trim();
+    if (!s) return;
+    const k = s.toLowerCase();
+    if (seen.has(k)) return;
+    seen.add(k);
+    parts.push(s);
+  }
+  // Coins / currency: year, mint, denomination, series, variety, grade, auth
+  pushIfNew(r.year || r.Year);
+  pushIfNew(r.mint || r.Mint || r.mintMark);
+  pushIfNew(r.denomination || r.Denomination);
+  pushIfNew(r.series || r.Series || r.type);
+  pushIfNew(r.variety || r.Variety);
+  pushIfNew(r.grade || r.Grade);
+  const auth = r.gradingAuth || r['Grading Authority'];
+  if (auth && /^(PCGS|NGC|ICG|ANACS)$/i.test(String(auth).trim())) pushIfNew(auth);
+  // Fall back to description if we got nothing useful
+  if (parts.length < 2 && item && item.desc) pushIfNew(item.desc);
+  return parts.join(' ').trim();
+}
+
+// Build the eBay search URL with the sold-filter applied. LH_Sold=1 limits to
+// sold items; LH_Complete=1 limits to completed listings (sold OR unsold);
+// together they give "actually sold" results, which is what we want.
+function _ebaySoldUrl(query) {
+  const q = encodeURIComponent(String(query || '').trim());
+  return 'https://www.ebay.com/sch/i.html?_nkw=' + q + '&LH_Sold=1&LH_Complete=1';
+}
+
+function lookupEbay(item) { showEbayModal(item); }
+
+function showEbayModal(item) {
+  // Close any existing modal
+  const ex = document.getElementById('ebay-modal');
+  if (ex) ex.remove();
+
+  const r = item.raw || {};
+  const initialQuery = _ebayBuildQuery(item);
+
+  // Pre-fill from existing values so re-running shows what was captured before
+  const prevMin   = r.ebayMinSold != null ? r.ebayMinSold : '';
+  const prevMax   = r.ebayMaxSold != null ? r.ebayMaxSold : '';
+  const prevAvg   = r.ebayAvgSold != null ? r.ebayAvgSold : '';
+  const prevCount = r.ebayCount   != null ? r.ebayCount   : '';
+  const prevNotes = r.ebayNotes || '';
+
+  const modal = document.createElement('div');
+  modal.id = 'ebay-modal';
+  modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.7);z-index:1000;display:flex;align-items:center;justify-content:center;padding:16px';
+  modal.innerHTML = `
+    <div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;width:520px;max-width:100%;max-height:90vh;overflow-y:auto;padding:24px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px">
+        <div style="font-family:var(--font-display,'Cormorant Garamond',serif);font-size:20px;color:var(--accent-ebay)">💵 eBay Sold Price Lookup</div>
+        <button onclick="document.getElementById('ebay-modal').remove()" style="background:none;border:none;color:var(--muted);font-size:22px;cursor:pointer;line-height:1">&times;</button>
+      </div>
+
+      <div style="margin-bottom:14px;color:var(--muted);font-size:12px">
+        Record <span style="color:var(--text)">#${e(cn(item.id))}</span> — ${e(item.desc || '')}
+      </div>
+
+      <label style="display:block;font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin-bottom:4px">Search query (edit to refine)</label>
+      <input id="ebay-query" value="${e(initialQuery).replace(/"/g,'&quot;')}" style="width:100%;background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:4px;font-size:13px;margin-bottom:10px;box-sizing:border-box">
+
+      <button id="ebay-open-sold" style="display:block;width:100%;background:var(--accent-ebay-bg);border:1px solid var(--accent-ebay-bd);color:var(--accent-ebay);padding:10px;border-radius:5px;font-size:13px;cursor:pointer;margin-bottom:18px;font-family:var(--font-body,'Karla',sans-serif)">
+        🔗 View Sold Listings on eBay (new tab)
+      </button>
+
+      <div style="border-top:1px solid var(--border);padding-top:14px">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:10px;line-height:1.5">
+          After reviewing eBay's sold-filter results, enter what you observed below. Skip any field — only Min and Max are saved if filled.
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+          <div>
+            <label style="display:block;font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin-bottom:3px">Lowest Sold ($)</label>
+            <input id="ebay-min" type="number" step="0.01" min="0" value="${e(prevMin)}" placeholder="e.g. 45.00" style="width:100%;background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:4px;font-size:13px;box-sizing:border-box">
+          </div>
+          <div>
+            <label style="display:block;font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin-bottom:3px">Highest Sold ($)</label>
+            <input id="ebay-max" type="number" step="0.01" min="0" value="${e(prevMax)}" placeholder="e.g. 185.00" style="width:100%;background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:4px;font-size:13px;box-sizing:border-box">
+          </div>
+          <div>
+            <label style="display:block;font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin-bottom:3px">Average / Median ($)</label>
+            <input id="ebay-avg" type="number" step="0.01" min="0" value="${e(prevAvg)}" placeholder="optional" style="width:100%;background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:4px;font-size:13px;box-sizing:border-box">
+          </div>
+          <div>
+            <label style="display:block;font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin-bottom:3px"># of Comps Seen</label>
+            <input id="ebay-count" type="number" step="1" min="0" value="${e(prevCount)}" placeholder="optional" style="width:100%;background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:4px;font-size:13px;box-sizing:border-box">
+          </div>
+        </div>
+
+        <label style="display:block;font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin-bottom:3px">Notes (optional)</label>
+        <input id="ebay-notes" value="${e(prevNotes).replace(/"/g,'&quot;')}" placeholder="e.g. excluded outliers, MS-65+ only" style="width:100%;background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:4px;font-size:13px;margin-bottom:18px;box-sizing:border-box">
+
+        <div style="display:flex;gap:8px">
+          <button class="bg" onclick="document.getElementById('ebay-modal').remove()" style="flex:1;background:var(--bg4);border:1px solid var(--border);color:var(--text);padding:9px;border-radius:5px;cursor:pointer">Cancel</button>
+          <button id="ebay-apply-btn" style="flex:2;background:var(--accent-ebay-bg);border:1px solid var(--accent-ebay-bd);color:var(--accent-ebay);padding:9px;border-radius:5px;cursor:pointer;font-weight:600">Apply Values</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+
+  // Wire up the open-sold button to always use the latest query value
+  const queryInput = modal.querySelector('#ebay-query');
+  modal.querySelector('#ebay-open-sold').onclick = function() {
+    const q = queryInput.value.trim();
+    if (!q) { cvToast('Enter a search query first', 'warn'); return; }
+    window.open(_ebaySoldUrl(q), '_blank', 'noopener');
+  };
+
+  modal.querySelector('#ebay-apply-btn').onclick = function() {
+    _ebayApply(item, modal);
+  };
+}
+
+async function _ebayApply(item, modal) {
+  const $ = (id) => modal.querySelector('#' + id);
+  const minRaw   = $('ebay-min').value.trim();
+  const maxRaw   = $('ebay-max').value.trim();
+  const avgRaw   = $('ebay-avg').value.trim();
+  const countRaw = $('ebay-count').value.trim();
+  const query    = $('ebay-query').value.trim();
+  const notes    = $('ebay-notes').value.trim();
+
+  // Need at least one of min/max to make this meaningful
+  if (!minRaw && !maxRaw) {
+    cvToast('Enter at least a Lowest or Highest sold price', 'warn');
+    return;
+  }
+
+  const updates = {};
+  if (minRaw)   updates.ebayMinSold = parseFloat(minRaw);
+  if (maxRaw)   updates.ebayMaxSold = parseFloat(maxRaw);
+  if (avgRaw)   updates.ebayAvgSold = parseFloat(avgRaw);
+  if (countRaw) updates.ebayCount   = parseInt(countRaw, 10);
+  if (query)    updates.ebayQuery   = query;
+  if (notes)    updates.ebayNotes   = notes;
+
+  // Sanity check: if both present, swap if reversed
+  if (updates.ebayMinSold != null && updates.ebayMaxSold != null &&
+      updates.ebayMinSold > updates.ebayMaxSold) {
+    const t = updates.ebayMinSold; updates.ebayMinSold = updates.ebayMaxSold; updates.ebayMaxSold = t;
+  }
+
+  await _tpgApply(item, updates, 'eBay');
+  if (modal) modal.remove();
+  cvToast('eBay sold values saved', 'ok');
+  // Re-render detail panel if currently showing this item
+  if (typeof ST !== 'undefined' && ST.selItem === item && typeof showDetail === 'function') {
+    showDetail(item);
+  }
+}
+// #endregion [TPG-EBAY]
 
 // #region [LABELS]
 // ── LABELS ────────────────────────────────────────────────────────────────────
@@ -8043,6 +8260,69 @@ const SHEET_LABELS = {
 
 let ADD_SHEET = 'gradedSilver';
 
+// ── ADD FORM STATE PERSISTENCE ────────────────────────────────────────────────
+// Holds the values currently visible (or recently entered) in the Add Record
+// form. Survives sheet-category switches (you can change from "Copper Bullion"
+// to "Raw US Coin" without losing the AI-scanned data), navigation away from
+// the Add page and back, and the AI-scan flow. Cleared on successful submit
+// or by the explicit "Clear" button.
+//
+// Lifecycle:
+//   - Wired on every renderAdd: each input fires 'input' events that write
+//     into ADD_FORM_STATE on every keystroke.
+//   - Restored at end of renderAdd: any non-empty state value flows back into
+//     fields whose IDs match (af-<field>).
+//   - Cleared on submitAdd success and resetAdd.
+let ADD_FORM_STATE = {};
+
+function _captureAddFormState() {
+  document.querySelectorAll('[id^="af-"]').forEach(function(el) {
+    if (!el.id) return;
+    const key = el.id.substring(3); // strip "af-" prefix
+    // Don't capture empty strings — they'd clobber preserved values from a
+    // previous sheet (where the same field was filled).
+    if (el.value != null && el.value !== '') ADD_FORM_STATE[key] = el.value;
+  });
+}
+
+function _restoreAddFormState() {
+  Object.keys(ADD_FORM_STATE).forEach(function(key) {
+    const el = document.getElementById('af-' + key);
+    if (!el) return;
+    // Only restore into empty fields so we don't clobber values that renderAdd
+    // or another path may have already placed.
+    if (el.value === '' || el.value == null) {
+      el.value = ADD_FORM_STATE[key];
+    }
+  });
+}
+
+function _wireAddFormPersistence() {
+  // Wire 'input' listeners so every keystroke updates state. Idempotent —
+  // re-running on the same element is a no-op via the _addFormWired flag.
+  document.querySelectorAll('[id^="af-"]').forEach(function(el) {
+    if (!el.id || el._addFormWired) return;
+    el._addFormWired = true;
+    el.addEventListener('input', function() {
+      const key = el.id.substring(3);
+      if (el.value === '' || el.value == null) {
+        delete ADD_FORM_STATE[key];
+      } else {
+        ADD_FORM_STATE[key] = el.value;
+      }
+    });
+  });
+}
+
+// Called by the Category <select> onchange. Captures current values BEFORE
+// switching so they survive renderAdd's full innerHTML replacement.
+function _switchAddSheet(newSheet) {
+  _captureAddFormState();
+  ADD_SHEET = newSheet;
+  renderAdd();
+}
+
+
 
 // ── Barcode scanner support ───────────────────────────────────────────────────
 // Most USB barcode scanners type characters rapidly and end with Enter.
@@ -8125,7 +8405,7 @@ function renderAdd(){
     +'</div>'
     +'<div style="max-width:560px">'
     +'<div style="margin-bottom:20px"><label style="display:block;font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin-bottom:6px">Category</label>'
-    +'<select onchange="ADD_SHEET=this.value;renderAdd()" style="width:100%;background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:4px;font-size:13px">'+sheetOpts+'</select></div>'
+    +'<select onchange="_switchAddSheet(this.value)" style="width:100%;background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:4px;font-size:13px">'+sheetOpts+'</select></div>'
     +'<div style="margin-bottom:20px;padding:14px;background:var(--bg3);border:1px solid var(--gold3);border-radius:6px">'
     +'<label style="display:block;font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--gold);margin-bottom:6px">Record Number</label>'
     +'<div style="display:flex;gap:8px;align-items:center">'
@@ -8139,10 +8419,18 @@ function renderAdd(){
     +'<button class="bp" onclick="submitAdd()" style="flex:1">Add to Collection</button>'
     +'<button class="bg" onclick="resetAdd();renderAdd()" style="flex:1">Clear</button>'
     +'</div></div>';
+
+  // Restore any preserved state into the freshly-built form (sheet switch,
+  // navigation return, AI scan flow), then wire input listeners so future
+  // keystrokes keep state up-to-date.
+  _restoreAddFormState();
+  _wireAddFormPersistence();
 }
 
 function resetAdd(){
   document.querySelectorAll('[id^="af-"]').forEach(el=>el.value='');
+  // Wipe persistent state — otherwise the next renderAdd would re-populate.
+  ADD_FORM_STATE = {};
   // Discard any AI-scan image URLs that haven't been used yet
   window.PENDING_AI_IMAGES = null;
   const banner = document.getElementById('pending-images-banner');
@@ -8954,51 +9242,52 @@ async function aiApplyToForm() {
   if (r.category && (typeof SCHEMAS === 'undefined' || SCHEMAS[r.category])) {
     ADD_SHEET = r.category;
   }
+
+  // Populate ADD_FORM_STATE so renderAdd's auto-restore picks up the AI values.
+  // This means: if the user later switches the sheet category (because the AI
+  // guessed wrong), the data survives — renderAdd re-applies the state into
+  // whichever new schema's fields exist with matching IDs.
+  const _aiMap = {
+    country:       r.country,
+    series:        r.series,
+    year:          r.year,
+    type:          r.type,
+    denomination:  r.denomination,
+    grade:         r.grade,
+    gradingAuth:   r.gradingAuth,
+    serial:        r.serial,
+    mint:          r.mint,
+    composition:   r.composition,
+    silverContent: r.silverContent,
+    weight:        r.weight,
+    features:      r.features,
+    notes:         r.notes,
+    state:         r.country,
+    description:   r.features
+  };
+  Object.keys(_aiMap).forEach(function(k) {
+    const v = _aiMap[k];
+    if (v == null || v === '' || v === 0) return;
+    ADD_FORM_STATE[k] = v;
+  });
+  // If AI provided a grade but no real TPG slab was detected, mark gradingAuth
+  // as "AI-Estimated" so the record permanently shows the AI was the source.
+  const _REAL_TPGS = ['PCGS','NGC','ICG','ANACS','PMG','CAC','CACG','CGC'];
+  const _detectedAuth = String(r.gradingAuth || '').trim();
+  const _isRealTPG = _REAL_TPGS.some(function(t) { return t.toUpperCase() === _detectedAuth.toUpperCase(); });
+  if (r.grade && !_isRealTPG) {
+    ADD_FORM_STATE.gradingAuth = 'AI-Estimated';
+  }
+  if (r.estimatedValue && r.estimatedValue.mid) {
+    ADD_FORM_STATE.value = r.estimatedValue.mid;
+  }
+
   closeAIScan();
   nav('add');
-  // After renderAdd completes, populate the form fields
+  // renderAdd's auto-restore handles form population; we only need this delayed
+  // block for the pending-images banner (which depends on the .vh heading
+  // existing in the DOM after innerHTML settles).
   setTimeout(function() {
-    const schema = (typeof SCHEMAS !== 'undefined') ? (SCHEMAS[ADD_SHEET] || []) : [];
-    const fieldKeys = schema.map(function(f){return f.f;});
-    const map = {
-      country: r.country,
-      series: r.series,
-      year: r.year,
-      type: r.type,
-      denomination: r.denomination,
-      grade: r.grade,
-      gradingAuth: r.gradingAuth,
-      serial: r.serial,
-      mint: r.mint,
-      composition: r.composition,
-      silverContent: r.silverContent,
-      weight: r.weight,
-      features: r.features,
-      notes: r.notes,
-      state: r.country,
-      description: r.features
-    };
-    Object.keys(map).forEach(function(k) {
-      const v = map[k];
-      if (v == null || v === '' || v === 0) return;
-      if (fieldKeys.indexOf(k) === -1) return;
-      const el = document.getElementById('af-' + k);
-      if (el) el.value = v;
-    });
-    // If AI provided a grade but no real TPG slab was detected, mark gradingAuth
-    // as "AI-Estimated" so the record permanently shows the AI was the source.
-    const REAL_TPGS = ['PCGS','NGC','ICG','ANACS','PMG','CAC','CACG','CGC'];
-    const detectedAuth = String(r.gradingAuth || '').trim();
-    const isRealTPG = REAL_TPGS.some(function(t) { return t.toUpperCase() === detectedAuth.toUpperCase(); });
-    if (r.grade && !isRealTPG && fieldKeys.indexOf('gradingAuth') !== -1) {
-      const gaEl = document.getElementById('af-gradingAuth');
-      if (gaEl) gaEl.value = 'AI-Estimated';
-    }
-    if (r.estimatedValue && r.estimatedValue.mid && fieldKeys.indexOf('value') !== -1) {
-      const v = document.getElementById('af-value');
-      if (v) v.value = r.estimatedValue.mid;
-    }
-    // Visual hint that images are queued for this record
     if (window.PENDING_AI_IMAGES && (window.PENDING_AI_IMAGES.front || window.PENDING_AI_IMAGES.back)) {
       const c = document.getElementById('content');
       if (c) {
