@@ -9083,7 +9083,9 @@ async function aiAnalyzeGemini(key, model) {
       generationConfig: {
         responseMimeType: 'application/json',
         temperature: 0.3,
-        maxOutputTokens: 1500
+        // Bumped from 1500 — verbose JSON with two images plus features text
+        // can exceed 1500 tokens, leading to truncation and parse failure.
+        maxOutputTokens: 4000
       }
     })
   });
@@ -9092,12 +9094,81 @@ async function aiAnalyzeGemini(key, model) {
     throw new Error('Gemini ' + r.status + ': ' + errTxt.slice(0, 300));
   }
   const data = await r.json();
-  const text = (data.candidates && data.candidates[0] && data.candidates[0].content
-                && data.candidates[0].content.parts && data.candidates[0].content.parts[0]
-                && data.candidates[0].content.parts[0].text) || '';
-  const m = text.match(/\{[\s\S]*\}/);
-  if (!m) throw new Error('No JSON object found in Gemini response.');
-  return JSON.parse(m[0]);
+
+  // Surface prompt-level safety blocks before trying to read candidates
+  if (data.promptFeedback && data.promptFeedback.blockReason) {
+    throw new Error('Gemini blocked the prompt: ' + data.promptFeedback.blockReason +
+      ' — try a different image or lower-restriction model.');
+  }
+
+  const cand = data.candidates && data.candidates[0];
+  if (!cand) {
+    throw new Error('Gemini returned no candidates. Response: ' +
+      JSON.stringify(data).slice(0, 300));
+  }
+
+  const finishReason = cand.finishReason || 'unknown';
+  // SAFETY / RECITATION / OTHER are non-recoverable refusals
+  if (finishReason !== 'STOP' && finishReason !== 'MAX_TOKENS') {
+    throw new Error('Gemini stopped with finishReason=' + finishReason +
+      '. Try a different image or model.');
+  }
+
+  const text = (cand.content && cand.content.parts && cand.content.parts[0]
+                && cand.content.parts[0].text) || '';
+  if (!text) {
+    throw new Error('Gemini returned empty text (finishReason=' + finishReason +
+      '). The model may not support image+JSON mode — try gemini-2.5-flash or gemini-2.5-pro.');
+  }
+
+  const parsed = _parseAIJson(text);
+  if (!parsed) {
+    const preview = text.slice(0, 250).replace(/\s+/g, ' ').trim();
+    const hint = (finishReason === 'MAX_TOKENS')
+      ? ' Response was truncated at the token limit — increase maxOutputTokens or simplify the image.'
+      : '';
+    throw new Error('Could not parse Gemini JSON.' + hint + ' Response started: "' + preview + '..."');
+  }
+  return parsed;
+}
+
+// Robust JSON extraction for AI responses.
+// Handles: pure JSON, JSON wrapped in markdown fences, JSON embedded in prose,
+// and JSON with quoted braces inside string values. Returns the parsed object
+// or null if no parseable JSON object exists.
+function _parseAIJson(text) {
+  if (!text || typeof text !== 'string') return null;
+
+  // Strip markdown code fences (```json … ``` or ``` … ```)
+  let s = text.replace(/^\s*```(?:json|JSON)?\s*\n?/, '').replace(/\n?\s*```\s*$/, '').trim();
+
+  // Try direct parse first — fastest path for clean JSON
+  try { return JSON.parse(s); } catch (_) {}
+
+  // Walk the string finding the first balanced { ... } block. Tracks string
+  // boundaries so braces inside quoted values don't throw off depth.
+  const start = s.indexOf('{');
+  if (start === -1) return null;
+  let depth = 0, inStr = false, esc = false;
+  for (let i = start; i < s.length; i++) {
+    const c = s.charAt(i);
+    if (esc) { esc = false; continue; }
+    if (inStr) {
+      if (c === '\\') esc = true;
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') inStr = true;
+    else if (c === '{') depth++;
+    else if (c === '}') {
+      depth--;
+      if (depth === 0) {
+        try { return JSON.parse(s.slice(start, i + 1)); }
+        catch (_) { return null; }
+      }
+    }
+  }
+  return null;  // unbalanced — likely truncated
 }
 
 // ── Anthropic Claude (paid) ────────────────────────────────────────
@@ -9121,7 +9192,8 @@ async function aiAnalyzeAnthropic(key, model) {
     },
     body: JSON.stringify({
       model: model,
-      max_tokens: 1500,
+      // Bumped from 1500 — verbose JSON with two images can truncate.
+      max_tokens: 4000,
       messages: [{ role: 'user', content: content }]
     })
   });
@@ -9130,10 +9202,32 @@ async function aiAnalyzeAnthropic(key, model) {
     throw new Error('Anthropic ' + r.status + ': ' + errTxt.slice(0, 300));
   }
   const data = await r.json();
-  const text = (data.content && data.content[0] && data.content[0].text) || '';
-  const m = text.match(/\{[\s\S]*\}/);
-  if (!m) throw new Error('No JSON object found in Anthropic response.');
-  return JSON.parse(m[0]);
+  const stopReason = data.stop_reason || 'unknown';
+
+  // content is an array of content blocks — find the first text block
+  let text = '';
+  if (Array.isArray(data.content)) {
+    for (let i = 0; i < data.content.length; i++) {
+      if (data.content[i] && data.content[i].type === 'text' && data.content[i].text) {
+        text = data.content[i].text;
+        break;
+      }
+    }
+  }
+  if (!text) {
+    throw new Error('Anthropic returned empty text (stop_reason=' + stopReason + '). ' +
+      'Response: ' + JSON.stringify(data).slice(0, 250));
+  }
+
+  const parsed = _parseAIJson(text);
+  if (!parsed) {
+    const preview = text.slice(0, 250).replace(/\s+/g, ' ').trim();
+    const hint = (stopReason === 'max_tokens')
+      ? ' Response was truncated at the token limit — increase max_tokens or simplify the image.'
+      : '';
+    throw new Error('Could not parse Anthropic JSON.' + hint + ' Response started: "' + preview + '..."');
+  }
+  return parsed;
 }
 
 function renderAIResults(r) {
