@@ -9083,9 +9083,16 @@ async function aiAnalyzeGemini(key, model) {
       generationConfig: {
         responseMimeType: 'application/json',
         temperature: 0.3,
-        // Bumped from 1500 — verbose JSON with two images plus features text
-        // can exceed 1500 tokens, leading to truncation and parse failure.
-        maxOutputTokens: 4000
+        // Gemini 2.5+ models have "thinking" enabled by default, and the thinking
+        // tokens count against maxOutputTokens. For a structured JSON extraction
+        // task like coin identification, thinking adds latency and cost without
+        // improving accuracy — and can silently consume all the output budget,
+        // truncating the actual JSON. Disable it so the full budget goes to
+        // the response. Old Gemini versions ignore this field harmlessly.
+        thinkingConfig: { thinkingBudget: 0 },
+        // 8000 is well above what the JSON ever needs (typically <1500), giving
+        // a margin even if a future model adds new fields or verbose features.
+        maxOutputTokens: 8000
       }
     })
   });
@@ -9125,7 +9132,7 @@ async function aiAnalyzeGemini(key, model) {
   if (!parsed) {
     const preview = text.slice(0, 250).replace(/\s+/g, ' ').trim();
     const hint = (finishReason === 'MAX_TOKENS')
-      ? ' Response was truncated at the token limit — increase maxOutputTokens or simplify the image.'
+      ? ' Response was truncated at the token limit. Try a different model in Settings — gemini-2.5-pro is more verbose-friendly than gemini-flash-latest.'
       : '';
     throw new Error('Could not parse Gemini JSON.' + hint + ' Response started: "' + preview + '..."');
   }
