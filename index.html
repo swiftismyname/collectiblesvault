@@ -1164,7 +1164,7 @@ body.theme-modern-dark select option{
 // Bump this on every deploy so the user can see at a glance which build is
 // running in their browser. Surfaced in three places: the sidebar footer
 // (desktop), the mobile header badge, and the Settings → About section.
-const APP_VERSION = 'v69';
+const APP_VERSION = 'v71';
 const APP_BUILD_DATE = '2026-06-12';
 
 /* ════════════════════════════════════════════════════════════════════════════════════
@@ -3749,6 +3749,17 @@ function showDetail(item){
     editBtn.textContent = 'Edit Record';
     editBtn.onclick = () => openEditModal(item);
     actions.appendChild(editBtn);
+    // Add/scan images on an EXISTING record. Two save paths inside the modal:
+    // "Save Images Only" attaches photos without touching other fields;
+    // "Save + Scan with AI" attaches photos AND fills empty fields the AI
+    // detected (non-destructive — existing values are preserved).
+    const imgBtn = document.createElement('button');
+    imgBtn.className = 'bg';
+    imgBtn.style.cssText = 'flex:0 0 auto;background:var(--gold2);border:1px solid var(--gold);color:var(--gold)';
+    imgBtn.textContent = '📸 Add Images';
+    imgBtn.title = 'Attach photos to this record (optionally scan with AI to fill empty fields)';
+    imgBtn.onclick = () => showAddImagesModal(item);
+    actions.appendChild(imgBtn);
     // Reference Lookup button (US coins)
     const usSheets = ['gradedUS','rawUS','gradedSilver','rawSilver','gradedForeign','rawForeign'];
     if (usSheets.includes(item.sheet) || item.raw.type || item.raw.series) {
@@ -6122,6 +6133,284 @@ async function _ebayApply(item, modal) {
   if (typeof showDetail === 'function') showDetail(item);
 }
 // #endregion [TPG-EBAY]
+
+// #region [ADD-IMAGES-TO-RECORD]
+// ── ADD IMAGES TO AN EXISTING RECORD ─────────────────────────────────────────
+// Click "📸 Add Images" on a record's detail panel to attach front/back photos
+// after the fact. The modal offers two paths:
+//   1. Save Images Only — upload to Supabase Storage and write the URLs onto
+//      the record. Leaves all other fields untouched.
+//   2. Save + Scan with AI — same upload, then run the AI analyzer (Gemini or
+//      Anthropic per Settings) and fill in any EMPTY fields the AI detected.
+//      Existing non-empty fields are NEVER overwritten — your manual entries
+//      always win.
+//
+// The flow reuses the same aiResizeImage / uploadImageToSupabase helpers as
+// the new-record AI scan path; aiAnalyzeGemini/Anthropic accept the captured
+// images as parameters so this flow doesn't touch the AI_FRONT_IMG globals.
+
+let _ADDIMG_FRONT = null;   // dataUrl of newly captured front image
+let _ADDIMG_BACK  = null;   // dataUrl of newly captured back image
+let _ADDIMG_ITEM  = null;   // target record
+
+function showAddImagesModal(item) {
+  // Reset state every open so old captures don't leak between records
+  _ADDIMG_FRONT = null;
+  _ADDIMG_BACK  = null;
+  _ADDIMG_ITEM  = item;
+  const ex = document.getElementById('addimg-modal');
+  if (ex) ex.remove();
+
+  const r = item.raw || {};
+  // Look across all the field-name variants we've seen historically
+  const frontUrl = r.imageFrontUrl || r.imagefronturl || r.image_front_url || '';
+  const backUrl  = r.imageBackUrl  || r.imagebackurl  || r.image_back_url  || '';
+  const hasFront = !!frontUrl;
+  const hasBack  = !!backUrl;
+
+  const modal = document.createElement('div');
+  modal.id = 'addimg-modal';
+  modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.75);z-index:1000;display:flex;align-items:center;justify-content:center;padding:16px';
+  modal.innerHTML = `
+    <div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;width:560px;max-width:100%;max-height:92vh;overflow-y:auto;padding:24px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+        <div style="font-family:var(--font-display,'Cormorant Garamond',serif);font-size:20px;color:var(--gold)">📸 Add Images to Record</div>
+        <button onclick="closeAddImagesModal()" style="background:none;border:none;color:var(--muted);font-size:22px;cursor:pointer;line-height:1">&times;</button>
+      </div>
+
+      <div style="margin-bottom:14px;color:var(--muted);font-size:12px">
+        Record <span style="color:var(--text)">#${e(cn(item.id))}</span> — ${e(item.desc || '')}
+      </div>
+
+      ${(hasFront || hasBack) ? `
+        <div style="margin-bottom:14px;padding:12px;background:var(--bg4);border-radius:6px;border:1px solid var(--border)">
+          <div style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--gold);margin-bottom:8px">Currently attached</div>
+          <div style="display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap">
+            ${hasFront ? `
+              <div style="text-align:center">
+                <a href="${e(frontUrl)}" target="_blank" rel="noopener" title="Open full-size in new tab">
+                  <img src="${e(frontUrl)}" alt="Current front" style="width:84px;height:84px;object-fit:cover;border:1px solid var(--border);border-radius:4px;background:var(--bg2);display:block;cursor:zoom-in" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+                  <div style="display:none;width:84px;height:84px;align-items:center;justify-content:center;background:var(--bg2);border:1px dashed var(--red);border-radius:4px;font-size:10px;color:var(--red);text-align:center;padding:4px">Image<br>unreachable</div>
+                </a>
+                <div style="font-size:10px;color:var(--muted);margin-top:4px;letter-spacing:.04em">Front</div>
+              </div>` : ''}
+            ${hasBack ? `
+              <div style="text-align:center">
+                <a href="${e(backUrl)}" target="_blank" rel="noopener" title="Open full-size in new tab">
+                  <img src="${e(backUrl)}" alt="Current back" style="width:84px;height:84px;object-fit:cover;border:1px solid var(--border);border-radius:4px;background:var(--bg2);display:block;cursor:zoom-in" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+                  <div style="display:none;width:84px;height:84px;align-items:center;justify-content:center;background:var(--bg2);border:1px dashed var(--red);border-radius:4px;font-size:10px;color:var(--red);text-align:center;padding:4px">Image<br>unreachable</div>
+                </a>
+                <div style="font-size:10px;color:var(--muted);margin-top:4px;letter-spacing:.04em">Back</div>
+              </div>` : ''}
+            <div style="flex:1;min-width:160px;font-size:11px;color:var(--muted);line-height:1.5;padding-top:2px">
+              Uploading a new photo below will <b style="color:var(--gold)">replace</b> the corresponding side. Leave a slot empty to keep the current image for that side. Tap a thumbnail to view full-size.
+            </div>
+          </div>
+        </div>` : ''}
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
+        <div>
+          <div style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin-bottom:4px">Front (Obverse)</div>
+          <label id="addimg-slot-front" style="display:block;width:100%;aspect-ratio:1/1;background:var(--bg2);border:2px dashed var(--border);border-radius:6px;cursor:pointer;overflow:hidden;position:relative">
+            <img id="addimg-preview-front" style="display:none;width:100%;height:100%;object-fit:cover">
+            <span class="addimg-slot-empty" style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;color:var(--dim);font-size:12px;line-height:1.4">📷<br>Tap to add<br>front photo</span>
+            <input type="file" accept="image/*" capture="environment" onchange="_addimgCapture('front', this)" style="display:none">
+          </label>
+        </div>
+        <div>
+          <div style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin-bottom:4px">Back (Reverse)</div>
+          <label id="addimg-slot-back" style="display:block;width:100%;aspect-ratio:1/1;background:var(--bg2);border:2px dashed var(--border);border-radius:6px;cursor:pointer;overflow:hidden;position:relative">
+            <img id="addimg-preview-back" style="display:none;width:100%;height:100%;object-fit:cover">
+            <span class="addimg-slot-empty" style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;color:var(--dim);font-size:12px;line-height:1.4">📷<br>Tap to add<br>back photo</span>
+            <input type="file" accept="image/*" capture="environment" onchange="_addimgCapture('back', this)" style="display:none">
+          </label>
+        </div>
+      </div>
+
+      <div id="addimg-status" style="min-height:20px;margin-bottom:12px;font-size:12px;color:var(--muted)"></div>
+
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="bg" onclick="closeAddImagesModal()" style="flex:1;min-width:90px;background:var(--bg4);border:1px solid var(--border);color:var(--text);padding:10px;border-radius:5px;cursor:pointer">Cancel</button>
+        <button id="addimg-save-only" onclick="_saveImagesOnly()" style="flex:2;min-width:140px;background:var(--gold2);border:1px solid var(--gold);color:var(--gold);padding:10px;border-radius:5px;cursor:pointer;font-weight:600">💾 Save Images Only</button>
+        <button id="addimg-save-ai" onclick="_saveImagesAndAI()" style="flex:2;min-width:160px;background:var(--accent-ebay-bg);border:1px solid var(--accent-ebay-bd);color:var(--accent-ebay);padding:10px;border-radius:5px;cursor:pointer;font-weight:600">🤖 Save + Scan with AI</button>
+      </div>
+
+      <div style="margin-top:14px;padding:10px;background:var(--bg2);border-radius:4px;font-size:11px;color:var(--muted);line-height:1.5">
+        <b style="color:var(--text)">Save Images Only</b> attaches photos to this record without changing any other fields.<br>
+        <b style="color:var(--text)">Save + Scan with AI</b> runs the AI analyzer and fills in <i>empty</i> fields only — your existing entries are never overwritten.
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  // Make the slot labels clickable to open file picker
+  ['front','back'].forEach(function(slot) {
+    const lbl = document.getElementById('addimg-slot-' + slot);
+    if (lbl) lbl.onclick = function(ev) {
+      // Don't re-trigger if user tapped the file input directly
+      if (ev.target.tagName === 'INPUT') return;
+      const fi = lbl.querySelector('input[type=file]');
+      if (fi) fi.click();
+    };
+  });
+}
+
+function closeAddImagesModal() {
+  const m = document.getElementById('addimg-modal');
+  if (m) m.remove();
+  _ADDIMG_FRONT = null;
+  _ADDIMG_BACK  = null;
+  _ADDIMG_ITEM  = null;
+}
+
+async function _addimgCapture(slot, fileInput) {
+  const file = fileInput.files && fileInput.files[0];
+  if (!file) return;
+  try {
+    const dataUrl = await aiResizeImage(file);
+    if (slot === 'front') _ADDIMG_FRONT = dataUrl;
+    else                  _ADDIMG_BACK  = dataUrl;
+    const preview = document.getElementById('addimg-preview-' + slot);
+    if (preview) { preview.src = dataUrl; preview.style.display = 'block'; }
+    const slotEl = document.getElementById('addimg-slot-' + slot);
+    if (slotEl) {
+      const emptyHint = slotEl.querySelector('.addimg-slot-empty');
+      if (emptyHint) emptyHint.style.display = 'none';
+      slotEl.style.border = '2px solid var(--gold)';
+    }
+  } catch (err) {
+    cvToast('Could not load image: ' + err.message, 'error');
+  }
+  fileInput.value = '';
+}
+
+// Helper: set busy state on action buttons
+function _addimgSetBusy(busy, statusMsg) {
+  const a = document.getElementById('addimg-save-only');
+  const b = document.getElementById('addimg-save-ai');
+  if (a) a.disabled = !!busy;
+  if (b) b.disabled = !!busy;
+  const s = document.getElementById('addimg-status');
+  if (s) s.textContent = statusMsg || '';
+}
+
+// Internal: upload whichever images were captured, return {front:url, back:url}.
+// If a slot wasn't captured, that url is left null.
+async function _addimgUploadCaptured(prefixHint) {
+  const urls = { front: null, back: null };
+  if (_ADDIMG_FRONT) urls.front = await uploadImageToSupabase(_ADDIMG_FRONT, (prefixHint||'img') + '-front');
+  if (_ADDIMG_BACK)  urls.back  = await uploadImageToSupabase(_ADDIMG_BACK,  (prefixHint||'img') + '-back');
+  return urls;
+}
+
+async function _saveImagesOnly() {
+  if (!_ADDIMG_FRONT && !_ADDIMG_BACK) {
+    cvToast('Add at least one photo first', 'warn');
+    return;
+  }
+  if (!SB_URL || !SB_KEY) {
+    cvToast('Supabase not configured — image upload needs Supabase Storage. Set it up in Settings.', 'error');
+    return;
+  }
+  const item = _ADDIMG_ITEM;
+  if (!item) return;
+  _addimgSetBusy(true, 'Uploading to Supabase Storage…');
+  try {
+    const urls = await _addimgUploadCaptured(item.sheet || 'rec');
+    const updates = {};
+    if (urls.front) updates.imageFrontUrl = urls.front;
+    if (urls.back)  updates.imageBackUrl  = urls.back;
+    // Use _tpgApply for consistency: it touches the timestamp, runs buildFlat,
+    // re-renders if currently displayed, and persists to Supabase via the
+    // patch_collectible RPC + GAS backup. Use 'Images' as the label so it
+    // shows up cleanly if anyone audits _tpgApplied (it WON'T set a green
+    // dot because 'images' isn't in _TPG_KEY_MAP).
+    await _tpgApply(item, updates, 'Images');
+    closeAddImagesModal();
+    cvToast('Images attached to record', 'ok');
+    // Re-render detail panel to show the new images immediately
+    if (typeof showDetail === 'function') showDetail(item);
+  } catch (err) {
+    _addimgSetBusy(false, 'Upload failed: ' + err.message);
+    cvLogError('addImages upload failed', { message: err.message, sheet: item.sheet, id: item.id });
+  }
+}
+
+async function _saveImagesAndAI() {
+  if (!_ADDIMG_FRONT && !_ADDIMG_BACK) {
+    cvToast('Add at least one photo first', 'warn');
+    return;
+  }
+  if (!SB_URL || !SB_KEY) {
+    cvToast('Supabase not configured — image upload needs Supabase Storage. Set it up in Settings.', 'error');
+    return;
+  }
+  const provider = aiCurrentProvider();
+  const key = aiCurrentKey();
+  if (!key) {
+    cvToast('Add an AI key in Settings → AI Vision first', 'error');
+    return;
+  }
+  const item = _ADDIMG_ITEM;
+  if (!item) return;
+  _addimgSetBusy(true, 'Uploading images…');
+  try {
+    // 1. Upload images to Storage (so URLs are saved even if AI fails)
+    const urls = await _addimgUploadCaptured(item.sheet || 'rec');
+    _addimgSetBusy(true, 'Analyzing with ' + (provider === 'anthropic' ? 'Claude' : 'Gemini') + '…');
+    // 2. Run AI on the captured images directly (don't touch AI_FRONT_IMG globals)
+    const model = (typeof AI_MODELS !== 'undefined' && AI_MODELS[provider]) ? AI_MODELS[provider] : '';
+    const ai = (provider === 'anthropic')
+      ? await aiAnalyzeAnthropic(key, model, _ADDIMG_FRONT, _ADDIMG_BACK)
+      : await aiAnalyzeGemini(key, model, _ADDIMG_FRONT, _ADDIMG_BACK);
+
+    // 3. Build merge updates: image URLs always set; AI fields fill EMPTY only.
+    //    Existing non-empty values on the record are PRESERVED (your data wins).
+    const updates = {};
+    if (urls.front) updates.imageFrontUrl = urls.front;
+    if (urls.back)  updates.imageBackUrl  = urls.back;
+
+    const candidates = {
+      country: ai.country, series: ai.series, year: ai.year, type: ai.type,
+      denomination: ai.denomination, grade: ai.grade, gradingAuth: ai.gradingAuth,
+      serial: ai.serial, mint: ai.mint, composition: ai.composition,
+      silverContent: ai.silverContent, weight: ai.weight, features: ai.features,
+      notes: ai.notes,
+      // Paper money fields (v69)
+      frNum: ai.frNum, pickNumber: ai.pickNumber, criswell: ai.criswell,
+      noteType: ai.noteType, signatures: ai.signatures, sealColor: ai.sealColor,
+      frDistrict: ai.frDistrict, blockLetter: ai.blockLetter, plate: ai.plate,
+      variety: ai.variety, charter: ai.charter, bankName: ai.bankName,
+      city: ai.city, bankState: ai.bankState, defects: ai.defects
+    };
+    if (ai.estimatedValue && ai.estimatedValue.mid) candidates.value = ai.estimatedValue.mid;
+
+    const filledFields = [];
+    Object.keys(candidates).forEach(function(k) {
+      const v = candidates[k];
+      if (v == null || v === '' || v === 0) return;
+      // Only set if record's current value is empty/null/undefined/0
+      const existing = item.raw && item.raw[k];
+      const isEmpty = (existing == null || existing === '' || (typeof existing === 'number' && existing === 0));
+      if (isEmpty) {
+        updates[k] = v;
+        filledFields.push(k);
+      }
+    });
+
+    // 4. Save everything (images + filled fields) in one patch.
+    await _tpgApply(item, updates, 'Images+AI');
+    closeAddImagesModal();
+    const msg = filledFields.length
+      ? 'Images saved + ' + filledFields.length + ' empty field' + (filledFields.length === 1 ? '' : 's') + ' filled from AI'
+      : 'Images saved (all fields already had values — AI scan didn\'t overwrite anything)';
+    cvToast(msg, 'ok');
+    if (typeof showDetail === 'function') showDetail(item);
+  } catch (err) {
+    _addimgSetBusy(false, 'Failed: ' + err.message);
+    cvLogError('addImages+AI failed', { message: err.message, sheet: item.sheet, id: item.id });
+  }
+}
+// #endregion [ADD-IMAGES-TO-RECORD]
 
 // #region [LABELS]
 // ── LABELS ────────────────────────────────────────────────────────────────────
@@ -9184,13 +9473,18 @@ async function aiAnalyze() {
 }
 
 // ── Gemini (free tier) ─────────────────────────────────────────────
-async function aiAnalyzeGemini(key, model) {
+async function aiAnalyzeGemini(key, model, frontImg, backImg) {
+  // Fall back to module globals when called without explicit images (the
+  // original new-record AI scan path). Explicit args support the "add images
+  // to existing record" flow that runs AI on its own captured images.
+  const front = (frontImg !== undefined) ? frontImg : AI_FRONT_IMG;
+  const back  = (backImg  !== undefined) ? backImg  : AI_BACK_IMG;
   const parts = [];
-  if (AI_FRONT_IMG) {
-    parts.push({inline_data: {mime_type:'image/jpeg', data: AI_FRONT_IMG.split(',')[1]}});
+  if (front) {
+    parts.push({inline_data: {mime_type:'image/jpeg', data: front.split(',')[1]}});
   }
-  if (AI_BACK_IMG) {
-    parts.push({inline_data: {mime_type:'image/jpeg', data: AI_BACK_IMG.split(',')[1]}});
+  if (back) {
+    parts.push({inline_data: {mime_type:'image/jpeg', data: back.split(',')[1]}});
   }
   parts.push({text: aiBuildPrompt()});
 
@@ -9306,13 +9600,15 @@ function _parseAIJson(text) {
 }
 
 // ── Anthropic Claude (paid) ────────────────────────────────────────
-async function aiAnalyzeAnthropic(key, model) {
+async function aiAnalyzeAnthropic(key, model, frontImg, backImg) {
+  const front = (frontImg !== undefined) ? frontImg : AI_FRONT_IMG;
+  const back  = (backImg  !== undefined) ? backImg  : AI_BACK_IMG;
   const content = [];
-  if (AI_FRONT_IMG) {
-    content.push({type:'image', source:{type:'base64', media_type:'image/jpeg', data: AI_FRONT_IMG.split(',')[1]}});
+  if (front) {
+    content.push({type:'image', source:{type:'base64', media_type:'image/jpeg', data: front.split(',')[1]}});
   }
-  if (AI_BACK_IMG) {
-    content.push({type:'image', source:{type:'base64', media_type:'image/jpeg', data: AI_BACK_IMG.split(',')[1]}});
+  if (back) {
+    content.push({type:'image', source:{type:'base64', media_type:'image/jpeg', data: back.split(',')[1]}});
   }
   content.push({type:'text', text: aiBuildPrompt()});
 
