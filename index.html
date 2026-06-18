@@ -1164,7 +1164,7 @@ body.theme-modern-dark select option{
 // Bump this on every deploy so the user can see at a glance which build is
 // running in their browser. Surfaced in three places: the sidebar footer
 // (desktop), the mobile header badge, and the Settings → About section.
-const APP_VERSION = 'v72';
+const APP_VERSION = 'v73';
 const APP_BUILD_DATE = '2026-06-15';
 
 // Tracks whether the very first Supabase fetch has completed. Used to show
@@ -1352,8 +1352,14 @@ function cvDeviceId() {
 // column — no schema changes needed.
 function _touchRecord(record) {
   if (!record || typeof record !== 'object') return;
-  record._modifiedAt = new Date().toISOString();
+  const now = new Date().toISOString();
+  record._modifiedAt = now;
   record._modifiedBy = cvDeviceId().slice(0, 8);
+  // First-touch timestamp — stamped exactly once per record so we can
+  // surface "Recent Activity" on the dashboard. Pre-existing records
+  // (from before v73) won't have this; the dashboard widget falls back
+  // to _modifiedAt for those.
+  if (!record._createdAt) record._createdAt = now;
 }
 
 // Returns a human-readable string like "2h ago (this device)" or "—" if no timestamp.
@@ -1993,6 +1999,9 @@ async function flushPendingLabelOps() {
 
 async function loadLabelQueueFromSupabase() {
   if (!SB_URL || !SB_KEY) return;
+  // Surface "syncing…" state in the labels view header if it's currently open
+  const _statusEl = document.getElementById('lbl-sync-status');
+  if (_statusEl) _statusEl.textContent = 'syncing\u2026';
   try {
     const url = SB_URL.replace(/\/+$/, '') + '/rest/v1/' + SB_LABELS_TABLE +
       '?select=sheet,id&order=added_at.asc';
@@ -2034,11 +2043,15 @@ async function loadLabelQueueFromSupabase() {
     flushPendingLabelOps();
 
     console.log('[label-queue] Synced — ' + remote.length + ' remote, ' + localOnly.length + ' local-only uploaded');
+    // Mark successful sync time so the UI can show "synced 5s ago"
+    window.LABEL_QUEUE_LAST_SYNC = Date.now();
+    if (_statusEl) _statusEl.textContent = 'synced just now';
     if (typeof updateBadges === 'function') updateBadges();
     if (ST && ST.view === 'labels' && typeof renderLabels === 'function') renderLabels();
     else if (ST && ST.view === 'inv' && typeof renderInv === 'function') renderInv();
   } catch (err) {
     console.warn('[label-queue] load error:', err.message);
+    if (_statusEl) _statusEl.textContent = 'sync failed';
   }
 }
 
@@ -2869,7 +2882,15 @@ function nav(v){
   }
   if(v==='dash')    renderDash();
   else if(v==='inv') renderInv();
-  else if(v==='labels') renderLabels();
+  else if(v==='labels') {
+    // Cross-device sync fix (v73): the label queue used to load only on the
+    // initial boot, so labels added on phone wouldn't appear on desktop until
+    // a full page reload. Re-pull from Supabase every time the user opens
+    // this view, and retry any pending push/delete ops that failed earlier.
+    if (typeof flushPendingLabelOps === 'function') flushPendingLabelOps();
+    if (typeof loadLabelQueueFromSupabase === 'function') loadLabelQueueFromSupabase();
+    renderLabels();
+  }
   else if(v==='dups') renderDups();
   else if(v==='breakdown') renderBreakdown();
   else if(v==='add') renderAdd();
@@ -3384,6 +3405,67 @@ function renderDash(){
     }).join('')}
   </tbody>
 </table>
+
+<!-- ─── Recent Activity (v73) ─────────────────────────────────────
+     A rolling window of records added or modified most recently so the user
+     can spot day-to-day discrepancies. Sorts by _modifiedAt desc (which is
+     stamped on every add/edit via _touchRecord). Falls back gracefully for
+     legacy records that have no timestamp. Click a row to open the record. -->
+${(function _recentActivityHTML() {
+  const withTs = ALL_ITEMS
+    .map(function(it) {
+      const ts = (it.raw && (it.raw._modifiedAt || it.raw._createdAt)) || '';
+      return { it: it, ts: ts, t: ts ? new Date(ts).getTime() : 0 };
+    })
+    .filter(function(x) { return x.t > 0; })
+    .sort(function(a, b) { return b.t - a.t })
+    .slice(0, 15);
+  if (!withTs.length) {
+    return '<div class="stt">Recent Activity</div>'
+      + '<div class="empty" style="padding:20px"><div class="empty-i">\u25CB</div>'
+      + '<div class="empty-t">No recent changes tracked yet</div>'
+      + '<div class="empty-s">Records added or edited from now on will appear here, newest first</div></div>';
+  }
+  // Group consecutive entries by calendar day so the user can scan day-by-day
+  let lastDay = '';
+  const rows = withTs.map(function(x) {
+    const it = x.it, ts = new Date(x.ts);
+    const dayStr = ts.toLocaleDateString(undefined, { year:'numeric', month:'short', day:'numeric' });
+    const isNewDay = dayStr !== lastDay;
+    lastDay = dayStr;
+    const sm = SHEET_MAP[it.sheet];
+    const gc = sm ? (GC[sm.group] || '#707070') : '#707070';
+    const sheetLbl = sm ? sm.label : it.sheet;
+    const isCreated = it.raw && it.raw._createdAt && it.raw._createdAt === it.raw._modifiedAt;
+    const tagText = isCreated ? 'Added' : 'Edited';
+    const tagBg = isCreated ? 'rgba(74,154,106,.18)' : 'rgba(74,144,226,.18)';
+    const tagFg = isCreated ? 'var(--green)' : '#5a8ad8';
+    const tagBd = isCreated ? 'rgba(74,154,106,.4)' : 'rgba(74,144,226,.4)';
+    const timeStr = ts.toLocaleTimeString(undefined, { hour:'numeric', minute:'2-digit' });
+    // sm + id are already escaped by their construction; description is user-typed → escape it
+    const desc = e(it.desc || '\u2014');
+    // Build a click handler that jumps to inventory + opens detail panel for this record
+    const navJs = "nav('inv');setTimeout(function(){var i=ALL_ITEMS.find(function(x){return x.sheet===" + JSON.stringify(it.sheet) + "&&cn(x.id)===" + JSON.stringify(cn(it.id)) + "});if(i&&typeof showDetail==='function')showDetail(i)},80)";
+    return (isNewDay ? '<tr><td colspan="5" style="background:var(--bg2);padding:6px 10px;font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--gold)">' + e(dayStr) + '</td></tr>' : '')
+      + '<tr style="cursor:pointer" onclick="' + navJs + '">'
+      + '<td style="width:70px;font-size:11px;color:var(--muted);white-space:nowrap">' + e(timeStr) + '</td>'
+      + '<td style="width:65px"><span class="pill" style="background:' + tagBg + ';color:' + tagFg + ';border-color:' + tagBd + ';font-size:9px">' + tagText + '</span></td>'
+      + '<td style="width:55px"><code style="color:var(--gold);font-size:11px">' + e(cn(it.id)) + '</code></td>'
+      + '<td>' + desc + '</td>'
+      + '<td style="font-size:11px"><span class="pill" style="background:' + gc + '18;color:' + gc + ';border-color:' + gc + '40;font-size:10px">' + e(sheetLbl) + '</span></td>'
+      + '</tr>';
+  }).join('');
+  return '<div class="stt">Recent Activity'
+    + ' <span style="font-size:11px;text-transform:none;letter-spacing:0;color:var(--dim);font-style:italic">'
+    + '\u2014 last ' + withTs.length + ' records added or edited, newest first. Click to view.</span></div>'
+    + '<div class="tw"><table><thead><tr>'
+    + '<th style="width:70px">Time</th>'
+    + '<th style="width:65px">Action</th>'
+    + '<th style="width:55px">#</th>'
+    + '<th>Description</th>'
+    + '<th>Category</th>'
+    + '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+})()}
   `;
   requestAnimationFrame(()=>renderDashCharts(gstats,totVal));
   recordValueSnapshot(); // capture today's value snapshot before drawing the trend chart
@@ -6760,10 +6842,21 @@ function renderLabels(){
     return;
   }
 
+  // Format the "last synced" string for the labels header.
+  const _lastSync = window.LABEL_QUEUE_LAST_SYNC || 0;
+  const _syncAgoStr = _lastSync
+    ? 'synced ' + _cvRelativeTime(new Date(_lastSync))
+    : 'not yet synced';
+
   let html = '<div class="vh">'
     + '<div><div class="vt">Labels Queue <span style="font-size:15px;opacity:.35;font-weight:400">' + pendingCount + ' pending</span></div>'
-    + '<div class="vsub">' + newRecLabels.length + ' new records · ' + manualLabels.length + ' reprints &mdash; <em>click any row to view/edit; click &times; to remove</em></div></div>'
-    + '<div style="display:flex;gap:8px">'
+    + '<div class="vsub">' + newRecLabels.length + ' new records · ' + manualLabels.length + ' reprints &mdash; <em>click any row to view/edit; click &times; to remove</em></div>'
+    + '<div style="font-size:11px;color:var(--dim);margin-top:4px">'
+    + '<span id="lbl-sync-status">' + e(_syncAgoStr) + '</span> from cloud'
+    + (_lastSync ? '' : ' <span style="color:var(--red)" title="Label queue table not yet created in Supabase, or sync has never run">— check Settings if labels aren\'t syncing across devices</span>')
+    + '</div></div>'
+    + '<div style="display:flex;gap:8px;flex-wrap:wrap">'
+    + '<button class="bg" onclick="loadLabelQueueFromSupabase()" title="Re-fetch the label queue from Supabase to pick up changes from other devices">&#8635; Refresh</button>'
     + '<button class="bp" onclick="exportLabelsNimbot()">&#8595; Export Nimbot XLSX</button>'
     + '<button class="bg" onclick="showAddRangeToLabels()">+ Add Range</button>'
     + '<button class="bg" onclick="markAllPrinted()">&#10003; Mark All Printed</button>'
