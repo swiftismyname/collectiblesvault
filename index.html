@@ -1164,7 +1164,7 @@ body.theme-modern-dark select option{
 // Bump this on every deploy so the user can see at a glance which build is
 // running in their browser. Surfaced in three places: the sidebar footer
 // (desktop), the mobile header badge, and the Settings → About section.
-const APP_VERSION = 'v73';
+const APP_VERSION = 'v74';
 const APP_BUILD_DATE = '2026-06-15';
 
 // Tracks whether the very first Supabase fetch has completed. Used to show
@@ -1376,6 +1376,199 @@ function _fmtModified(record) {
 }
 
 // #endregion [TIMESTAMPS]
+
+// #region [COLUMNS]
+// ─── CUSTOMIZABLE COLUMNS ─────────────────────────────────────────────
+// User-pickable extra columns for any table view. Each registered column
+// has a stable key, a header label, a renderer (item.raw → cell HTML),
+// and an optional right-alignment flag (numeric columns).
+//
+// The current table view (Inventory, Recent Activity) keeps its built-in
+// columns intact and appends whatever the user has selected here. Choices
+// persist per-table in localStorage under `cv_cols_<tableId>`.
+//
+// To add a new pickable column: drop an entry in COL_REGISTRY and pick a
+// group in COL_GROUPS. That's it — no other plumbing required.
+// ──────────────────────────────────────────────────────────────────────
+
+// `e` (HTML-escape) and `fmt$` are defined later in the file; we lazy-resolve
+// them inside render() at call-time so the registry can sit up here.
+const COL_REGISTRY = {
+  // Standard fields most records have in some form
+  year:          { label:'Year',           render:(r)=>e(r.year||r.Year||'\u2014') },
+  country:       { label:'Country',        render:(r)=>e(r.country||r.Country||'\u2014') },
+  mint:          { label:'Mint',           render:(r)=>e(r.mint||r.mintMark||r['Mint Mark']||'\u2014') },
+  type:          { label:'Type',           render:(r)=>e(r.type||'\u2014') },
+  denomination:  { label:'Denom',          render:(r)=>e(r.denomination||r.Denomination||'\u2014') },
+  gradingAuth:   { label:'Grading Auth',   render:(r)=>e(r.gradingAuth||r['Grading Authority']||'\u2014') },
+  serial:        { label:'Serial #',       render:(r)=>e(r.serial||'\u2014') },
+  composition:   { label:'Composition',    render:(r)=>e(r.composition||'\u2014') },
+  weightG:       { label:'Weight (g)',     render:(r)=>r.weight?e(String(r.weight)):'\u2014', right:true },
+  silverContent: { label:'Silver Content', render:(r)=>e(r.silverContent||'\u2014') },
+
+  // Pricing extras
+  soldPrice:     { label:'Sold Price',     render:(r)=>r.soldPrice?fmt$(parseFloat(r.soldPrice)||0):'\u2014', right:true },
+  ebayAvg:       { label:'eBay Avg',       render:(r)=>r.ebayAvgSold?fmt$(parseFloat(r.ebayAvgSold)||0):'\u2014', right:true },
+  ebayMin:       { label:'eBay Min',       render:(r)=>r.ebayMinSold?fmt$(parseFloat(r.ebayMinSold)||0):'\u2014', right:true },
+  ebayMax:       { label:'eBay Max',       render:(r)=>r.ebayMaxSold?fmt$(parseFloat(r.ebayMaxSold)||0):'\u2014', right:true },
+
+  // Dates
+  modified:      { label:'Modified',       render:(r)=>r._modifiedAt?e(_cvRelativeTime(new Date(r._modifiedAt))):'\u2014' },
+  created:       { label:'Added',          render:(r)=>r._createdAt?e(_cvRelativeTime(new Date(r._createdAt))):'\u2014' },
+
+  // Paper money — general
+  frNum:         { label:'Friedberg #',    render:(r)=>e(r.frNum||'\u2014') },
+  pickNumber:    { label:'Pick #',         render:(r)=>e(r.pickNumber||'\u2014') },
+  criswell:      { label:'Criswell #',     render:(r)=>e(r.criswell||'\u2014') },
+  noteType:      { label:'Note Type',      render:(r)=>e(r.noteType||'\u2014') },
+  signatures:    { label:'Signatures',     render:(r)=>e(r.signatures||'\u2014') },
+  sealColor:     { label:'Seal Color',     render:(r)=>e(r.sealColor||'\u2014') },
+  frDistrict:    { label:'FR District',    render:(r)=>e(r.frDistrict||'\u2014') },
+  blockLetter:   { label:'Block Letter',   render:(r)=>e(r.blockLetter||'\u2014') },
+  plate:         { label:'Plate',          render:(r)=>e(r.plate||'\u2014') },
+  variety:       { label:'Variety',        render:(r)=>e(r.variety||'\u2014') },
+
+  // Nationals
+  charter:       { label:'Charter #',      render:(r)=>e(r.charter||'\u2014') },
+  bankName:      { label:'Bank Name',      render:(r)=>e(r.bankName||'\u2014') },
+  city:          { label:'City',           render:(r)=>e(r.city||'\u2014') },
+  bankState:     { label:'Bank State',     render:(r)=>e(r.bankState||'\u2014') },
+
+  // Notes / Misc
+  features:      { label:'Features',       render:(r)=>e(r.features||'\u2014') },
+  notes:         { label:'Notes',          render:(r)=>e(r.notes||'\u2014') },
+  defects:       { label:'Defects',        render:(r)=>e(r.defects||'\u2014') },
+};
+
+// Groups for the picker UI — keeps the modal scannable instead of one giant flat list
+const COL_GROUPS = [
+  { label:'Basic',       keys:['year','country','mint','type','denomination','gradingAuth','serial','composition','weightG','silverContent'] },
+  { label:'Pricing',     keys:['soldPrice','ebayAvg','ebayMin','ebayMax'] },
+  { label:'Dates',       keys:['modified','created'] },
+  { label:'Paper Money', keys:['frNum','pickNumber','criswell','noteType','signatures','sealColor','frDistrict','blockLetter','plate','variety'] },
+  { label:'Nationals',   keys:['charter','bankName','city','bankState'] },
+  { label:'Other',       keys:['features','notes','defects'] },
+];
+
+// Per-table defaults — empty arrays so no extras show until user opts in.
+const COL_DEFAULTS = {
+  inv: [],
+  recent: [],
+};
+
+function loadVisibleCols(tableId) {
+  try {
+    const raw = localStorage.getItem('cv_cols_' + tableId);
+    if (raw) {
+      const arr = JSON.parse(raw);
+      // Filter to known keys only (registry could change between versions)
+      if (Array.isArray(arr)) return arr.filter(k => COL_REGISTRY[k]);
+    }
+  } catch (e) {}
+  return COL_DEFAULTS[tableId] || [];
+}
+
+function saveVisibleCols(tableId, cols) {
+  try { localStorage.setItem('cv_cols_' + tableId, JSON.stringify(cols)); }
+  catch (e) { console.warn('[cols] save failed:', e.message); }
+}
+
+// Render the header <th>s and a row's <td>s for the user-selected extras.
+// Returns { th, td } as HTML strings. Reused by inventory + recent activity.
+function renderExtraCols(tableId, item) {
+  const cols = loadVisibleCols(tableId);
+  if (!cols.length) return { th:'', td:'' };
+  const raw = (item && item.raw) || {};
+  let th = '';
+  let td = '';
+  for (let i = 0; i < cols.length; i++) {
+    const key = cols[i];
+    const def = COL_REGISTRY[key];
+    if (!def) continue;
+    const alignAttr = def.right ? ' class="r"' : '';
+    th += '<th' + alignAttr + ' style="font-size:11px;color:var(--muted);white-space:nowrap">' + e(def.label) + '</th>';
+    if (item) {
+      let cell = '';
+      try { cell = def.render(raw); }
+      catch (err) { cell = '\u2014'; console.warn('[col]', key, 'render failed', err.message); }
+      td += '<td' + alignAttr + ' data-label="' + e(def.label) + '" style="font-size:12px;color:var(--muted)">' + cell + '</td>';
+    }
+  }
+  return { th, td };
+}
+
+// Just the headers — for when we don't need a row (empty state etc)
+function renderExtraColHeaders(tableId) {
+  return renderExtraCols(tableId, null).th;
+}
+
+// Open the column picker for a given table. After Apply, calls onApply()
+// so the view can re-render with the new column selection.
+function showColumnPicker(tableId, tableLabel, onApply) {
+  const existing = document.getElementById('col-picker-modal');
+  if (existing) existing.remove();
+  const current = new Set(loadVisibleCols(tableId));
+
+  let body = '';
+  for (let g = 0; g < COL_GROUPS.length; g++) {
+    const grp = COL_GROUPS[g];
+    body += '<div style="margin-bottom:14px">'
+         + '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--gold);margin-bottom:6px;border-bottom:1px solid var(--border);padding-bottom:3px">' + e(grp.label) + '</div>'
+         + '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px">';
+    for (let i = 0; i < grp.keys.length; i++) {
+      const key = grp.keys[i];
+      const def = COL_REGISTRY[key];
+      if (!def) continue;
+      const checked = current.has(key) ? ' checked' : '';
+      body += '<label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;padding:4px 6px;border-radius:4px" '
+           + 'onmouseover="this.style.background=\'var(--bg2)\'" onmouseout="this.style.background=\'\'">'
+           + '<input type="checkbox" data-col-key="' + e(key) + '"' + checked + ' style="cursor:pointer">'
+           + '<span>' + e(def.label) + '</span>'
+           + '</label>';
+    }
+    body += '</div></div>';
+  }
+
+  const modal = document.createElement('div');
+  modal.id = 'col-picker-modal';
+  modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.75);z-index:1000;display:flex;align-items:center;justify-content:center;padding:16px';
+  modal.innerHTML =
+    '<div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;width:640px;max-width:100%;max-height:92vh;display:flex;flex-direction:column">'
+    +   '<div style="display:flex;justify-content:space-between;align-items:center;padding:18px 20px;border-bottom:1px solid var(--border)">'
+    +     '<div style="font-family:var(--font-display,\'Cormorant Garamond\',serif);font-size:20px;color:var(--gold)">\u2699 Customize Columns &mdash; ' + e(tableLabel) + '</div>'
+    +     '<button onclick="document.getElementById(\'col-picker-modal\').remove()" style="background:none;border:none;color:var(--muted);font-size:22px;cursor:pointer;line-height:1">&times;</button>'
+    +   '</div>'
+    +   '<div style="padding:16px 20px;color:var(--muted);font-size:12px;border-bottom:1px solid var(--border)">Pick extra fields to show alongside the built-in columns. Empty fields render as &mdash; on records that don\'t have that data.</div>'
+    +   '<div style="padding:18px 20px;overflow-y:auto;flex:1">' + body + '</div>'
+    +   '<div style="display:flex;gap:8px;padding:14px 20px;border-top:1px solid var(--border)">'
+    +     '<button onclick="_colPickerReset(\'' + e(tableId) + '\')" style="background:var(--bg4);border:1px solid var(--border);color:var(--muted);padding:9px 14px;border-radius:5px;cursor:pointer;font-size:12px">Reset to defaults</button>'
+    +     '<div style="flex:1"></div>'
+    +     '<button onclick="document.getElementById(\'col-picker-modal\').remove()" style="background:var(--bg4);border:1px solid var(--border);color:var(--text);padding:9px 16px;border-radius:5px;cursor:pointer">Cancel</button>'
+    +     '<button id="col-picker-apply" style="background:var(--gold2);border:1px solid var(--gold);color:var(--gold);padding:9px 22px;border-radius:5px;cursor:pointer;font-weight:600">Apply</button>'
+    +   '</div>'
+    + '</div>';
+  document.body.appendChild(modal);
+
+  document.getElementById('col-picker-apply').onclick = function() {
+    const picked = [];
+    modal.querySelectorAll('input[type=checkbox][data-col-key]').forEach(function(cb) {
+      if (cb.checked) picked.push(cb.getAttribute('data-col-key'));
+    });
+    saveVisibleCols(tableId, picked);
+    modal.remove();
+    if (typeof onApply === 'function') onApply();
+  };
+}
+
+function _colPickerReset(tableId) {
+  saveVisibleCols(tableId, COL_DEFAULTS[tableId] || []);
+  const modal = document.getElementById('col-picker-modal');
+  if (modal) modal.remove();
+  // Re-render the affected view
+  if (tableId === 'inv' && typeof renderInv === 'function' && ST && ST.view === 'inv') renderInv();
+  else if (tableId === 'recent' && typeof renderDash === 'function' && ST && ST.view === 'dash') renderDash();
+}
+// #endregion [COLUMNS]
 
 // #region [SYNC-LOCK]
 // ─── SYNC LOCK ──────────────────────────────────────────────────────
@@ -3446,24 +3639,29 @@ ${(function _recentActivityHTML() {
     const desc = e(it.desc || '\u2014');
     // Build a click handler that jumps to inventory + opens detail panel for this record
     const navJs = "nav('inv');setTimeout(function(){var i=ALL_ITEMS.find(function(x){return x.sheet===" + JSON.stringify(it.sheet) + "&&cn(x.id)===" + JSON.stringify(cn(it.id)) + "});if(i&&typeof showDetail==='function')showDetail(i)},80)";
-    return (isNewDay ? '<tr><td colspan="5" style="background:var(--bg2);padding:6px 10px;font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--gold)">' + e(dayStr) + '</td></tr>' : '')
+    return (isNewDay ? '<tr><td colspan="' + (5 + loadVisibleCols('recent').length) + '" style="background:var(--bg2);padding:6px 10px;font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--gold)">' + e(dayStr) + '</td></tr>' : '')
       + '<tr style="cursor:pointer" onclick="' + navJs + '">'
       + '<td style="width:70px;font-size:11px;color:var(--muted);white-space:nowrap">' + e(timeStr) + '</td>'
       + '<td style="width:65px"><span class="pill" style="background:' + tagBg + ';color:' + tagFg + ';border-color:' + tagBd + ';font-size:9px">' + tagText + '</span></td>'
       + '<td style="width:55px"><code style="color:var(--gold);font-size:11px">' + e(cn(it.id)) + '</code></td>'
       + '<td>' + desc + '</td>'
       + '<td style="font-size:11px"><span class="pill" style="background:' + gc + '18;color:' + gc + ';border-color:' + gc + '40;font-size:10px">' + e(sheetLbl) + '</span></td>'
+      + renderExtraCols('recent', it).td
       + '</tr>';
   }).join('');
-  return '<div class="stt">Recent Activity'
+  return '<div class="stt" style="display:flex;align-items:center;gap:10px">'
+    + '<span>Recent Activity'
     + ' <span style="font-size:11px;text-transform:none;letter-spacing:0;color:var(--dim);font-style:italic">'
-    + '\u2014 last ' + withTs.length + ' records added or edited, newest first. Click to view.</span></div>'
+    + '\u2014 last ' + withTs.length + ' records added or edited, newest first. Click to view.</span></span>'
+    + '<button onclick="showColumnPicker(\'recent\',\'Recent Activity\',renderDash)" title="Show or hide extra columns" style="margin-left:auto;font-size:11px;text-transform:none;letter-spacing:0;background:var(--bg4);border:1px solid var(--border);color:var(--muted);padding:4px 10px;border-radius:4px;cursor:pointer">\u2699 Columns</button>'
+    + '</div>'
     + '<div class="tw"><table><thead><tr>'
     + '<th style="width:70px">Time</th>'
     + '<th style="width:65px">Action</th>'
     + '<th style="width:55px">#</th>'
     + '<th>Description</th>'
     + '<th>Category</th>'
+    + renderExtraColHeaders('recent')
     + '</tr></thead><tbody>' + rows + '</tbody></table></div>';
 })()}
   `;
@@ -3562,6 +3760,7 @@ function renderInv(){
     <div class="vt">Inventory <span style="font-size:15px;opacity:.35;font-weight:400">${total.toLocaleString()} of ${ALL_ITEMS.length.toLocaleString()}</span></div>
   </div>
   <div style="display:flex;gap:8px">
+    <button class="bg" onclick="showColumnPicker('inv','Inventory',renderInv)" title="Show or hide extra columns" style="background:var(--bg4);border:1px solid var(--border);color:var(--muted)">&#9881; Columns</button>
     <button class="bg" onclick="exportCSV()">&#8595; ${(ST.search||ST.filterGroup!=='all'||ST.filterSheet!=='all')?'Filtered ('+total.toLocaleString()+')':'All ('+ALL_ITEMS.length.toLocaleString()+')'} CSV</button>
   </div>
 </div>
@@ -3593,10 +3792,11 @@ function renderInv(){
       <th class="r" style="width:75px" title="Melt value at current spot price">Melt</th>
       <th class="r" style="width:65px">Gain</th>
       <th class="r" style="width:55px">OZ</th>
+      ${renderExtraColHeaders('inv')}
       <th style="width:36px;text-align:center;font-size:10px" title="Add/remove from label print queue">Lbl</th>
     </tr></thead>
     <tbody>
-      ${slice.length===0?`<tr><td colspan="10"><div class="empty"><div class="empty-i">${IS_INITIAL_LOAD?'\u25CC':'\u25CE'}</div><div class="empty-t">${IS_INITIAL_LOAD?'Loading your collection\u2026':'No items found'}</div><div class="empty-s">${IS_INITIAL_LOAD?'Fetching records from Supabase':'Adjust your filters'}</div></div></td></tr>`
+      ${slice.length===0?`<tr><td colspan="${10 + loadVisibleCols('inv').length}"><div class="empty"><div class="empty-i">${IS_INITIAL_LOAD?'\u25CC':'\u25CE'}</div><div class="empty-t">${IS_INITIAL_LOAD?'Loading your collection\u2026':'No items found'}</div><div class="empty-s">${IS_INITIAL_LOAD?'Fetching records from Supabase':'Adjust your filters'}</div></div></td></tr>`
       :slice.map((item,idx)=>{
         const sm=SHEET_MAP[item.sheet]; const gc=GC[sm.group]||'#707070';
         const gain=item.value-item.cost;
@@ -3626,6 +3826,7 @@ function renderInv(){
             ${item.cost>0&&item.value>0?(gain>=0?'+':'')+fmt$(gain):'—'}
           </td>
           <td class="r" style="font-size:11px;color:var(--dim)">${item.oz>0?fmtOz(item.oz):'—'}</td>
+          ${renderExtraCols('inv', item).td}
           <td style="text-align:center;padding:0 4px">
             <div style="display:flex;gap:3px;justify-content:center;align-items:center">
               <button onclick="toggleLabelQueue('${item.sheet}','${item.id}',event)" title="${inQ?'Remove from label queue':'Add to label print queue'}" style="background:${inQ?'var(--gold2)':'transparent'};border:1px solid ${inQ?'var(--gold)':'var(--border)'};color:${inQ?'var(--gold)':'var(--dim)'};border-radius:4px;width:26px;height:24px;cursor:pointer;font-size:13px;line-height:1;padding:0">${inQ?'\u2713':'+'}</button>
