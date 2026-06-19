@@ -1222,7 +1222,7 @@ body.theme-modern-dark select option{
 // Bump this on every deploy so the user can see at a glance which build is
 // running in their browser. Surfaced in three places: the sidebar footer
 // (desktop), the mobile header badge, and the Settings → About section.
-const APP_VERSION = 'v86';
+const APP_VERSION = 'v87';
 const APP_BUILD_DATE = '2026-06-15';
 
 // Tracks whether the very first Supabase fetch has completed. Used to show
@@ -3755,6 +3755,7 @@ ${(function _recentActivityHTML() {
     + '\u2014 last ' + withTs.length + ' records added or edited, newest first. Click to view.</span></span>'
     + '<button onclick="showColumnPicker(\'recent\',\'Recent Activity\',renderDash)" title="Show or hide extra columns" style="margin-left:auto;font-size:11px;text-transform:none;letter-spacing:0;background:var(--bg4);border:1px solid var(--border);color:var(--muted);padding:4px 10px;border-radius:4px;cursor:pointer">\u2699 Columns</button>'
     + '<button onclick="showSilverAuditModal()" title="Scan silver records for likely-wrong purity (silverContent) or weight values" style="font-size:11px;text-transform:none;letter-spacing:0;background:var(--bg4);border:1px solid var(--border);color:var(--muted);padding:4px 10px;border-radius:4px;cursor:pointer">\u2696 Silver Audit</button>'
+    + '<button onclick="showSilverSeriesCleanupModal()" title="Bulk-apply standard purity, silver weight, and total grams to all records in a US silver series" style="font-size:11px;text-transform:none;letter-spacing:0;background:var(--bg4);border:1px solid var(--border);color:var(--muted);padding:4px 10px;border-radius:4px;cursor:pointer">\ud83e\ude99 Series Cleanup</button>'
     + '</div>'
     + '<div class="tw"><table><thead><tr>'
     + '<th style="width:70px">Time</th>'
@@ -7169,6 +7170,215 @@ function showSilverAuditModal() {
   document.body.appendChild(modal);
 }
 // #endregion [SILVER-AUDIT]
+
+// #region [SILVER-SERIES-CLEANUP]
+// ─── SILVER SERIES STANDARD VALUES (v87) ──────────────────────────────
+// For US silver series with consistent composition (Morgan Dollars, Mercury
+// Dimes, etc.), every record's purity, silver weight, and total coin weight
+// are knowable from the series name alone — they don't vary by year or mint.
+// This tool scans gradedSilver + rawSilver, groups records by matched series,
+// and lets the user bulk-apply the canonical values to all records in a group
+// with one click.
+//
+// Coins explicitly EXCLUDED from this tool because composition varies by year:
+//   * Kennedy Half Dollar (1964 = 90%, 1965-70 = 40%, 1971+ = clad)
+// For Kennedy Halves, the user must fix records individually after checking
+// the year in the description.
+// ──────────────────────────────────────────────────────────────────────
+
+// Each entry: { id, label, purity, weight (troy oz of pure silver), totalGrams, aliases }.
+// `aliases` are lowercase substrings searched in series + type + category + description.
+// Longest-matching alias across all entries wins (so "morgan dollar" beats "morgan").
+const SILVER_COIN_REF = [
+  // Dollar coins
+  { id:'morgan_dollar',            label:'Morgan Dollar',                 purity:0.9,    weight:0.7734,  totalGrams:26.73,
+    aliases:['morgan dollar','morgan silver dollar','morgan'] },
+  { id:'peace_dollar',             label:'Peace Dollar',                  purity:0.9,    weight:0.7734,  totalGrams:26.73,
+    aliases:['peace dollar','peace silver dollar'] },
+  { id:'trade_dollar',             label:'Trade Dollar',                  purity:0.9,    weight:0.7874,  totalGrams:27.22,
+    aliases:['trade dollar'] },
+  { id:'seated_liberty_dollar',    label:'Seated Liberty Dollar',         purity:0.9,    weight:0.7734,  totalGrams:26.73,
+    aliases:['seated liberty dollar','seated dollar'] },
+  // Half dollars (Kennedy explicitly NOT here — year-dependent)
+  { id:'walking_liberty_half',     label:'Walking Liberty Half Dollar',   purity:0.9,    weight:0.36169, totalGrams:12.50,
+    aliases:['walking liberty half','walking liberty 50c','walking liberty'] },
+  { id:'franklin_half',            label:'Franklin Half Dollar',          purity:0.9,    weight:0.36169, totalGrams:12.50,
+    aliases:['franklin half','franklin half dollar'] },
+  { id:'barber_half',              label:'Barber Half Dollar',            purity:0.9,    weight:0.36169, totalGrams:12.50,
+    aliases:['barber half'] },
+  { id:'seated_liberty_half',      label:'Seated Liberty Half',           purity:0.9,    weight:0.36169, totalGrams:12.50,
+    aliases:['seated liberty half','seated half'] },
+  // Quarters
+  { id:'washington_quarter',       label:'Washington Quarter (silver)',   purity:0.9,    weight:0.18084, totalGrams:6.25,
+    aliases:['washington quarter','washington silver quarter','washington 25c'] },
+  { id:'standing_liberty_quarter', label:'Standing Liberty Quarter',      purity:0.9,    weight:0.18084, totalGrams:6.25,
+    aliases:['standing liberty quarter','standing liberty'] },
+  { id:'barber_quarter',           label:'Barber Quarter',                purity:0.9,    weight:0.18084, totalGrams:6.25,
+    aliases:['barber quarter'] },
+  { id:'seated_liberty_quarter',   label:'Seated Liberty Quarter',        purity:0.9,    weight:0.18084, totalGrams:6.25,
+    aliases:['seated liberty quarter','seated quarter'] },
+  // Dimes
+  { id:'roosevelt_dime',           label:'Roosevelt Dime (silver)',       purity:0.9,    weight:0.07234, totalGrams:2.50,
+    aliases:['roosevelt dime','roosevelt silver dime','roosevelt 10c'] },
+  { id:'mercury_dime',             label:'Mercury Dime',                  purity:0.9,    weight:0.07234, totalGrams:2.50,
+    aliases:['mercury dime','winged liberty dime'] },
+  { id:'barber_dime',              label:'Barber Dime',                   purity:0.9,    weight:0.07234, totalGrams:2.50,
+    aliases:['barber dime'] },
+  { id:'seated_liberty_dime',      label:'Seated Liberty Dime',           purity:0.9,    weight:0.07234, totalGrams:2.50,
+    aliases:['seated liberty dime','seated dime'] },
+  // Nickels
+  { id:'war_nickel',               label:'Jefferson War Nickel (1942-45)',purity:0.35,   weight:0.05626, totalGrams:5.00,
+    aliases:['war nickel','jefferson war nickel','silver war nickel','wartime nickel','silver nickel'] },
+  // Bullion (frequently on rawSilver as well)
+  { id:'american_silver_eagle',    label:'American Silver Eagle',         purity:0.999,  weight:1.0,     totalGrams:31.1035,
+    aliases:['american silver eagle','silver eagle','ase'] },
+  { id:'canadian_maple_leaf',      label:'Canadian Silver Maple Leaf',    purity:0.9999, weight:1.0,     totalGrams:31.1035,
+    aliases:['canadian silver maple leaf','silver maple leaf','maple leaf silver','rcm silver'] },
+  { id:'britannia_silver',         label:'British Silver Britannia',      purity:0.999,  weight:1.0,     totalGrams:31.1035,
+    aliases:['silver britannia','britannia silver'] },
+];
+
+function _matchSilverSeries(item) {
+  const raw = item.raw || {};
+  // Search across series + type + category + description so a record that
+  // only has the series in the description still matches.
+  const text = (String(raw.series||'') + ' ' + String(raw.type||'') + ' ' +
+                String(raw.category||'') + ' ' + String(raw.desc||raw.description||'')).toLowerCase();
+  if (!text.trim()) return null;
+  let best = null, bestLen = 0;
+  for (let i = 0; i < SILVER_COIN_REF.length; i++) {
+    const entry = SILVER_COIN_REF[i];
+    for (let j = 0; j < entry.aliases.length; j++) {
+      const a = entry.aliases[j];
+      if (text.indexOf(a) >= 0 && a.length > bestLen) {
+        best = entry;
+        bestLen = a.length;
+      }
+    }
+  }
+  return best;
+}
+
+// "Already correct" tolerance: within 0.001 troy oz on weight, 0.001 on purity.
+// Loose enough to accept tiny rounding drift; tight enough to flag genuine
+// mismatches (Morgan stored as 0.77 vs canonical 0.7734 → off by 0.0034 → flagged).
+function _silverRefMatches(item, ref) {
+  const raw = item.raw || {};
+  const p = parseFloat(raw.silverContent);
+  const w = parseFloat(raw.weight);
+  if (isNaN(p) || isNaN(w)) return false;
+  return Math.abs(p - ref.purity) < 0.001 && Math.abs(w - ref.weight) < 0.001;
+}
+
+function _scanSilverSeries() {
+  const silverSheets = ['gradedSilver', 'rawSilver'];
+  const grouped = {};   // refId → { ref, items, correctCount, needsUpdateCount }
+  const unmatched = [];
+  for (let i = 0; i < ALL_ITEMS.length; i++) {
+    const item = ALL_ITEMS[i];
+    if (!silverSheets.includes(item.sheet)) continue;
+    const match = _matchSilverSeries(item);
+    if (!match) { unmatched.push(item); continue; }
+    if (!grouped[match.id]) {
+      grouped[match.id] = { ref: match, items: [], correctCount: 0, needsUpdateCount: 0 };
+    }
+    grouped[match.id].items.push(item);
+    if (_silverRefMatches(item, match)) grouped[match.id].correctCount++;
+    else grouped[match.id].needsUpdateCount++;
+  }
+  return { grouped, unmatched };
+}
+
+async function _applySilverSeriesStandards(refId) {
+  const ref = SILVER_COIN_REF.find(function(r){ return r.id === refId; });
+  if (!ref) { cvToast('Unknown series', 'err'); return; }
+  const silverSheets = ['gradedSilver', 'rawSilver'];
+  const toUpdate = [];
+  for (let i = 0; i < ALL_ITEMS.length; i++) {
+    const item = ALL_ITEMS[i];
+    if (!silverSheets.includes(item.sheet)) continue;
+    const match = _matchSilverSeries(item);
+    if (!match || match.id !== refId) continue;
+    if (_silverRefMatches(item, match)) continue;
+    toUpdate.push(item);
+  }
+  if (!toUpdate.length) { cvToast('All ' + ref.label + ' records already match', 'info'); return; }
+  const msg = 'Apply standard values to ' + toUpdate.length + ' ' + ref.label + ' record' + (toUpdate.length === 1 ? '' : 's') + '?\n\n'
+            + '\u2022 Silver Purity = ' + ref.purity + '\n'
+            + '\u2022 Silver Weight = ' + ref.weight + ' troy oz\n'
+            + '\u2022 Total Coin Weight = ' + ref.totalGrams + ' g\n\n'
+            + 'All other fields (cost, value, grade, mint, etc.) untouched. Live Melt Value will recalculate.';
+  if (!confirm(msg)) return;
+  let fixed = 0;
+  for (let i = 0; i < toUpdate.length; i++) {
+    const item = toUpdate[i];
+    try {
+      await _tpgApply(item, {
+        silverContent:   ref.purity,
+        weight:          ref.weight,
+        totalCoinWeight: ref.totalGrams
+      }, 'SilverSeriesCleanup');
+      fixed++;
+    } catch (err) {
+      console.warn('[silver-series] update failed for', item.sheet, item.id, err.message);
+    }
+  }
+  cvToast('Updated ' + fixed + ' of ' + toUpdate.length + ' ' + ref.label + ' records', 'ok');
+  showSilverSeriesCleanupModal();   // refresh counts
+}
+
+function showSilverSeriesCleanupModal() {
+  const ex = document.getElementById('silver-series-modal');
+  if (ex) ex.remove();
+  const scan = _scanSilverSeries();
+  const groups = Object.values(scan.grouped).sort(function(a, b){ return b.items.length - a.items.length; });
+  let body = '';
+  if (groups.length === 0) {
+    body = '<div style="padding:30px;text-align:center;color:var(--muted);font-size:13px">No silver coin records matched any known series. Add a Series/Type field (e.g., \"Morgan Dollar\") to each record first.</div>';
+  } else {
+    body = groups.map(function(g){
+      const ref = g.ref;
+      const hasUpdates = g.needsUpdateCount > 0;
+      return '<div style="border:1px solid var(--border);border-radius:6px;padding:12px 14px;margin-bottom:10px;background:var(--bg2)">'
+        + '<div style="display:flex;justify-content:space-between;align-items:start;gap:10px">'
+        +   '<div style="flex:1;min-width:0">'
+        +     '<div style="font-size:13px;color:var(--gold);font-weight:600">' + e(ref.label) + '</div>'
+        +     '<div style="font-size:11px;color:var(--muted);margin-top:4px">Purity ' + ref.purity + ' \u00b7 Silver Weight ' + ref.weight + ' troy oz \u00b7 Total ' + ref.totalGrams + ' g</div>'
+        +     '<div style="font-size:11px;color:var(--text);margin-top:6px">'
+        +       '<span style="color:var(--green)">' + g.correctCount + ' already match</span>'
+        +       (hasUpdates ? ' \u00b7 <span style="color:var(--red)">' + g.needsUpdateCount + ' need update</span>' : '')
+        +     '</div>'
+        +   '</div>'
+        +   (hasUpdates
+              ? '<button onclick="_applySilverSeriesStandards(\'' + e(ref.id) + '\')" style="background:var(--gold2);border:1px solid var(--gold);color:var(--gold);padding:7px 14px;border-radius:4px;cursor:pointer;font-size:11px;font-weight:600;white-space:nowrap">Apply to ' + g.needsUpdateCount + '</button>'
+              : '<span style="color:var(--green);font-size:11px;white-space:nowrap">\u2713 all match</span>')
+        + '</div>'
+        + '</div>';
+    }).join('');
+  }
+  if (scan.unmatched.length > 0) {
+    body += '<div style="border:1px dashed var(--border);border-radius:6px;padding:12px 14px;margin-top:10px">'
+      + '<div style="font-size:13px;color:var(--text);font-weight:600">Unmatched records <span style="color:var(--muted);font-weight:400">(' + scan.unmatched.length + ')</span></div>'
+      + '<div style="font-size:11px;color:var(--muted);margin-top:4px;line-height:1.5">These records have no series matching the reference table (Morgan Dollar, Mercury Dime, etc.). Open each record, set the Series field to a recognized name, then re-run this tool. Kennedy Half Dollars are also excluded \u2014 their composition varies by year (1964=90%, 1965-70=40%, 1971+=clad), so fix those manually.</div>'
+      + '</div>';
+  }
+  const modal = document.createElement('div');
+  modal.id = 'silver-series-modal';
+  modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.75);z-index:1000;display:flex;align-items:center;justify-content:center;padding:16px';
+  modal.innerHTML =
+    '<div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;width:760px;max-width:100%;max-height:92vh;display:flex;flex-direction:column">'
+    +   '<div style="display:flex;justify-content:space-between;align-items:center;padding:18px 20px;border-bottom:1px solid var(--border)">'
+    +     '<div style="font-family:var(--font-display,\'Cormorant Garamond\',serif);font-size:20px;color:var(--gold)">\ud83e\ude99 Silver Series Cleanup</div>'
+    +     '<button onclick="document.getElementById(\'silver-series-modal\').remove()" style="background:none;border:none;color:var(--muted);font-size:22px;cursor:pointer;line-height:1">&times;</button>'
+    +   '</div>'
+    +   '<div style="padding:14px 20px;color:var(--muted);font-size:12px;border-bottom:1px solid var(--border);line-height:1.6">'
+    +     'Records grouped by US silver series. Composition is consistent across all years and mints for each series listed (Morgan Dollars are always 0.9 purity / 0.7734 troy oz pure silver, etc.). Apply standard values to bulk-fix every record in a group. Other fields (cost, value, grade, mint) are never touched.'
+    +   '</div>'
+    +   '<div style="padding:18px 20px;overflow-y:auto;flex:1">' + body + '</div>'
+    + '</div>';
+  document.body.appendChild(modal);
+}
+// #endregion [SILVER-SERIES-CLEANUP]
 
 // #region [LABELS]
 // ── LABELS ────────────────────────────────────────────────────────────────────
