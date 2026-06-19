@@ -1164,7 +1164,7 @@ body.theme-modern-dark select option{
 // Bump this on every deploy so the user can see at a glance which build is
 // running in their browser. Surfaced in three places: the sidebar footer
 // (desktop), the mobile header badge, and the Settings → About section.
-const APP_VERSION = 'v79';
+const APP_VERSION = 'v80';
 const APP_BUILD_DATE = '2026-06-15';
 
 // Tracks whether the very first Supabase fetch has completed. Used to show
@@ -3666,7 +3666,17 @@ ${(function _recentActivityHTML() {
     // detail panel in. Old behavior navigated to inv first; that broke flow
     // because the user lost their Recent Activity context. The detail panel
     // is independent of the current view, so showDetail works from anywhere.
-    const clickJs = "var i=ALL_ITEMS.find(function(x){return x.sheet===" + JSON.stringify(it.sheet) + "&&cn(x.id)===" + JSON.stringify(cn(it.id)) + "});if(i&&typeof showDetail==='function')showDetail(i);";
+    //
+    // v80 fix: the previous click handler embedded JSON.stringify() output
+    // (double-quoted strings) inside a double-quoted onclick attribute. The
+    // first inner " terminated the attribute and silently killed the click —
+    // cursor:pointer still worked (different attribute) but nothing happened.
+    // Now we call a module-scope helper with single-quoted args, so the
+    // attribute parses cleanly. Escape any single quotes defensively even
+    // though sheet names and id strings shouldn't contain them.
+    const safeSheet = String(it.sheet).replace(/'/g, "\\'");
+    const safeId    = String(cn(it.id)).replace(/'/g, "\\'");
+    const clickJs   = "_openDetailById('" + safeSheet + "','" + safeId + "')";
     return (isNewDay ? '<tr><td colspan="' + (5 + loadVisibleCols('recent').length) + '" style="background:var(--bg2);padding:6px 10px;font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--gold)">' + e(dayStr) + '</td></tr>' : '')
       + '<tr style="cursor:pointer" onclick="' + clickJs + '">'
       + '<td style="width:70px;font-size:11px;color:var(--muted);white-space:nowrap">' + e(timeStr) + '</td>'
@@ -3903,6 +3913,19 @@ function setSort(col){
 
 // #region [DETAIL-PANEL]
 // ── DETAIL PANEL ──────────────────────────────────────────────────────────────
+// Resolve (sheet, id) to a live ALL_ITEMS entry and open its detail panel.
+// Exposed at module scope so onclick="" attributes can call it with a simple
+// `_openDetailById('usNotes','0042')` — much safer than embedding JSON.stringify
+// output inside a double-quoted onclick attribute (which my earlier code did,
+// causing inner double quotes to terminate the attribute early and silently
+// kill the handler).
+function _openDetailById(sheet, id) {
+  const item = ALL_ITEMS.find(function(x) {
+    return x.sheet === sheet && cn(x.id) === id;
+  });
+  if (item && typeof showDetail === 'function') showDetail(item);
+}
+
 function showDetail(item){
   ST.selItem=item;
   const panel=document.getElementById('detail-panel');
