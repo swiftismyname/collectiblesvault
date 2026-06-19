@@ -1164,7 +1164,7 @@ body.theme-modern-dark select option{
 // Bump this on every deploy so the user can see at a glance which build is
 // running in their browser. Surfaced in three places: the sidebar footer
 // (desktop), the mobile header badge, and the Settings → About section.
-const APP_VERSION = 'v74';
+const APP_VERSION = 'v78';
 const APP_BUILD_DATE = '2026-06-15';
 
 // Tracks whether the very first Supabase fetch has completed. Used to show
@@ -3896,20 +3896,77 @@ function showDetail(item){
     _hiddenFields.add('oz');
   }
 
-  // Deduplicate: if both "denomination" and "Denomination" exist, keep only the
-  // first (lowercase) one. Caused by GAS header scan adding capital-letter versions.
-  const _seenNorm = new Set();
+  // Canonicalize a field name so duplicate spellings collapse to one row.
+  // Strips case, whitespace, and punctuation, then maps known synonyms.
+  // E.g. "Fr#" → "frnum", "Fr Num" → "frnum", "frNum" → "frnum" (all dedupe to one).
+  // The sheet context disambiguates `Type` (= noteType only in currency sheets).
+  function _canonField(k, sheet) {
+    const c = String(k).toLowerCase().replace(/[^a-z0-9]/g, '');
+    // Catalog numbers
+    if (c === 'fr' || c === 'frnum' || c === 'friedberg' || c === 'friedbergnumber') return 'frnum';
+    if (c === 'pickno' || c === 'picknumber' || c === 'pickn' || c === 'pnumber') return 'picknumber';
+    if (c === 'criswellno' || c === 'criswell' || c === 'criswellnumber') return 'criswell';
+    // Signatures
+    if (c === 'sig1' || c === 'signature1') return 'sig1';
+    if (c === 'sig2' || c === 'signature2') return 'sig2';
+    if (c === 'sig' || c === 'signature' || c === 'signatures') return 'signatures';
+    // Description / Record ID
+    if (c === 'description' || c === 'desc') return 'desc';
+    if (c === 'recordno' || c === 'record' || c === 'recordnum' || c === 'id' || c === 'recordid') return 'id';
+    // Bullion weight aliases (Google Sheets used several spellings)
+    if (c === 'preciousmetalcontenttroyoz' || c === 'troyoz' || c === 'oz' || c === 'weight' || c === 'weightoz') return 'weight';
+    // Stored melt — always derived from spot price + weight; we show Live Melt in Summary
+    if (c === 'meltvalue' || c === 'melt') return 'meltvalue';
+    // Star Note variants
+    if (c === 'starnote' || c === 'star') return 'starnote';
+    // Currency-sheet only: Type and Note Type are the same thing (legacy alias).
+    // On COIN sheets, Type is its own distinct field (e.g., "Morgan Dollar"), so don't merge.
+    const currencySheets = ['usnotes','confederate','obsolete','foreignnotes','fractional'];
+    if (currencySheets.indexOf(String(sheet).toLowerCase()) >= 0) {
+      if (c === 'type' || c === 'notetype') return 'notetype';
+    }
+    return c;
+  }
+
+  // Detects stale Google Sheets formula columns that got migrated as static values.
+  // These were original auto-computed price tiers (Cost*2, Value*2, Value*3) and are
+  // now misleading because they don't recompute when Cost/Value change — they're
+  // frozen at whatever the sheet calculated on migration day.
+  function _isFormulaField(k) {
+    const s = String(k).toLowerCase();
+    if (/price\s*\(\s*(min|mid|max)/i.test(s)) return true;     // "Price ( Mid.) - Value*2"
+    if (/value\s*[*x]\s*[0-9]/i.test(s))       return true;     // "Value*3"
+    if (/cost\s*[*x]\s*[0-9]/i.test(s))        return true;     // "Cost *2"
+    return false;
+  }
+
+  // Canonical field names that are ALREADY shown in the Summary section above.
+  // Hiding them from All Fields keeps the panel clean (no "Cost" once in Summary,
+  // again in All Fields). Using canonical form catches every spelling variant.
+  const _summaryCanons = new Set(['id', 'desc', 'cost', 'value', 'soldprice', 'meltvalue']);
+  // Weight is rendered in Summary for bullion sheets — hide its many spellings here too
+  const _bullionWithWeight = new Set(['gold','silver','copper','platinum','palladium','gradedSilver','rawSilver']);
+  if (_bullionWithWeight.has(item.sheet)) _summaryCanons.add('weight');
+
+  // Image URLs come in several spellings depending on which import path created the record
+  const _rawHidden = new Set(['_supabaseSheet','imageFrontUrl','imageBackUrl',
+                              'imagefronturl','imagebackurl','image_front_url','image_back_url']);
+
+  const _seenCanon = new Set();
   const rows=Object.entries(raw).filter(([k,v])=>{
-    if (v===null || v==='' || v===undefined || k==='id') return false;
+    if (v===null || v==='' || v===undefined) return false;
     // Internal/system fields use a leading underscore as a convention (e.g.
     // _modifiedAt, _modifiedBy, _tpgApplied). These are rendered elsewhere
     // (Summary section's "Last Modified" row, lookup buttons' green dot)
     // and should never appear in the All Fields listing.
     if (typeof k === 'string' && k.charAt(0) === '_') return false;
+    if (_rawHidden.has(k)) return false;
     if (_hiddenFields.has(k)) return false;
-    const norm = k.toLowerCase();
-    if (_seenNorm.has(norm)) return false;  // skip duplicate key (different case)
-    _seenNorm.add(norm);
+    if (_isFormulaField(k)) return false;
+    const canon = _canonField(k, item.sheet);
+    if (_summaryCanons.has(canon)) return false;     // already in Summary
+    if (_seenCanon.has(canon)) return false;          // duplicate spelling of a field we've already shown
+    _seenCanon.add(canon);
     return true;
   }).map(([k,v])=>{
     let lbl=k.replace(/([A-Z])/g,' $1').replace(/^./,s=>s.toUpperCase());
@@ -6685,11 +6742,12 @@ async function _saveImagesAndAI() {
     // 1. Upload images to Storage (so URLs are saved even if AI fails)
     const urls = await _addimgUploadCaptured(item.sheet || 'rec');
     _addimgSetBusy(true, 'Analyzing with ' + (provider === 'anthropic' ? 'Claude' : 'Gemini') + '…');
-    // 2. Run AI on the captured images directly (don't touch AI_FRONT_IMG globals)
-    const model = (typeof AI_MODELS !== 'undefined' && AI_MODELS[provider]) ? AI_MODELS[provider] : '';
-    const ai = (provider === 'anthropic')
-      ? await aiAnalyzeAnthropic(key, model, _ADDIMG_FRONT, _ADDIMG_BACK)
-      : await aiAnalyzeGemini(key, model, _ADDIMG_FRONT, _ADDIMG_BACK);
+    // Surface retry attempts in the modal status line so the user sees
+    // "Gemini overloaded — retrying in 2s…" instead of a frozen "Analyzing…"
+    const onStatus = function(msg) { _addimgSetBusy(true, msg); };
+    // v76: fallback orchestrator — tries primary provider with 5 retries,
+    // then automatically falls back to the secondary if its key is configured.
+    const ai = await aiAnalyzeWithFallback(_ADDIMG_FRONT, _ADDIMG_BACK, onStatus);
 
     // 3. Build merge updates: image URLs always set; AI fields fill EMPTY only.
     //    Existing non-empty values on the record are PRESERVED (your data wins).
@@ -6728,9 +6786,10 @@ async function _saveImagesAndAI() {
     // 4. Save everything (images + filled fields) in one patch.
     await _tpgApply(item, updates, 'Images+AI');
     closeAddImagesModal();
+    const _fbNote = ai._aiFellBack ? ' (via ' + _aiProviderLabel(ai._aiProvider) + ' fallback)' : '';
     const msg = filledFields.length
-      ? 'Images saved + ' + filledFields.length + ' empty field' + (filledFields.length === 1 ? '' : 's') + ' filled from AI'
-      : 'Images saved (all fields already had values — AI scan didn\'t overwrite anything)';
+      ? 'Images saved + ' + filledFields.length + ' empty field' + (filledFields.length === 1 ? '' : 's') + ' filled from AI' + _fbNote
+      : 'Images saved (all fields already had values — AI scan didn\'t overwrite anything)' + _fbNote;
     cvToast(msg, 'ok');
     if (typeof showDetail === 'function') showDetail(item);
   } catch (err) {
@@ -8506,6 +8565,35 @@ function renderSettings(){
         +modelOpts
         +'</select></div>'
         +'</div>'
+
+        // ── Fallback model (v77) ─────────────────────────────────────
+        // Fires automatically when primary exhausts its 5 retries. Default:
+        // same provider but a different model (Gemini Flash → Pro on free tier).
+        +(function(){
+          const fbProv = (typeof aiFallbackProvider === 'function') ? aiFallbackProvider() : provider;
+          const fbModel = (typeof aiFallbackModel === 'function') ? aiFallbackModel() : (provider === 'gemini' ? 'gemini-2.5-pro' : 'claude-haiku-4-5');
+          const fbModelList = (typeof AI_MODELS !== 'undefined' && AI_MODELS[fbProv]) ? AI_MODELS[fbProv] : [];
+          const fbModelOpts = fbModelList.map(function(m){
+            return '<option value="'+e(m)+'"'+(m===fbModel?' selected':'')+'>'+e(m)+'</option>';
+          }).join('');
+          const provOpts = ['gemini','anthropic'].map(function(p){
+            return '<option value="'+p+'"'+(p===fbProv?' selected':'')+'>'+(p==='anthropic'?'Anthropic Claude':'Google Gemini')+'</option>';
+          }).join('');
+          return '<div style="margin-top:14px;padding:12px 14px;background:var(--bg4);border-radius:6px;border-left:3px solid var(--gold)">'
+            +'<div style="font-size:11px;color:var(--gold);text-transform:uppercase;letter-spacing:.1em;margin-bottom:8px">Automatic Fallback</div>'
+            +'<div style="font-size:11px;color:var(--muted);line-height:1.5;margin-bottom:10px">If the primary model exhausts its 5 retries (e.g., Gemini Flash 503), the scan automatically retries with this model. By default this stays on Gemini\u2014switching from Flash (popular, often overloaded) to Pro (less loaded, still free).</div>'
+            +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">'
+            +'<div><div style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin-bottom:4px">Fallback Provider</div>'
+            +'<select id="ai-fallback-provider-input" onchange="_aiRefreshFallbackModelOpts(this.value)" style="width:100%;padding:8px 10px;background:var(--bg3);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:12px">'
+            +provOpts
+            +'</select></div>'
+            +'<div><div style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin-bottom:4px">Fallback Model</div>'
+            +'<select id="ai-fallback-model-input" style="width:100%;padding:8px 10px;background:var(--bg3);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:12px">'
+            +fbModelOpts
+            +'</select></div>'
+            +'</div>'
+            +'</div>';
+        })()
         +'<div id="ai-key-msg" style="font-size:12px;margin:6px 0;min-height:14px;color:var(--dim);font-family:DM Mono,monospace"></div>'
 
         // Actions
@@ -9617,6 +9705,100 @@ function aiCurrentKey() {
   return localStorage.getItem('cv_ai_key_' + aiCurrentProvider()) || '';
 }
 
+// Provider-agnostic accessors — used by the fallback orchestrator to read the
+// key/model for whichever provider it needs (primary or secondary).
+function aiKeyFor(provider) {
+  return localStorage.getItem('cv_ai_key_' + provider) || '';
+}
+function aiModelFor(provider) {
+  return localStorage.getItem('cv_ai_model_' + provider) || AI_MODEL_DEFAULTS[provider] || '';
+}
+
+// Human-readable label for status messages
+function _aiProviderLabel(p) { return p === 'anthropic' ? 'Claude' : 'Gemini'; }
+
+// ── FALLBACK CONFIG (v77) ─────────────────────────────────────────────
+// The fallback is now configured as a (provider, model) pair, defaulting
+// to the SAME provider as primary but with a different model — i.e.
+// "Gemini flash failed → try Gemini Pro" rather than necessarily switching
+// to a different company. This keeps everything on the free Gemini tier
+// for Gemini-primary users while still giving Anthropic users a sane
+// default (Sonnet → Haiku) if they switch later.
+//
+// Both can be overridden in Settings → AI Vision → Fallback model.
+function aiFallbackProvider() {
+  return localStorage.getItem('cv_ai_fallback_provider') || aiCurrentProvider();
+}
+function aiFallbackModel() {
+  const stored = localStorage.getItem('cv_ai_fallback_model');
+  if (stored) return stored;
+  // Sensible defaults when nothing's saved yet
+  const fbProv = aiFallbackProvider();
+  if (fbProv === 'gemini')    return 'gemini-2.5-pro';   // Different capacity pool than flash
+  if (fbProv === 'anthropic') return 'claude-haiku-4-5'; // Cheapest Claude, fastest
+  return AI_MODEL_DEFAULTS[fbProv] || '';
+}
+
+// ── PROVIDER FALLBACK ORCHESTRATOR (v77) ─────────────────────────────
+// Tries the user's primary (provider+model) first with the 5-attempt retry
+// inside _aiFetchWithRetry. If it exhausts retries, falls back to the
+// configured (fallback provider, fallback model) — which by default is the
+// SAME provider but a different model (e.g., gemini-flash-latest → gemini-2.5-pro).
+// No fallback fires if primary and fallback resolve to the same (provider, model)
+// pair, since retrying with identical config would just produce identical errors.
+async function aiAnalyzeWithFallback(frontImg, backImg, onStatus) {
+  const primaryProvider = aiCurrentProvider();
+  const primaryKey      = aiKeyFor(primaryProvider);
+  const primaryModel    = aiCurrentModel();
+  if (!primaryKey) {
+    throw new Error('No API key for ' + _aiProviderLabel(primaryProvider) + '. Add one in Settings \u2192 AI Vision.');
+  }
+
+  const fbProvider = aiFallbackProvider();
+  const fbModel    = aiFallbackModel();
+  const fbKey      = aiKeyFor(fbProvider);  // Same key as primary when fbProvider === primaryProvider
+
+  // Skip fallback if it's the SAME (provider, model) — nothing to gain from retrying identically
+  const sameConfig = (fbProvider === primaryProvider && fbModel === primaryModel);
+  const haveFallback = !!fbKey && !sameConfig;
+
+  // Helper: pick the right analyzer for a provider
+  function _run(provider, key, model) {
+    return (provider === 'anthropic')
+      ? aiAnalyzeAnthropic(key, model, frontImg, backImg, onStatus)
+      : aiAnalyzeGemini(key, model, frontImg, backImg, onStatus);
+  }
+
+  if (typeof onStatus === 'function') onStatus('Analyzing with ' + _aiProviderLabel(primaryProvider) + ' (' + primaryModel + ')\u2026');
+  try {
+    return await _run(primaryProvider, primaryKey, primaryModel);
+  } catch (primaryErr) {
+    console.warn('[ai-fallback] primary failed:', primaryErr.message);
+    if (!haveFallback) {
+      // Tell the user what to do — different message depending on whether they
+      // need a key (cross-provider fallback) or a different model (same-provider)
+      const fixHint = (fbProvider !== primaryProvider && !fbKey)
+        ? '\n\nTip: add a ' + _aiProviderLabel(fbProvider) + ' key in Settings \u2192 AI Vision to enable fallback.'
+        : sameConfig
+        ? '\n\nTip: pick a different fallback model in Settings \u2192 AI Vision (currently set to the same model as primary).'
+        : '';
+      throw new Error(primaryErr.message + fixHint);
+    }
+    if (typeof onStatus === 'function') onStatus(_aiProviderLabel(primaryProvider) + ' exhausted \u2014 switching to ' + _aiProviderLabel(fbProvider) + ' (' + fbModel + ')\u2026');
+    try {
+      const result = await _run(fbProvider, fbKey, fbModel);
+      // Tag the result so the caller can surface "via Pro fallback" in status/toast
+      result._aiProvider = fbProvider;
+      result._aiFallbackModel = fbModel;
+      result._aiFellBack = true;
+      return result;
+    } catch (fallbackErr) {
+      console.warn('[ai-fallback] fallback also failed:', fallbackErr.message);
+      throw new Error('Both attempts failed:\n\u2022 ' + _aiProviderLabel(primaryProvider) + ' (' + primaryModel + '): ' + primaryErr.message + '\n\u2022 ' + _aiProviderLabel(fbProvider) + ' (' + fbModel + '): ' + fallbackErr.message);
+    }
+  }
+}
+
 const AI_PROMPT = `You are an expert numismatist and currency specialist. You will be shown one or two images of a coin OR paper banknote (typically obverse/front and reverse/back).
 
 Identify the item carefully and return ONLY valid JSON (no markdown, no preamble, no commentary) with this exact structure:
@@ -9787,11 +9969,19 @@ async function aiAnalyze() {
   btn.disabled = true;
 
   try {
-    const result = (provider === 'gemini')
-      ? await aiAnalyzeGemini(key, model)
-      : await aiAnalyzeAnthropic(key, model);
+    // Status callback surfaces retry progress to the user. _aiFetchWithRetry
+    // calls this with messages like "Gemini overloaded — retrying in 2s…"
+    // so a transient 503 looks like a brief pause, not a frozen UI.
+    const onStatus = function(msg) {
+      statusEl.innerHTML = '<span class="ai-spin"></span>' + e(msg);
+    };
+    // v76: fallback orchestrator handles primary→secondary provider failover
+    // automatically. If Gemini gets 5x 503s and the user has an Anthropic key
+    // in Settings, it silently switches to Claude and completes the scan.
+    const result = await aiAnalyzeWithFallback(AI_FRONT_IMG, AI_BACK_IMG, onStatus);
     AI_LAST_RESULT = result;
-    statusEl.innerHTML = '✓ Analysis complete · confidence: ' + (result.confidence || 'medium');
+    const _fbNote = result._aiFellBack ? ' \u00b7 via ' + _aiProviderLabel(result._aiProvider) + ' fallback' : '';
+    statusEl.innerHTML = '✓ Analysis complete · confidence: ' + (result.confidence || 'medium') + _fbNote;
     statusEl.className = 'ai-status ok';
     renderAIResults(result);
   } catch (err) {
@@ -9812,7 +10002,76 @@ async function aiAnalyze() {
 }
 
 // ── Gemini (free tier) ─────────────────────────────────────────────
-async function aiAnalyzeGemini(key, model, frontImg, backImg) {
+// Wraps fetch() with automatic retry-with-backoff for transient AI provider
+// errors. 503 (overloaded), 429 (rate-limited), 500 (internal error), and
+// network failures are retried. Auth errors, bad-request, etc. fail fast.
+//
+// `onStatus(msg)` is an optional callback that surfaces retry progress to
+// whatever UI initiated the call (the AI scan spinner, the Add Images modal,
+// etc.) so the user sees "Retrying… (attempt 2/3)" instead of a frozen UI.
+async function _aiFetchWithRetry(url, opts, providerLabel, onStatus) {
+  // v76 bump: 5 attempts (was 3) to give Gemini more chances to clear a 503
+  // wave before the caller falls back to the other provider. Total worst-case
+  // wait: 1.5+3+5+8 = ~17.5s before throwing — still fast enough that fallback
+  // to Claude completes within ~25s end-to-end.
+  const MAX_ATTEMPTS = 5;
+  const BACKOFFS = [1500, 3000, 5000, 8000];
+  const RETRY_CODES = new Set([429, 500, 502, 503, 504]);
+
+  let lastErr = null;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    let r;
+    try {
+      r = await fetch(url, opts);
+    } catch (netErr) {
+      // Network-level failure (DNS, offline, CORS preflight). Treat as retryable.
+      lastErr = new Error(providerLabel + ' network error: ' + netErr.message);
+      if (attempt < MAX_ATTEMPTS) {
+        const wait = BACKOFFS[attempt - 1];
+        if (typeof onStatus === 'function') {
+          onStatus(providerLabel + ' network error \u2014 retrying in ' + Math.round(wait/1000) + 's\u2026 (attempt ' + (attempt+1) + '/' + MAX_ATTEMPTS + ')');
+        }
+        await new Promise(res => setTimeout(res, wait));
+        continue;
+      }
+      throw lastErr;
+    }
+
+    if (r.ok) return r;
+
+    // Non-2xx — decide whether to retry
+    if (RETRY_CODES.has(r.status) && attempt < MAX_ATTEMPTS) {
+      const wait = BACKOFFS[attempt - 1];
+      const friendly = r.status === 503 ? 'overloaded' :
+                       r.status === 429 ? 'rate-limited' :
+                       'temporary error ' + r.status;
+      if (typeof onStatus === 'function') {
+        onStatus(providerLabel + ' ' + friendly + ' \u2014 retrying in ' + Math.round(wait/1000) + 's\u2026 (attempt ' + (attempt+1) + '/' + MAX_ATTEMPTS + ')');
+      }
+      console.warn('[' + providerLabel + '] ' + r.status + ' on attempt ' + attempt + '/' + MAX_ATTEMPTS + ' \u2014 retrying in ' + wait + 'ms');
+      await new Promise(res => setTimeout(res, wait));
+      continue;
+    }
+
+    // Either non-retryable status, or we've exhausted attempts on a retryable one.
+    const errTxt = await r.text();
+    const baseMsg = providerLabel + ' ' + r.status + ': ' + errTxt.slice(0, 300);
+    if (r.status === 503) {
+      // Give the user something actionable rather than a raw HTTP error
+      throw new Error(providerLabel + ' is overloaded (tried ' + MAX_ATTEMPTS + 'x over ' + Math.round(BACKOFFS.reduce((a,b)=>a+b,0)/1000) + 's). Servers are temporarily at capacity.');
+    }
+    if (r.status === 429) {
+      throw new Error(providerLabel + ' rate-limited (tried ' + MAX_ATTEMPTS + 'x). API quota for the current minute/day is exhausted.');
+    }
+    if (r.status === 401 || r.status === 403) {
+      throw new Error(providerLabel + ' rejected your API key (' + r.status + '). Check Settings \u2192 AI Vision and verify the key is current and has access to ' + providerLabel + '.');
+    }
+    throw new Error(baseMsg);
+  }
+  throw lastErr || new Error(providerLabel + ': unexpected retry-loop exit');
+}
+
+async function aiAnalyzeGemini(key, model, frontImg, backImg, onStatus) {
   // Fall back to module globals when called without explicit images (the
   // original new-record AI scan path). Explicit args support the "add images
   // to existing record" flow that runs AI on its own captured images.
@@ -9832,7 +10091,7 @@ async function aiAnalyzeGemini(key, model, frontImg, backImg) {
   const url = 'https://generativelanguage.googleapis.com/v1beta/models/' +
               encodeURIComponent(model) + ':generateContent';
 
-  const r = await fetch(url, {
+  const r = await _aiFetchWithRetry(url, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
@@ -9855,11 +10114,8 @@ async function aiAnalyzeGemini(key, model, frontImg, backImg) {
         maxOutputTokens: 8000
       }
     })
-  });
-  if (!r.ok) {
-    const errTxt = await r.text();
-    throw new Error('Gemini ' + r.status + ': ' + errTxt.slice(0, 300));
-  }
+  }, 'Gemini', onStatus);
+  // _aiFetchWithRetry guarantees r.ok or throws — no need to re-check status here.
   const data = await r.json();
 
   // Surface prompt-level safety blocks before trying to read candidates
@@ -9939,7 +10195,7 @@ function _parseAIJson(text) {
 }
 
 // ── Anthropic Claude (paid) ────────────────────────────────────────
-async function aiAnalyzeAnthropic(key, model, frontImg, backImg) {
+async function aiAnalyzeAnthropic(key, model, frontImg, backImg, onStatus) {
   const front = (frontImg !== undefined) ? frontImg : AI_FRONT_IMG;
   const back  = (backImg  !== undefined) ? backImg  : AI_BACK_IMG;
   const content = [];
@@ -9951,7 +10207,7 @@ async function aiAnalyzeAnthropic(key, model, frontImg, backImg) {
   }
   content.push({type:'text', text: aiBuildPrompt()});
 
-  const r = await fetch('https://api.anthropic.com/v1/messages', {
+  const r = await _aiFetchWithRetry('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
       'x-api-key': key,
@@ -9965,11 +10221,7 @@ async function aiAnalyzeAnthropic(key, model, frontImg, backImg) {
       max_tokens: 4000,
       messages: [{ role: 'user', content: content }]
     })
-  });
-  if (!r.ok) {
-    const errTxt = await r.text();
-    throw new Error('Anthropic ' + r.status + ': ' + errTxt.slice(0, 300));
-  }
+  }, 'Claude', onStatus);
   const data = await r.json();
   const stopReason = data.stop_reason || 'unknown';
 
@@ -10182,6 +10434,22 @@ async function aiApplyToForm() {
   }, 120);
 }
 
+// When the user picks a different fallback provider in Settings, replace the
+// fallback-model dropdown's options with that provider's model list. Selects
+// the first model as the new default; user can refine before clicking Save.
+function _aiRefreshFallbackModelOpts(provider) {
+  const sel = document.getElementById('ai-fallback-model-input');
+  if (!sel) return;
+  const list = (AI_MODELS && AI_MODELS[provider]) || [];
+  // Pick a sensible default: gemini-2.5-pro for Gemini, haiku-4-5 for Anthropic
+  const defaultModel = provider === 'gemini' ? 'gemini-2.5-pro'
+                     : provider === 'anthropic' ? 'claude-haiku-4-5'
+                     : (list[0] || '');
+  sel.innerHTML = list.map(function(m){
+    return '<option value="' + e(m) + '"' + (m === defaultModel ? ' selected' : '') + '>' + e(m) + '</option>';
+  }).join('');
+}
+
 function saveAIKey() {
   const provider = document.getElementById('ai-provider-input')?.value || aiCurrentProvider();
   const keyEl = document.getElementById('ai-key-input');
@@ -10205,6 +10473,12 @@ function saveAIKey() {
   localStorage.setItem('cv_ai_provider', provider);
   localStorage.setItem('cv_ai_key_' + provider, key);
   localStorage.setItem('cv_ai_model_' + provider, model);
+  // Persist fallback config (v77) — these inputs only exist after the user
+  // opens Settings, so defensively check before reading.
+  const fbProvEl  = document.getElementById('ai-fallback-provider-input');
+  const fbModelEl = document.getElementById('ai-fallback-model-input');
+  if (fbProvEl && fbProvEl.value)   localStorage.setItem('cv_ai_fallback_provider', fbProvEl.value);
+  if (fbModelEl && fbModelEl.value) localStorage.setItem('cv_ai_fallback_model',    fbModelEl.value);
   if (msg) { msg.textContent = '✓ Saved.'; msg.style.color = 'var(--green)'; }
   setTimeout(function(){ renderSettings(); }, 600);
 }
