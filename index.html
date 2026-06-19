@@ -1222,7 +1222,7 @@ body.theme-modern-dark select option{
 // Bump this on every deploy so the user can see at a glance which build is
 // running in their browser. Surfaced in three places: the sidebar footer
 // (desktop), the mobile header badge, and the Settings → About section.
-const APP_VERSION = 'v84';
+const APP_VERSION = 'v85';
 const APP_BUILD_DATE = '2026-06-15';
 
 // Tracks whether the very first Supabase fetch has completed. Used to show
@@ -1462,6 +1462,10 @@ const COL_REGISTRY = {
   serial:        { label:'Serial #',       render:(r)=>e(r.serial||'\u2014') },
   composition:   { label:'Composition',    render:(r)=>e(r.composition||'\u2014') },
   weightG:       { label:'Weight (g)',     render:(r)=>r.weight?e(String(r.weight)):'\u2014', right:true },
+  totalCoinWeight:{ label:'Total Coin Weight (g)', render:(r)=>{
+    const v = parseFloat(r.totalCoinWeight);
+    return (!isNaN(v) && v > 0) ? e(String(v)) + ' g' : '\u2014';
+  }, right:true },
   silverContent: { label:'Silver Purity (0-1)', render:(r)=>e(r.silverContent||'\u2014') },
 
   // Pricing extras (cost/value/melt added v79 — see COL_DEFAULTS.recent)
@@ -1510,7 +1514,7 @@ const COL_REGISTRY = {
 
 // Groups for the picker UI — keeps the modal scannable instead of one giant flat list
 const COL_GROUPS = [
-  { label:'Basic',       keys:['year','country','mint','type','denomination','gradingAuth','serial','composition','weightG','silverContent'] },
+  { label:'Basic',       keys:['year','country','mint','type','denomination','gradingAuth','serial','composition','weightG','totalCoinWeight','silverContent'] },
   { label:'Pricing',     keys:['cost','value','melt','soldPrice','ebayAvg','ebayMin','ebayMax'] },
   { label:'Dates',       keys:['modified','created'] },
   { label:'Paper Money', keys:['frNum','pickNumber','criswell','noteType','signatures','sealColor','frDistrict','blockLetter','plate','variety'] },
@@ -4141,14 +4145,25 @@ function showDetail(item){
     }
   }
 
-  // Use the raw weight value directly to avoid rounding mismatches
-  // For platinum/palladium item.oz comes from weightG (grams), display as-is
+  // Use the raw weight value directly to avoid rounding mismatches.
+  // v85: 'troy oz' suffix in the detail panel only (Inventory and Recent
+  // Activity table columns stay terse). totalCoinWeight rendered as a
+  // separate row below weight when present — it's grams of the whole coin
+  // (informational, never used in melt).
   let displayWeight = '';
   if (r.weight !== null && r.weight !== undefined && r.weight !== '' && parseFloat(r.weight) > 0) {
-    displayWeight = parseFloat(r.weight) + ' oz';
+    const w = parseFloat(r.weight);
+    displayWeight = w + ' troy oz';
   } else if (r.weightG !== null && r.weightG !== undefined && r.weightG !== '' && parseFloat(r.weightG) > 0) {
     const grams = parseFloat(r.weightG);
-    displayWeight = grams + ' g (' + (grams/31.1035).toFixed(4) + ' oz)';
+    displayWeight = grams + ' g (' + (grams/31.1035).toFixed(4) + ' troy oz)';
+  }
+  // Total physical coin weight (grams) — purely informational, separate row.
+  // Empty for non-coin items, pre-v85 records that never had this field, or
+  // bullion entries the user hasn't manually annotated.
+  let displayTotalCoinWeight = '';
+  if (r.totalCoinWeight !== null && r.totalCoinWeight !== undefined && r.totalCoinWeight !== '' && parseFloat(r.totalCoinWeight) > 0) {
+    displayTotalCoinWeight = parseFloat(r.totalCoinWeight) + ' g';
   }
 
   // Image attachments (front/back) — rendered as the LAST section so the user
@@ -4179,6 +4194,7 @@ function showDetail(item){
     ${item.value>0?`<div class="dp-row"><span class="dp-label">Current Value</span><span class="dp-value mono">${fmt$(item.value)}</span></div>`:''}
     ${item.cost>0&&item.value>0?`<div class="dp-row"><span class="dp-label">Gain / Loss</span><span class="dp-value ${gain>=0?'grn':'red'}">${gain>=0?'+':''}${fmt$(gain)}</span></div>`:''}
     ${displayWeight?`<div class="dp-row"><span class="dp-label">Weight</span><span class="dp-value">${e(displayWeight)}</span></div>`:''}
+    ${displayTotalCoinWeight?`<div class="dp-row"><span class="dp-label" title="Total physical coin weight including all alloy metals — informational only, not used in melt calc">Total Coin Weight</span><span class="dp-value" style="color:var(--muted)">${e(displayTotalCoinWeight)}</span></div>`:''}
     ${liveMelt>0?`<div class="dp-row"><span class="dp-label">Live Melt Value</span><span class="dp-value mono" style="color:var(--gold)" title="${e(meltLabel)}">${fmt$(liveMelt)}</span></div>`:''}
     ${(function(){
       // eBay sold range — sits with the other pricing rows so it's hard to miss.
@@ -6940,6 +6956,7 @@ function _scanSilverRecords() {
   const suspicious = []; // silverContent ∈ (0, 1] but doesn't match known purity → manual review
   const missingPurity = []; // weight > 0 but silverContent missing — can't compute melt
   const missingWeight = []; // silverContent set but no weight — melt will read 0
+  const suspectGrams = []; // weight > 2 troy oz on a single silver coin → likely grams misfiled as oz (Morgan = 0.7734 oz, not 26.73)
   const silverSheets = ['gradedSilver', 'rawSilver'];
   for (let i = 0; i < ALL_ITEMS.length; i++) {
     const item = ALL_ITEMS[i];
@@ -6957,8 +6974,14 @@ function _scanSilverRecords() {
     }
     if (hasW && !hasSc) missingPurity.push(item);
     if (hasSc && !hasW) missingWeight.push(item);
+    // Largest single silver coin ASW is ~0.85 troy oz (Trade Dollar). Anything
+    // above 2 troy oz on a graded/raw silver coin is almost certainly the
+    // total coin weight in grams misfiled as troy oz (Morgan total = 26.73g
+    // would show as weight = 26.73 here). Flag for manual review — never
+    // auto-correct because we can't know the user's intent for bulk lots.
+    if (hasW && w > 2) suspectGrams.push(item);
   }
-  return { overOne, suspicious, missingPurity, missingWeight };
+  return { overOne, suspicious, missingPurity, missingWeight, suspectGrams };
 }
 
 async function _batchFixOverOnePurity() {
@@ -6989,7 +7012,7 @@ function showSilverAuditModal() {
   const ex = document.getElementById('silver-audit-modal');
   if (ex) ex.remove();
   const scan = _scanSilverRecords();
-  const total = scan.overOne.length + scan.suspicious.length + scan.missingPurity.length + scan.missingWeight.length;
+  const total = scan.overOne.length + scan.suspicious.length + scan.missingPurity.length + scan.missingWeight.length + scan.suspectGrams.length;
 
   function _renderList(items, emptyMsg) {
     if (!items.length) return '<div style="color:var(--muted);font-size:12px;padding:8px 0;font-style:italic">' + emptyMsg + '</div>';
@@ -7055,6 +7078,15 @@ function showSilverAuditModal() {
     +       '</div>'
     +       '<div style="font-size:11px;color:var(--muted);margin-bottom:6px">Melt calculation may still work if weight is already pure silver oz, but purity should be recorded for completeness.</div>'
     +       _renderList(scan.missingPurity, 'None \u2014 every record with weight also has purity \u2713')
+    +     '</div>'
+
+    +     '<div style="margin-bottom:18px">'
+    +       '<div style="font-size:14px;color:var(--text);font-weight:600;margin-bottom:6px">'
+    +         '5. Weight likely entered as grams (&gt; 2 troy oz on a single coin)'
+    +         '<span style="color:var(--red);font-weight:700;margin-left:8px">(' + scan.suspectGrams.length + ')</span>'
+    +       '</div>'
+    +       '<div style="font-size:11px;color:var(--muted);margin-bottom:6px">No silver coin\'s pure silver weight exceeds ~0.85 troy oz (Trade Dollar). Values above 2 are almost certainly grams of the whole coin filed in the troy-oz column \u2014 a Morgan Dollar at 26.73g would show here. Fix manually: convert to troy oz (grams \u00d7 purity \u00f7 31.1035), and move the total grams to the new <b>Total Coin Weight</b> field.</div>'
+    +       _renderList(scan.suspectGrams, 'None \u2014 every weight is plausible \u2713')
     +     '</div>'
 
     +     '<div style="margin-bottom:8px">'
@@ -9344,8 +9376,8 @@ const SCHEMAS = {
   platinum:      [{f:'purity',l:'Purity',t:'number',ph:'0.9995'},{f:'weightG',l:'Weight (grams)',t:'number',ph:'31.1'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'meltValue',l:'Melt Value ($)',t:'number',ph:'optional — leave blank for live calc'}],
   palladium:     [{f:'purity',l:'Purity',t:'number',ph:'0.9995'},{f:'weightG',l:'Weight (grams)',t:'number',ph:'31.1'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'meltValue',l:'Melt Value ($)',t:'number',ph:'optional — leave blank for live calc'}],
   mintSets:      [{f:'year',l:'Year',t:'text',ph:'2024'},{f:'silver',l:'Silver?',t:'text',ph:'Y or N'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'uncertValue',l:'Uncertified Value ($)',t:'number',ph:'optional'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'notes',l:'Notes',t:'text',ph:'optional'}],
-  gradedSilver:  [{f:'country',l:'Country',t:'text',ph:'USA'},{f:'series',l:'Series',t:'text',ph:'Morgan Dollar'},{f:'type',l:'Type',t:'text',ph:'Kennedy Half'},{f:'weight',l:'Silver Weight (oz)',t:'number',ph:'0.773'},{f:'silverContent',l:'Silver Purity (0-1, e.g. 0.9 = 90%)',t:'number',ph:'0.9'},{f:'denomination',l:'Denomination',t:'text',ph:'$1'},{f:'serial',l:'Serial #',t:'text',ph:''},{f:'grade',l:'Grade',t:'text',ph:'MS 65'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'NGC'},{f:'mint',l:'Mint',t:'text',ph:'Philadelphia'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
-  rawSilver:     [{f:'series',l:'Series',t:'text',ph:'Morgan Dollar'},{f:'country',l:'Country',t:'text',ph:'USA'},{f:'type',l:'Type',t:'text',ph:'Kennedy Half'},{f:'weight',l:'Silver Weight (oz)',t:'number',ph:'0.773'},{f:'silverContent',l:'Silver Purity (0-1, e.g. 0.9 = 90%)',t:'number',ph:'0.9'},{f:'denomination',l:'Denomination',t:'text',ph:'$1'},{f:'grade',l:'Grade',t:'text',ph:'VF 20'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'Raw'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
+  gradedSilver:  [{f:'country',l:'Country',t:'text',ph:'USA'},{f:'series',l:'Series',t:'text',ph:'Morgan Dollar'},{f:'type',l:'Type',t:'text',ph:'Kennedy Half'},{f:'weight',l:'Silver Weight (oz)',t:'number',ph:'0.773'},{f:'silverContent',l:'Silver Purity (0-1, e.g. 0.9 = 90%)',t:'number',ph:'0.9'},{f:'totalCoinWeight',l:'Total Coin Weight (g)',t:'number',ph:'26.73'},{f:'denomination',l:'Denomination',t:'text',ph:'$1'},{f:'serial',l:'Serial #',t:'text',ph:''},{f:'grade',l:'Grade',t:'text',ph:'MS 65'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'NGC'},{f:'mint',l:'Mint',t:'text',ph:'Philadelphia'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
+  rawSilver:     [{f:'series',l:'Series',t:'text',ph:'Morgan Dollar'},{f:'country',l:'Country',t:'text',ph:'USA'},{f:'type',l:'Type',t:'text',ph:'Kennedy Half'},{f:'weight',l:'Silver Weight (oz)',t:'number',ph:'0.773'},{f:'silverContent',l:'Silver Purity (0-1, e.g. 0.9 = 90%)',t:'number',ph:'0.9'},{f:'totalCoinWeight',l:'Total Coin Weight (g)',t:'number',ph:'26.73'},{f:'denomination',l:'Denomination',t:'text',ph:'$1'},{f:'grade',l:'Grade',t:'text',ph:'VF 20'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'Raw'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
   gradedUS:      [{f:'type',l:'Type',t:'text',ph:'Cent, Nickel…'},{f:'series',l:'Series',t:'text',ph:'Lincoln Cent'},{f:'denomination',l:'Denomination',t:'text',ph:'$0.01'},{f:'serial',l:'Serial #',t:'text',ph:''},{f:'grade',l:'Grade',t:'text',ph:'MS 65'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'PCGS'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
   rawUS:         [{f:'type',l:'Type',t:'text',ph:'Cent, Nickel…'},{f:'series',l:'Series',t:'text',ph:'Lincoln Cent'},{f:'denomination',l:'Denomination',t:'text',ph:'$0.01'},{f:'grade',l:'Grade',t:'text',ph:'VF 20'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'Raw'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
   gradedForeign: [{f:'country',l:'Country',t:'text',ph:'UK'},{f:'series',l:'Series',t:'text',ph:'Sovereign'},{f:'denomination',l:'Denomination',t:'text',ph:'1 Pound'},{f:'grade',l:'Grade',t:'text',ph:'MS 63'},{f:'serial',l:'Serial #',t:'text',ph:''},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'NGC'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
@@ -10139,7 +10171,8 @@ Identify the item carefully and return ONLY valid JSON (no markdown, no preamble
   "mint": "Mint location if discernable (Philadelphia, Denver, San Francisco, etc.)",
   "composition": "Material composition (Copper-Nickel, .900 Silver, .999 Silver, etc.)",
   "silverContent": 0.0, /* PURITY as decimal fraction 0–1 — NEVER a percentage (0.9 NOT 90), NEVER the silver weight in oz. Common values: US "90% silver" coins (Morgan/Peace/Walking Liberty/Franklin/Kennedy 1964/Roosevelt silver/Mercury/Washington silver/Standing Liberty) = 0.9. Kennedy 1965–1970 = 0.4. Sterling = 0.925. War nickel 1942–45 = 0.35. .999 fine bullion (ASE, rounds, bars) = 0.999. .9999 fine (Maple Leaf, Britannia) = 0.9999. .958 Britannia coin (pre-2013) = 0.958. Non-silver item = 0. If unsure, infer from composition: ".900 Silver" → 0.9, ".999 Silver" → 0.999, "Cupro-nickel" or "Copper-Nickel" → 0. */
-  "weight": 0.0, /* PURE SILVER WEIGHT in troy ounces (ASW: Actual Silver Weight) — NOT the total coin weight. For 90% silver coins this equals total weight × 0.9. Reference values you should KNOW by heart: Morgan/Peace Dollar = 0.7734 oz. Walking Liberty/Franklin/Kennedy 1964 half = 0.36169 oz. Kennedy 1965–1970 half (40%) = 0.1479 oz. Washington Quarter (1932–64 silver) = 0.18084 oz. Mercury/Roosevelt Silver Dime (pre-1965) = 0.07234 oz. War Nickel (1942–45 silver) = 0.05626 oz. 1 oz American Silver Eagle / Maple Leaf / Britannia / Krugerrand-silver = 1.0 oz. 1 oz bar/round = 1.0 oz. Non-silver = 0. */
+  "weight": 0.0, /* PURE PRECIOUS METAL WEIGHT in TROY OUNCES (ASW: Actual Silver Weight, or equivalent for gold/platinum/palladium). For coins this is the SILVER/GOLD content only — NEVER the total coin weight, NEVER grams. Formula for coins: (totalCoinWeightInGrams × purity) / 31.1035. Reference values you should KNOW by heart: Morgan/Peace Dollar = 0.7734 oz. Walking Liberty/Franklin/Kennedy 1964 half = 0.36169 oz. Kennedy 1965–1970 half (40%) = 0.1479 oz. Washington Quarter (1932–64 silver) = 0.18084 oz. Mercury/Roosevelt Silver Dime (pre-1965) = 0.07234 oz. War Nickel (1942–45 silver) = 0.05626 oz. 1 oz American Silver Eagle / Maple Leaf / Britannia / Krugerrand-silver = 1.0 oz. 1 oz bar/round = 1.0 oz. Non-silver/gold/platinum/palladium item = 0. If you can see "Pure silver: X oz" on a Mint COA, use that exactly. */
+  "totalCoinWeight": 0.0, /* TOTAL physical weight of the COIN or ITEM in GRAMS — all metals combined, including non-precious alloy content (copper, nickel, zinc). NOT used for melt; informational only so the user can cross-check the precious-metal weight. Reference values: Morgan/Peace Dollar = 26.73g, Walking Liberty/Franklin/Kennedy 1964 half = 12.50g, Kennedy 1965–1970 half (40%) = 11.50g, Washington Quarter (silver) = 6.25g, Mercury/Roosevelt Silver Dime = 2.50g, War Nickel (1942–45) = 5.00g, 1 oz ASE/Maple Leaf/Britannia = 31.1035g, 1 oz bar/round = 31.1035g. For paper currency or non-coin items, leave as 0. */
   "features": "Notable details: varieties, errors, toning, designations like FBL, FS, DCAM, holder type, etc.",
   "estimatedValue": { "low": 0, "mid": 0, "high": 0 },
   "confidence": "high|medium|low",
