@@ -1164,7 +1164,7 @@ body.theme-modern-dark select option{
 // Bump this on every deploy so the user can see at a glance which build is
 // running in their browser. Surfaced in three places: the sidebar footer
 // (desktop), the mobile header badge, and the Settings → About section.
-const APP_VERSION = 'v78';
+const APP_VERSION = 'v79';
 const APP_BUILD_DATE = '2026-06-15';
 
 // Tracks whether the very first Supabase fetch has completed. Used to show
@@ -1406,7 +1406,17 @@ const COL_REGISTRY = {
   weightG:       { label:'Weight (g)',     render:(r)=>r.weight?e(String(r.weight)):'\u2014', right:true },
   silverContent: { label:'Silver Content', render:(r)=>e(r.silverContent||'\u2014') },
 
-  // Pricing extras
+  // Pricing extras (cost/value/melt added v79 — see COL_DEFAULTS.recent)
+  cost:          { label:'Cost',           render:(r,it)=>{const v=parseFloat(r.cost)||0;return v>0?fmt$(v):'\u2014';}, right:true },
+  value:         { label:'Value',          render:(r,it)=>{const v=parseFloat(r.value)||0;return v>0?fmt$(v):'\u2014';}, right:true },
+  melt:          { label:'Melt',           render:(r,it)=>{
+    // liveMelt is the per-item helper at line ~2967 that handles karat
+    // adjustment, troy-ounce conversion, and weighted averages for sheets
+    // missing explicit weights. Returns 0 for non-bullion records → em-dash.
+    if (typeof liveMelt !== 'function' || !it) return '\u2014';
+    const m = liveMelt(it);
+    return m > 0 ? fmt$(m) : '\u2014';
+  }, right:true },
   soldPrice:     { label:'Sold Price',     render:(r)=>r.soldPrice?fmt$(parseFloat(r.soldPrice)||0):'\u2014', right:true },
   ebayAvg:       { label:'eBay Avg',       render:(r)=>r.ebayAvgSold?fmt$(parseFloat(r.ebayAvgSold)||0):'\u2014', right:true },
   ebayMin:       { label:'eBay Min',       render:(r)=>r.ebayMinSold?fmt$(parseFloat(r.ebayMinSold)||0):'\u2014', right:true },
@@ -1443,17 +1453,19 @@ const COL_REGISTRY = {
 // Groups for the picker UI — keeps the modal scannable instead of one giant flat list
 const COL_GROUPS = [
   { label:'Basic',       keys:['year','country','mint','type','denomination','gradingAuth','serial','composition','weightG','silverContent'] },
-  { label:'Pricing',     keys:['soldPrice','ebayAvg','ebayMin','ebayMax'] },
+  { label:'Pricing',     keys:['cost','value','melt','soldPrice','ebayAvg','ebayMin','ebayMax'] },
   { label:'Dates',       keys:['modified','created'] },
   { label:'Paper Money', keys:['frNum','pickNumber','criswell','noteType','signatures','sealColor','frDistrict','blockLetter','plate','variety'] },
   { label:'Nationals',   keys:['charter','bankName','city','bankState'] },
   { label:'Other',       keys:['features','notes','defects'] },
 ];
 
-// Per-table defaults — empty arrays so no extras show until user opts in.
+// Per-table defaults. Recent Activity ships with Cost/Value/Melt visible since
+// those are the most relevant numbers when scanning recent changes for a
+// day-to-day discrepancy (v79).
 const COL_DEFAULTS = {
   inv: [],
-  recent: [],
+  recent: ['cost','value','melt'],
 };
 
 function loadVisibleCols(tableId) {
@@ -1461,8 +1473,21 @@ function loadVisibleCols(tableId) {
     const raw = localStorage.getItem('cv_cols_' + tableId);
     if (raw) {
       const arr = JSON.parse(raw);
-      // Filter to known keys only (registry could change between versions)
-      if (Array.isArray(arr)) return arr.filter(k => COL_REGISTRY[k]);
+      if (Array.isArray(arr)) {
+        // v79 migration: Recent Activity got cost/value/melt as new defaults.
+        // If a previous version stored [] (empty extras), adopt the new defaults
+        // exactly once so existing users see the requested columns automatically.
+        // Stamping the migration flag prevents re-adopting if user later opts out.
+        if (tableId === 'recent' && arr.length === 0 && !localStorage.getItem('cv_cols_recent_v79_seen')) {
+          localStorage.setItem('cv_cols_recent_v79_seen', '1');
+          return COL_DEFAULTS.recent.slice();
+        }
+        return arr.filter(k => COL_REGISTRY[k]);
+      }
+    } else if (tableId === 'recent') {
+      // First time loading Recent — stamp the flag so the migration above doesn't
+      // fire on a subsequent visit where the user has chosen no extras.
+      localStorage.setItem('cv_cols_recent_v79_seen', '1');
     }
   } catch (e) {}
   return COL_DEFAULTS[tableId] || [];
@@ -1489,7 +1514,7 @@ function renderExtraCols(tableId, item) {
     th += '<th' + alignAttr + ' style="font-size:11px;color:var(--muted);white-space:nowrap">' + e(def.label) + '</th>';
     if (item) {
       let cell = '';
-      try { cell = def.render(raw); }
+      try { cell = def.render(raw, item); }
       catch (err) { cell = '\u2014'; console.warn('[col]', key, 'render failed', err.message); }
       td += '<td' + alignAttr + ' data-label="' + e(def.label) + '" style="font-size:12px;color:var(--muted)">' + cell + '</td>';
     }
@@ -3637,10 +3662,13 @@ ${(function _recentActivityHTML() {
     const timeStr = ts.toLocaleTimeString(undefined, { hour:'numeric', minute:'2-digit' });
     // sm + id are already escaped by their construction; description is user-typed → escape it
     const desc = e(it.desc || '\u2014');
-    // Build a click handler that jumps to inventory + opens detail panel for this record
-    const navJs = "nav('inv');setTimeout(function(){var i=ALL_ITEMS.find(function(x){return x.sheet===" + JSON.stringify(it.sheet) + "&&cn(x.id)===" + JSON.stringify(cn(it.id)) + "});if(i&&typeof showDetail==='function')showDetail(i)},80)";
+    // v79: keep the user on Dashboard when they click a row — just slide the
+    // detail panel in. Old behavior navigated to inv first; that broke flow
+    // because the user lost their Recent Activity context. The detail panel
+    // is independent of the current view, so showDetail works from anywhere.
+    const clickJs = "var i=ALL_ITEMS.find(function(x){return x.sheet===" + JSON.stringify(it.sheet) + "&&cn(x.id)===" + JSON.stringify(cn(it.id)) + "});if(i&&typeof showDetail==='function')showDetail(i);";
     return (isNewDay ? '<tr><td colspan="' + (5 + loadVisibleCols('recent').length) + '" style="background:var(--bg2);padding:6px 10px;font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--gold)">' + e(dayStr) + '</td></tr>' : '')
-      + '<tr style="cursor:pointer" onclick="' + navJs + '">'
+      + '<tr style="cursor:pointer" onclick="' + clickJs + '">'
       + '<td style="width:70px;font-size:11px;color:var(--muted);white-space:nowrap">' + e(timeStr) + '</td>'
       + '<td style="width:65px"><span class="pill" style="background:' + tagBg + ';color:' + tagFg + ';border-color:' + tagBd + ';font-size:9px">' + tagText + '</span></td>'
       + '<td style="width:55px"><code style="color:var(--gold);font-size:11px">' + e(cn(it.id)) + '</code></td>'
