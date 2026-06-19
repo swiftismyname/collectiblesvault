@@ -1222,7 +1222,7 @@ body.theme-modern-dark select option{
 // Bump this on every deploy so the user can see at a glance which build is
 // running in their browser. Surfaced in three places: the sidebar footer
 // (desktop), the mobile header badge, and the Settings → About section.
-const APP_VERSION = 'v85';
+const APP_VERSION = 'v86';
 const APP_BUILD_DATE = '2026-06-15';
 
 // Tracks whether the very first Supabase fetch has completed. Used to show
@@ -4027,17 +4027,33 @@ function showDetail(item){
     // Description / Record ID
     if (c === 'description' || c === 'desc') return 'desc';
     if (c === 'recordno' || c === 'record' || c === 'recordnum' || c === 'id' || c === 'recordid') return 'id';
-    // Bullion weight aliases (Google Sheets used several spellings)
-    if (c === 'preciousmetalcontenttroyoz' || c === 'troyoz' || c === 'oz' || c === 'weight' || c === 'weightoz') return 'weight';
+    // Bullion / coin weight aliases — many GAS-migrated headers map to the
+    // single canonical "weight" field. v86 adds "Weight in Troy Ounces" etc.
+    if (c === 'preciousmetalcontenttroyoz' || c === 'troyoz' || c === 'oz' || c === 'weight'
+        || c === 'weightoz' || c === 'weightintroyounces' || c === 'weighttroyoz'
+        || c === 'weighttroyounces' || c === 'silverweight' || c === 'goldweight'
+        || c === 'metalweight' || c === 'asw') return 'weight';
     // Stored melt — always derived from spot price + weight; we show Live Melt in Summary
     if (c === 'meltvalue' || c === 'melt') return 'meltvalue';
     // Star Note variants
     if (c === 'starnote' || c === 'star') return 'starnote';
+    // v86: Grading Auth has two spellings on legacy records — "Grading Auth"
+    // (canonical) and "Grading Authority" (GAS migration). Plus a couple of
+    // looser variants seen in the wild.
+    if (c === 'gradingauth' || c === 'gradingauthority' || c === 'gradingservice'
+        || c === 'gradeauth' || c === 'gradeservice') return 'gradingauth';
+    // v86: Features / Special Features — same field, different label
+    if (c === 'features' || c === 'specialfeatures' || c === 'feature') return 'features';
     // Currency-sheet only: Type and Note Type are the same thing (legacy alias).
     // On COIN sheets, Type is its own distinct field (e.g., "Morgan Dollar"), so don't merge.
     const currencySheets = ['usnotes','confederate','obsolete','foreignnotes','fractional'];
     if (currencySheets.indexOf(String(sheet).toLowerCase()) >= 0) {
       if (c === 'type' || c === 'notetype') return 'notetype';
+    } else {
+      // v86: on coin/bullion sheets, "Category" is a legacy duplicate of "Type"
+      // (seen on graded modern silver — Type and Category both store the
+      // same series-name string). Merge them so detail panels show one row.
+      if (c === 'type' || c === 'category') return 'type';
     }
     return c;
   }
@@ -6984,6 +7000,45 @@ function _scanSilverRecords() {
   return { overOne, suspicious, missingPurity, missingWeight, suspectGrams };
 }
 
+// One-record converter for Silver Audit category 5 (v86). Given the audit's
+// strong assumption that a weight > 2 troy oz on a single graded/raw silver
+// coin is actually grams misfiled as troy oz, this helper:
+//   1. Takes the current weight as grams
+//   2. Computes weight_troyoz = grams / 31.1035
+//   3. Moves the original grams value to totalCoinWeight (so nothing is lost)
+//   4. Saves both via _tpgApply, preserving every other field
+// Refuses to run if weight ≤ 2 (treated as already correct) or > 5000 (out of
+// any plausible bullion-bar range — defensive guard, almost certainly garbage).
+async function _convertGramsToTroyOzForRecord(sheet, id) {
+  const item = ALL_ITEMS.find(function(x) { return x.sheet === sheet && cn(x.id) === id; });
+  if (!item) { cvToast('Record not found', 'err'); return; }
+  const raw = item.raw || {};
+  const grams = parseFloat(raw.weight);
+  if (isNaN(grams) || grams <= 2) {
+    cvToast('Weight is already in plausible troy-oz range; nothing to convert.', 'info');
+    return;
+  }
+  if (grams > 5000) {
+    cvToast('Weight ' + grams + ' is implausibly large \u2014 fix manually.', 'err');
+    return;
+  }
+  const troyOz = +(grams / 31.1035).toFixed(4);
+  const msg = 'Convert #' + cn(item.id) + ' ' + (item.desc || '') + '?\n\n'
+            + '\u2022 Current weight: ' + grams + ' (treated as grams)\n'
+            + '\u2022 New weight: ' + troyOz + ' troy oz (= ' + grams + ' / 31.1035)\n'
+            + '\u2022 Total Coin Weight: ' + grams + ' g (new field, was empty)\n\n'
+            + 'All other fields untouched. Live Melt Value will recalculate.';
+  if (!confirm(msg)) return;
+  try {
+    await _tpgApply(item, { weight: troyOz, totalCoinWeight: grams }, 'SilverAudit-g→oz');
+    cvToast('Converted #' + cn(item.id) + ': ' + grams + ' g \u2192 ' + troyOz + ' troy oz', 'ok');
+    showSilverAuditModal();  // refresh so the row drops out of category 5
+  } catch (err) {
+    console.warn('[silver-audit] convert failed:', err.message);
+    cvToast('Conversion failed: ' + err.message, 'err');
+  }
+}
+
 async function _batchFixOverOnePurity() {
   const scan = _scanSilverRecords();
   if (!scan.overOne.length) {
@@ -7014,7 +7069,7 @@ function showSilverAuditModal() {
   const scan = _scanSilverRecords();
   const total = scan.overOne.length + scan.suspicious.length + scan.missingPurity.length + scan.missingWeight.length + scan.suspectGrams.length;
 
-  function _renderList(items, emptyMsg) {
+  function _renderList(items, emptyMsg, perRowActionHtml) {
     if (!items.length) return '<div style="color:var(--muted);font-size:12px;padding:8px 0;font-style:italic">' + emptyMsg + '</div>';
     return '<div style="max-height:240px;overflow-y:auto;border:1px solid var(--border);border-radius:4px">'
       + items.map(function(it){
@@ -7023,13 +7078,18 @@ function showSilverAuditModal() {
           const w  = (raw.weight != null && raw.weight !== '') ? raw.weight : '—';
           const safeSheet = String(it.sheet).replace(/'/g, "\\'");
           const safeId = String(cn(it.id)).replace(/'/g, "\\'");
-          return '<div onclick="document.getElementById(\'silver-audit-modal\').remove();_openDetailById(\'' + safeSheet + '\',\'' + safeId + '\');" '
-              + 'style="display:grid;grid-template-columns:60px 1fr 90px 90px;gap:8px;padding:8px 10px;border-bottom:1px solid var(--border);cursor:pointer;align-items:center" '
+          // v86: when a perRowActionHtml(item) callback is provided, render
+          // an action cell at the end. Used by category 5 to expose the
+          // grams→troy-oz convert button inline next to each suspect row.
+          const actionCell = (typeof perRowActionHtml === 'function') ? perRowActionHtml(it, safeSheet, safeId) : '';
+          const cols = actionCell ? '60px 1fr 90px 90px auto' : '60px 1fr 90px 90px';
+          return '<div style="display:grid;grid-template-columns:' + cols + ';gap:8px;padding:8px 10px;border-bottom:1px solid var(--border);align-items:center" '
               + 'onmouseover="this.style.background=\'var(--bg2)\'" onmouseout="this.style.background=\'\'">'
-              + '<code style="color:var(--gold);font-size:11px">#' + e(cn(it.id)) + '</code>'
-              + '<div style="font-size:12px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + e(it.desc || '—') + '</div>'
+              + '<code onclick="document.getElementById(\'silver-audit-modal\').remove();_openDetailById(\'' + safeSheet + '\',\'' + safeId + '\');" style="color:var(--gold);font-size:11px;cursor:pointer">#' + e(cn(it.id)) + '</code>'
+              + '<div onclick="document.getElementById(\'silver-audit-modal\').remove();_openDetailById(\'' + safeSheet + '\',\'' + safeId + '\');" style="font-size:12px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer">' + e(it.desc || '—') + '</div>'
               + '<div style="font-size:11px;color:var(--muted);text-align:right">Purity: <b style="color:var(--text)">' + e(String(sc)) + '</b></div>'
               + '<div style="font-size:11px;color:var(--muted);text-align:right">Wt: <b style="color:var(--text)">' + e(String(w)) + '</b></div>'
+              + actionCell
               + '</div>';
         }).join('') + '</div>';
   }
@@ -7086,7 +7146,12 @@ function showSilverAuditModal() {
     +         '<span style="color:var(--red);font-weight:700;margin-left:8px">(' + scan.suspectGrams.length + ')</span>'
     +       '</div>'
     +       '<div style="font-size:11px;color:var(--muted);margin-bottom:6px">No silver coin\'s pure silver weight exceeds ~0.85 troy oz (Trade Dollar). Values above 2 are almost certainly grams of the whole coin filed in the troy-oz column \u2014 a Morgan Dollar at 26.73g would show here. Fix manually: convert to troy oz (grams \u00d7 purity \u00f7 31.1035), and move the total grams to the new <b>Total Coin Weight</b> field.</div>'
-    +       _renderList(scan.suspectGrams, 'None \u2014 every weight is plausible \u2713')
+    +       _renderList(scan.suspectGrams, 'None \u2014 every weight is plausible \u2713', function(it, safeSheet, safeId) {
+              return '<button onclick="_convertGramsToTroyOzForRecord(\'' + safeSheet + '\',\'' + safeId + '\')" '
+                  + 'title="Treat the current weight as grams; divide by 31.1035 to get troy oz; save original grams into Total Coin Weight" '
+                  + 'style="background:var(--gold2);border:1px solid var(--gold);color:var(--gold);padding:5px 10px;border-radius:4px;cursor:pointer;font-size:10px;font-weight:600;white-space:nowrap">'
+                  + 'g \u2192 troy oz</button>';
+            })
     +     '</div>'
 
     +     '<div style="margin-bottom:8px">'
