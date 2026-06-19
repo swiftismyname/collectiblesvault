@@ -1164,7 +1164,7 @@ body.theme-modern-dark select option{
 // Bump this on every deploy so the user can see at a glance which build is
 // running in their browser. Surfaced in three places: the sidebar footer
 // (desktop), the mobile header badge, and the Settings → About section.
-const APP_VERSION = 'v80';
+const APP_VERSION = 'v81';
 const APP_BUILD_DATE = '2026-06-15';
 
 // Tracks whether the very first Supabase fetch has completed. Used to show
@@ -1404,7 +1404,7 @@ const COL_REGISTRY = {
   serial:        { label:'Serial #',       render:(r)=>e(r.serial||'\u2014') },
   composition:   { label:'Composition',    render:(r)=>e(r.composition||'\u2014') },
   weightG:       { label:'Weight (g)',     render:(r)=>r.weight?e(String(r.weight)):'\u2014', right:true },
-  silverContent: { label:'Silver Content', render:(r)=>e(r.silverContent||'\u2014') },
+  silverContent: { label:'Silver Purity (0-1)', render:(r)=>e(r.silverContent||'\u2014') },
 
   // Pricing extras (cost/value/melt added v79 — see COL_DEFAULTS.recent)
   cost:          { label:'Cost',           render:(r,it)=>{const v=parseFloat(r.cost)||0;return v>0?fmt$(v):'\u2014';}, right:true },
@@ -3692,6 +3692,7 @@ ${(function _recentActivityHTML() {
     + ' <span style="font-size:11px;text-transform:none;letter-spacing:0;color:var(--dim);font-style:italic">'
     + '\u2014 last ' + withTs.length + ' records added or edited, newest first. Click to view.</span></span>'
     + '<button onclick="showColumnPicker(\'recent\',\'Recent Activity\',renderDash)" title="Show or hide extra columns" style="margin-left:auto;font-size:11px;text-transform:none;letter-spacing:0;background:var(--bg4);border:1px solid var(--border);color:var(--muted);padding:4px 10px;border-radius:4px;cursor:pointer">\u2699 Columns</button>'
+    + '<button onclick="showSilverAuditModal()" title="Scan silver records for likely-wrong purity (silverContent) or weight values" style="font-size:11px;text-transform:none;letter-spacing:0;background:var(--bg4);border:1px solid var(--border);color:var(--muted);padding:4px 10px;border-radius:4px;cursor:pointer">\u2696 Silver Audit</button>'
     + '</div>'
     + '<div class="tw"><table><thead><tr>'
     + '<th style="width:70px">Time</th>'
@@ -4038,7 +4039,7 @@ function showDetail(item){
       const isSilverSheet = ['silver','gradedSilver','rawSilver'].includes(item.sheet);
       const isSilverComp  = comp.includes('silver') || comp === '';
       if (isSilverSheet || isSilverComp) {
-        lbl = 'Silver Content';
+        lbl = 'Silver Purity (0-1)';
       } else {
         // Derive purity label from the composition field if possible
         const compWords = String(raw.composition || '').split(/[/,\-\s]+/).map(w=>w.trim()).filter(Boolean);
@@ -6850,6 +6851,170 @@ async function _saveImagesAndAI() {
 }
 // #endregion [ADD-IMAGES-TO-RECORD]
 
+// #region [SILVER-AUDIT]
+// ─── SILVER DATA AUDIT (v81) ─────────────────────────────────────────
+// Scans gradedSilver + rawSilver records for likely-mistaken silverContent
+// and weight values. Two failure modes are common:
+//   (1) AI scans returning silverContent as a PERCENTAGE (90) instead of
+//       a fraction (0.9). Auto-fix is safe here: divide by 100.
+//   (2) silverContent storing the silver WEIGHT (e.g., 0.7734) instead of
+//       the purity. Auto-fix is NOT safe — could be a real low-purity
+//       alloy, or could be the wrong field. Flag for manual review only.
+//
+// The modal lets you batch-fix category (1) with one click and walk
+// through category (2) records one at a time.
+// ──────────────────────────────────────────────────────────────────────
+
+// Common silver purities to check against. If silverContent is within 0.001
+// of one of these, treat as correctly formed. Anything else is suspicious.
+const _KNOWN_SILVER_PURITIES = [0.35, 0.4, 0.5, 0.625, 0.8, 0.9, 0.917, 0.925, 0.95, 0.958, 0.99, 0.999, 0.9999, 1.0];
+
+function _isKnownPurity(p) {
+  if (p == null || p === '' || isNaN(p)) return false;
+  for (let i = 0; i < _KNOWN_SILVER_PURITIES.length; i++) {
+    if (Math.abs(p - _KNOWN_SILVER_PURITIES[i]) < 0.001) return true;
+  }
+  return false;
+}
+
+function _scanSilverRecords() {
+  const overOne = [];   // silverContent > 1 → auto-fixable (likely percentage)
+  const suspicious = []; // silverContent ∈ (0, 1] but doesn't match known purity → manual review
+  const missingPurity = []; // weight > 0 but silverContent missing — can't compute melt
+  const missingWeight = []; // silverContent set but no weight — melt will read 0
+  const silverSheets = ['gradedSilver', 'rawSilver'];
+  for (let i = 0; i < ALL_ITEMS.length; i++) {
+    const item = ALL_ITEMS[i];
+    if (!silverSheets.includes(item.sheet)) continue;
+    const raw = item.raw || {};
+    const sc = parseFloat(raw.silverContent);
+    const w  = parseFloat(raw.weight);
+    const hasSc = !isNaN(sc) && sc > 0;
+    const hasW  = !isNaN(w)  && w  > 0;
+
+    if (hasSc && sc > 1) {
+      overOne.push(item);
+    } else if (hasSc && !_isKnownPurity(sc)) {
+      suspicious.push(item);
+    }
+    if (hasW && !hasSc) missingPurity.push(item);
+    if (hasSc && !hasW) missingWeight.push(item);
+  }
+  return { overOne, suspicious, missingPurity, missingWeight };
+}
+
+async function _batchFixOverOnePurity() {
+  const scan = _scanSilverRecords();
+  if (!scan.overOne.length) {
+    cvToast('No silver records have silverContent > 1', 'info');
+    return;
+  }
+  if (!confirm('Auto-fix ' + scan.overOne.length + ' record' + (scan.overOne.length === 1 ? '' : 's') +
+               '? This divides silverContent by 100 (e.g., 90 → 0.9), assuming the value was entered as a percentage.\n\nNo other fields are touched.')) return;
+  let fixed = 0;
+  for (let i = 0; i < scan.overOne.length; i++) {
+    const item = scan.overOne[i];
+    const oldSc = parseFloat(item.raw.silverContent);
+    const newSc = oldSc / 100;
+    try {
+      await _tpgApply(item, { silverContent: newSc }, 'SilverAudit');
+      fixed++;
+    } catch (err) {
+      console.warn('[silver-audit] fix failed for', item.sheet, item.id, err.message);
+    }
+  }
+  cvToast('Fixed silverContent on ' + fixed + ' of ' + scan.overOne.length + ' records', 'ok');
+  showSilverAuditModal();  // refresh the modal so the user sees the updated counts
+}
+
+function showSilverAuditModal() {
+  const ex = document.getElementById('silver-audit-modal');
+  if (ex) ex.remove();
+  const scan = _scanSilverRecords();
+  const total = scan.overOne.length + scan.suspicious.length + scan.missingPurity.length + scan.missingWeight.length;
+
+  function _renderList(items, emptyMsg) {
+    if (!items.length) return '<div style="color:var(--muted);font-size:12px;padding:8px 0;font-style:italic">' + emptyMsg + '</div>';
+    return '<div style="max-height:240px;overflow-y:auto;border:1px solid var(--border);border-radius:4px">'
+      + items.map(function(it){
+          const raw = it.raw || {};
+          const sc = (raw.silverContent != null && raw.silverContent !== '') ? raw.silverContent : '—';
+          const w  = (raw.weight != null && raw.weight !== '') ? raw.weight : '—';
+          const safeSheet = String(it.sheet).replace(/'/g, "\\'");
+          const safeId = String(cn(it.id)).replace(/'/g, "\\'");
+          return '<div onclick="document.getElementById(\'silver-audit-modal\').remove();_openDetailById(\'' + safeSheet + '\',\'' + safeId + '\');" '
+              + 'style="display:grid;grid-template-columns:60px 1fr 90px 90px;gap:8px;padding:8px 10px;border-bottom:1px solid var(--border);cursor:pointer;align-items:center" '
+              + 'onmouseover="this.style.background=\'var(--bg2)\'" onmouseout="this.style.background=\'\'">'
+              + '<code style="color:var(--gold);font-size:11px">#' + e(cn(it.id)) + '</code>'
+              + '<div style="font-size:12px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + e(it.desc || '—') + '</div>'
+              + '<div style="font-size:11px;color:var(--muted);text-align:right">Purity: <b style="color:var(--text)">' + e(String(sc)) + '</b></div>'
+              + '<div style="font-size:11px;color:var(--muted);text-align:right">Wt: <b style="color:var(--text)">' + e(String(w)) + '</b></div>'
+              + '</div>';
+        }).join('') + '</div>';
+  }
+
+  const modal = document.createElement('div');
+  modal.id = 'silver-audit-modal';
+  modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.75);z-index:1000;display:flex;align-items:center;justify-content:center;padding:16px';
+  modal.innerHTML =
+    '<div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;width:780px;max-width:100%;max-height:92vh;display:flex;flex-direction:column">'
+    +   '<div style="display:flex;justify-content:space-between;align-items:center;padding:18px 20px;border-bottom:1px solid var(--border)">'
+    +     '<div style="font-family:var(--font-display,\'Cormorant Garamond\',serif);font-size:20px;color:var(--gold)">\u2696 Silver Data Audit</div>'
+    +     '<button onclick="document.getElementById(\'silver-audit-modal\').remove()" style="background:none;border:none;color:var(--muted);font-size:22px;cursor:pointer;line-height:1">&times;</button>'
+    +   '</div>'
+    +   '<div style="padding:14px 20px;color:var(--muted);font-size:12px;border-bottom:1px solid var(--border);line-height:1.6">'
+    +     '<b style="color:var(--text)">Purity</b> (silverContent) should be a decimal 0\u20131: 0.9 = 90% silver, 0.999 = .999 fine. '
+    +     '<b style="color:var(--text)">Weight</b> should be the <i>pure silver weight</i> in troy oz (Morgan = 0.7734, Kennedy 64 = 0.36169, ASE = 1.0). '
+    +     'Click any row to open the record and fix it.'
+    +   '</div>'
+    +   '<div style="padding:18px 20px;overflow-y:auto;flex:1">'
+
+    +     '<div style="margin-bottom:18px">'
+    +       '<div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:6px">'
+    +         '<div>'
+    +           '<span style="font-size:14px;color:var(--text);font-weight:600">1. Definitely wrong: silverContent &gt; 1</span>'
+    +           '<span style="color:var(--red);font-weight:700;margin-left:8px">(' + scan.overOne.length + ')</span>'
+    +         '</div>'
+    +         (scan.overOne.length ? '<button onclick="_batchFixOverOnePurity()" style="background:var(--gold2);border:1px solid var(--gold);color:var(--gold);padding:6px 12px;border-radius:4px;cursor:pointer;font-size:11px;font-weight:600">Auto-fix all (\u00f7 100)</button>' : '')
+    +       '</div>'
+    +       '<div style="font-size:11px;color:var(--muted);margin-bottom:6px">Values like 90 instead of 0.9 \u2014 someone entered a percentage. Safe to batch-divide by 100.</div>'
+    +       _renderList(scan.overOne, 'None \u2014 all purities are 0\u20131 \u2713')
+    +     '</div>'
+
+    +     '<div style="margin-bottom:18px">'
+    +       '<div style="font-size:14px;color:var(--text);font-weight:600;margin-bottom:6px">'
+    +         '2. Suspicious: silverContent doesn\'t match a known purity'
+    +         '<span style="color:var(--gold);font-weight:700;margin-left:8px">(' + scan.suspicious.length + ')</span>'
+    +       '</div>'
+    +       '<div style="font-size:11px;color:var(--muted);margin-bottom:6px">Common purities: 0.4 / 0.5 / 0.625 / 0.8 / 0.9 / 0.925 / 0.95 / 0.999 / 1.0. Anything else may be a silver WEIGHT mistakenly stored as purity (e.g., 0.7734 is a Morgan\'s silver oz, not 77% silver). Review each.</div>'
+    +       _renderList(scan.suspicious, 'None \u2014 all purities match standard alloys \u2713')
+    +     '</div>'
+
+    +     '<div style="margin-bottom:18px">'
+    +       '<div style="font-size:14px;color:var(--text);font-weight:600;margin-bottom:6px">'
+    +         '3. Missing purity (weight set but no silverContent)'
+    +         '<span style="color:var(--gold);font-weight:700;margin-left:8px">(' + scan.missingPurity.length + ')</span>'
+    +       '</div>'
+    +       '<div style="font-size:11px;color:var(--muted);margin-bottom:6px">Melt calculation may still work if weight is already pure silver oz, but purity should be recorded for completeness.</div>'
+    +       _renderList(scan.missingPurity, 'None \u2014 every record with weight also has purity \u2713')
+    +     '</div>'
+
+    +     '<div style="margin-bottom:8px">'
+    +       '<div style="font-size:14px;color:var(--text);font-weight:600;margin-bottom:6px">'
+    +         '4. Missing weight (silverContent set but no weight)'
+    +         '<span style="color:var(--red);font-weight:700;margin-left:8px">(' + scan.missingWeight.length + ')</span>'
+    +       '</div>'
+    +       '<div style="font-size:11px;color:var(--muted);margin-bottom:6px">Live melt cannot be computed without weight \u2014 these records read $0 for melt.</div>'
+    +       _renderList(scan.missingWeight, 'None \u2014 every record with purity also has weight \u2713')
+    +     '</div>'
+
+    +     (total === 0 ? '<div style="text-align:center;padding:30px;color:var(--green);font-size:14px">\u2713 All silver records look correctly formed.</div>' : '')
+    +   '</div>'
+    + '</div>';
+  document.body.appendChild(modal);
+}
+// #endregion [SILVER-AUDIT]
+
 // #region [LABELS]
 // ── LABELS ────────────────────────────────────────────────────────────────────
 let labelsPrinted = new Set(JSON.parse(localStorage.getItem('cv_labels_printed')||'[]'));
@@ -9109,8 +9274,8 @@ const SCHEMAS = {
   platinum:      [{f:'purity',l:'Purity',t:'number',ph:'0.9995'},{f:'weightG',l:'Weight (grams)',t:'number',ph:'31.1'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'meltValue',l:'Melt Value ($)',t:'number',ph:'optional — leave blank for live calc'}],
   palladium:     [{f:'purity',l:'Purity',t:'number',ph:'0.9995'},{f:'weightG',l:'Weight (grams)',t:'number',ph:'31.1'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'meltValue',l:'Melt Value ($)',t:'number',ph:'optional — leave blank for live calc'}],
   mintSets:      [{f:'year',l:'Year',t:'text',ph:'2024'},{f:'silver',l:'Silver?',t:'text',ph:'Y or N'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'uncertValue',l:'Uncertified Value ($)',t:'number',ph:'optional'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'notes',l:'Notes',t:'text',ph:'optional'}],
-  gradedSilver:  [{f:'country',l:'Country',t:'text',ph:'USA'},{f:'series',l:'Series',t:'text',ph:'Morgan Dollar'},{f:'type',l:'Type',t:'text',ph:'Kennedy Half'},{f:'weight',l:'Silver Weight (oz)',t:'number',ph:'0.773'},{f:'silverContent',l:'Silver Content',t:'number',ph:'0.9'},{f:'denomination',l:'Denomination',t:'text',ph:'$1'},{f:'serial',l:'Serial #',t:'text',ph:''},{f:'grade',l:'Grade',t:'text',ph:'MS 65'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'NGC'},{f:'mint',l:'Mint',t:'text',ph:'Philadelphia'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
-  rawSilver:     [{f:'series',l:'Series',t:'text',ph:'Morgan Dollar'},{f:'country',l:'Country',t:'text',ph:'USA'},{f:'type',l:'Type',t:'text',ph:'Kennedy Half'},{f:'weight',l:'Silver Weight (oz)',t:'number',ph:'0.773'},{f:'silverContent',l:'Silver Content',t:'number',ph:'0.9'},{f:'denomination',l:'Denomination',t:'text',ph:'$1'},{f:'grade',l:'Grade',t:'text',ph:'VF 20'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'Raw'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
+  gradedSilver:  [{f:'country',l:'Country',t:'text',ph:'USA'},{f:'series',l:'Series',t:'text',ph:'Morgan Dollar'},{f:'type',l:'Type',t:'text',ph:'Kennedy Half'},{f:'weight',l:'Silver Weight (oz)',t:'number',ph:'0.773'},{f:'silverContent',l:'Silver Purity (0-1, e.g. 0.9 = 90%)',t:'number',ph:'0.9'},{f:'denomination',l:'Denomination',t:'text',ph:'$1'},{f:'serial',l:'Serial #',t:'text',ph:''},{f:'grade',l:'Grade',t:'text',ph:'MS 65'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'NGC'},{f:'mint',l:'Mint',t:'text',ph:'Philadelphia'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
+  rawSilver:     [{f:'series',l:'Series',t:'text',ph:'Morgan Dollar'},{f:'country',l:'Country',t:'text',ph:'USA'},{f:'type',l:'Type',t:'text',ph:'Kennedy Half'},{f:'weight',l:'Silver Weight (oz)',t:'number',ph:'0.773'},{f:'silverContent',l:'Silver Purity (0-1, e.g. 0.9 = 90%)',t:'number',ph:'0.9'},{f:'denomination',l:'Denomination',t:'text',ph:'$1'},{f:'grade',l:'Grade',t:'text',ph:'VF 20'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'Raw'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
   gradedUS:      [{f:'type',l:'Type',t:'text',ph:'Cent, Nickel…'},{f:'series',l:'Series',t:'text',ph:'Lincoln Cent'},{f:'denomination',l:'Denomination',t:'text',ph:'$0.01'},{f:'serial',l:'Serial #',t:'text',ph:''},{f:'grade',l:'Grade',t:'text',ph:'MS 65'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'PCGS'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
   rawUS:         [{f:'type',l:'Type',t:'text',ph:'Cent, Nickel…'},{f:'series',l:'Series',t:'text',ph:'Lincoln Cent'},{f:'denomination',l:'Denomination',t:'text',ph:'$0.01'},{f:'grade',l:'Grade',t:'text',ph:'VF 20'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'Raw'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
   gradedForeign: [{f:'country',l:'Country',t:'text',ph:'UK'},{f:'series',l:'Series',t:'text',ph:'Sovereign'},{f:'denomination',l:'Denomination',t:'text',ph:'1 Pound'},{f:'grade',l:'Grade',t:'text',ph:'MS 63'},{f:'serial',l:'Serial #',t:'text',ph:''},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'NGC'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
@@ -9868,8 +10033,8 @@ Identify the item carefully and return ONLY valid JSON (no markdown, no preamble
   "serial": "Serial number if visible (slab cert # or banknote serial)",
   "mint": "Mint location if discernable (Philadelphia, Denver, San Francisco, etc.)",
   "composition": "Material composition (Copper-Nickel, .900 Silver, .999 Silver, etc.)",
-  "silverContent": 0.0,
-  "weight": 0.0,
+  "silverContent": 0.0, /* PURITY as decimal fraction 0–1 — NEVER a percentage (0.9 NOT 90), NEVER the silver weight in oz. Common values: US "90% silver" coins (Morgan/Peace/Walking Liberty/Franklin/Kennedy 1964/Roosevelt silver/Mercury/Washington silver/Standing Liberty) = 0.9. Kennedy 1965–1970 = 0.4. Sterling = 0.925. War nickel 1942–45 = 0.35. .999 fine bullion (ASE, rounds, bars) = 0.999. .9999 fine (Maple Leaf, Britannia) = 0.9999. .958 Britannia coin (pre-2013) = 0.958. Non-silver item = 0. If unsure, infer from composition: ".900 Silver" → 0.9, ".999 Silver" → 0.999, "Cupro-nickel" or "Copper-Nickel" → 0. */
+  "weight": 0.0, /* PURE SILVER WEIGHT in troy ounces (ASW: Actual Silver Weight) — NOT the total coin weight. For 90% silver coins this equals total weight × 0.9. Reference values you should KNOW by heart: Morgan/Peace Dollar = 0.7734 oz. Walking Liberty/Franklin/Kennedy 1964 half = 0.36169 oz. Kennedy 1965–1970 half (40%) = 0.1479 oz. Washington Quarter (1932–64 silver) = 0.18084 oz. Mercury/Roosevelt Silver Dime (pre-1965) = 0.07234 oz. War Nickel (1942–45 silver) = 0.05626 oz. 1 oz American Silver Eagle / Maple Leaf / Britannia / Krugerrand-silver = 1.0 oz. 1 oz bar/round = 1.0 oz. Non-silver = 0. */
   "features": "Notable details: varieties, errors, toning, designations like FBL, FS, DCAM, holder type, etc.",
   "estimatedValue": { "low": 0, "mid": 0, "high": 0 },
   "confidence": "high|medium|low",
@@ -10203,7 +10368,25 @@ async function aiAnalyzeGemini(key, model, frontImg, backImg, onStatus) {
       : '';
     throw new Error('Could not parse Gemini JSON.' + hint + ' Response started: "' + preview + '..."');
   }
-  return parsed;
+  return _aiNormalizeResult(parsed);
+}
+
+// Sanitize numeric fields the AI commonly gets wrong (v81). Currently catches
+// the silverContent percentage-vs-fraction confusion: if the AI returns 90
+// (meaning 90%), normalize to 0.9. Anything between 1 and 100 is treated as
+// a percentage; > 100 is left alone (it's clearly garbage and worth surfacing
+// so the user catches it in review).
+function _aiNormalizeResult(ai) {
+  if (!ai || typeof ai !== 'object') return ai;
+  // silverContent: must be a 0–1 purity FRACTION
+  const sc = parseFloat(ai.silverContent);
+  if (!isNaN(sc) && sc > 1 && sc <= 100) {
+    console.log('[ai-normalize] silverContent ' + sc + ' looks like percentage — normalized to ' + (sc / 100));
+    ai.silverContent = sc / 100;
+    ai._silverContentWasNormalized = true;
+  }
+  // Future: similar safety net for goldKarat, weight, etc. can hook in here.
+  return ai;
 }
 
 // Robust JSON extraction for AI responses.
@@ -10299,7 +10482,7 @@ async function aiAnalyzeAnthropic(key, model, frontImg, backImg, onStatus) {
       : '';
     throw new Error('Could not parse Anthropic JSON.' + hint + ' Response started: "' + preview + '..."');
   }
-  return parsed;
+  return _aiNormalizeResult(parsed);
 }
 
 function renderAIResults(r) {
@@ -10338,7 +10521,7 @@ function renderAIResults(r) {
     + row('Serial', r.serial)
     + row('Mint', r.mint)
     + row('Composition', r.composition)
-    + row('Silver Content', r.silverContent)
+    + row('Silver Purity (0-1)', r.silverContent)
     + row('Weight (oz)', r.weight)
     + row('Features', r.features)
     + ((ev.low || ev.mid || ev.high) ?
