@@ -1157,6 +1157,20 @@ body.theme-modern-dark select option{
     </div>
     <div class="logo-sub">Currency 2026</div>
   </div>
+  <!-- v89: global search — Ctrl/Cmd+K from anywhere focuses this input. Results render in
+       a dropdown below; clicking any result opens its detail panel from any view. -->
+  <div id="global-search-wrap" style="position:relative;padding:10px 12px;border-bottom:1px solid var(--border)">
+    <div style="position:relative">
+      <svg viewBox="0 0 16 16" fill="currentColor" style="position:absolute;left:9px;top:50%;transform:translateY(-50%);width:13px;height:13px;color:var(--muted);pointer-events:none"><path d="M6.5 1a5.5 5.5 0 014.4 8.78l3.66 3.66-1.06 1.06-3.66-3.66A5.5 5.5 0 116.5 1zm0 1.5a4 4 0 100 8 4 4 0 000-8z"/></svg>
+      <input type="text" id="global-search" placeholder="Search… (Ctrl+K)" autocomplete="off"
+             oninput="_globalSearchInput(this.value)"
+             onfocus="_globalSearchInput(this.value)"
+             onkeydown="_globalSearchKey(event)"
+             style="width:100%;padding:6px 8px 6px 28px;background:var(--bg3);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:12px;box-sizing:border-box;font-family:inherit">
+      <kbd id="global-search-shortcut" style="position:absolute;right:7px;top:50%;transform:translateY(-50%);font-size:9px;color:var(--dim);background:var(--bg2);padding:1px 5px;border-radius:3px;border:1px solid var(--border);pointer-events:none">⌘K</kbd>
+    </div>
+    <div id="global-search-results" hidden style="position:absolute;left:8px;right:8px;top:100%;margin-top:4px;background:var(--bg3);border:1px solid var(--gold3);border-radius:6px;box-shadow:0 8px 24px rgba(0,0,0,.55);max-height:60vh;overflow-y:auto;z-index:50"></div>
+  </div>
   <nav>
     <div class="ni on" data-v="dash" onclick="nav('dash')">
       <svg viewBox="0 0 16 16" fill="currentColor"><path d="M2 2h5v5H2zm7 0h5v5H9zm0 7h5v5H9zM2 9h5v5H2z"/></svg>
@@ -1188,7 +1202,12 @@ body.theme-modern-dark select option{
     <div class="ni" data-v="settings" onclick="nav('settings')"><svg viewBox="0 0 16 16" fill="currentColor" style="width:15px;height:15px;flex-shrink:0;opacity:.7"><circle cx="8" cy="8" r="2.5"/><path d="M14.5 7.36V8.64L13 8.89a5 5 0 01-.43 1.05l.84 1.21-1.5 1.5-1.21-.84a5 5 0 01-1.05.43L9.14 14.5H6.86L6.61 13a5 5 0 01-1.05-.43l-1.21.84-1.5-1.5.84-1.21A5 5 0 013 9.65L1.5 9.4V6.6L3 6.35A5 5 0 013.43 5.3L2.59 4.09l1.5-1.5L5.3 3.43A5 5 0 016.35 3L6.6 1.5h2.8L9.65 3a5 5 0 011.05.43l1.21-.84 1.5 1.5-.84 1.21A5 5 0 0113 6.35z"/></svg>Settings</div>
   </nav>
   <div class="sb-footer">
-    <div class="sfl">Total Value</div>
+    <div class="sfl" style="display:flex;align-items:center;gap:6px">
+      <span>Total Value</span>
+      <!-- v89: connection status dot. Polled every few seconds via _updateConnectionStatus.
+           Green = synced, Amber = pending edits queued, Red = sync failed, Grey = local only -->
+      <span id="conn-status-dot" title="Connection status" style="width:8px;height:8px;border-radius:50%;background:var(--dim);cursor:help;flex-shrink:0;transition:background .3s"></span>
+    </div>
     <div class="sfv" id="sb-val">Loading&hellip;</div>
     <div class="sfc" id="sb-info">Fetching from Supabase&hellip;</div>
     <div class="sfv-version" id="sb-version" title="Click for build info" style="margin-top:8px;font-size:10px;color:var(--dim);letter-spacing:.06em;cursor:default"></div>
@@ -1222,7 +1241,7 @@ body.theme-modern-dark select option{
 // Bump this on every deploy so the user can see at a glance which build is
 // running in their browser. Surfaced in three places: the sidebar footer
 // (desktop), the mobile header badge, and the Settings → About section.
-const APP_VERSION = 'v88';
+const APP_VERSION = 'v89';
 const APP_BUILD_DATE = '2026-06-15';
 
 // Tracks whether the very first Supabase fetch has completed. Used to show
@@ -1656,6 +1675,218 @@ function _colPickerReset(tableId) {
   else if (tableId === 'recent' && typeof renderDash === 'function' && ST && ST.view === 'dash') renderDash();
 }
 // #endregion [COLUMNS]
+
+// #region [GLOBAL-SEARCH]
+// ─── GLOBAL SEARCH (v89) ──────────────────────────────────────────────
+// Always-accessible record search living in the sidebar header. Ctrl/Cmd+K
+// from anywhere focuses the input, Esc closes the dropdown. Results render
+// as you type (debounced); clicking any result opens its detail panel,
+// works from every view (Dashboard, Inventory, Labels, Settings, etc.)
+// without forcing a navigation away from the current page.
+//
+// Search scope: description, ID, serial, frNum, pickNumber, criswell,
+// charter, bankName, mint, type, series, country, year, notes, features,
+// gradingAuth. Case-insensitive substring on a precomputed haystack string
+// per item so typing stays snappy even with 2,500+ records.
+// ──────────────────────────────────────────────────────────────────────
+
+let _globalSearchDebounce = null;
+let _globalSearchSelectedIdx = -1;
+let _globalSearchLastResults = [];
+
+function _globalSearchInput(query) {
+  // Debounce ~80ms so fast typists don't trigger 20 renders for "Morgan Dollar"
+  if (_globalSearchDebounce) clearTimeout(_globalSearchDebounce);
+  _globalSearchDebounce = setTimeout(function() { _globalSearchRun(query); }, 80);
+}
+
+function _globalSearchRun(query) {
+  const el = document.getElementById('global-search-results');
+  const shortcutKbd = document.getElementById('global-search-shortcut');
+  if (!el) return;
+  const q = String(query || '').trim().toLowerCase();
+  if (q.length < 2) {
+    el.hidden = true;
+    if (shortcutKbd) shortcutKbd.style.display = '';
+    _globalSearchLastResults = [];
+    _globalSearchSelectedIdx = -1;
+    return;
+  }
+  if (shortcutKbd) shortcutKbd.style.display = 'none';
+  const results = [];
+  // Per-item haystack: concat the fields most users want to find by.
+  // Skip items missing both description and id (corrupted records).
+  const MAX = 50;
+  for (let i = 0; i < ALL_ITEMS.length; i++) {
+    const item = ALL_ITEMS[i];
+    const raw = item.raw || {};
+    const hay = [
+      item.desc, cn(item.id),
+      raw.serial, raw.frNum, raw.pickNumber, raw.criswell,
+      raw.charter, raw.bankName, raw.city, raw.bankState,
+      raw.mint, raw.mintMark, raw.type, raw.series, raw.category,
+      raw.country, raw.year, raw.denomination,
+      raw.notes, raw.features, raw.gradingAuth,
+      raw.signatures, raw.sealColor
+    ].filter(function(v){ return v != null && v !== ''; }).join(' ').toLowerCase();
+    if (hay.indexOf(q) >= 0) {
+      results.push(item);
+      if (results.length >= MAX) break;
+    }
+  }
+  _globalSearchLastResults = results;
+  _globalSearchSelectedIdx = results.length ? 0 : -1;
+  _globalSearchRender();
+}
+
+function _globalSearchRender() {
+  const el = document.getElementById('global-search-results');
+  if (!el) return;
+  const results = _globalSearchLastResults;
+  if (!results.length) {
+    el.innerHTML = '<div style="padding:12px 14px;color:var(--muted);font-size:12px;font-style:italic">No matches</div>';
+    el.hidden = false;
+    return;
+  }
+  const html = results.slice(0, 20).map(function(item, idx) {
+    const safeSheet = String(item.sheet).replace(/'/g, "\\'");
+    const safeId = String(cn(item.id)).replace(/'/g, "\\'");
+    const sm = SHEET_MAP[item.sheet];
+    const gc = sm ? (GC[sm.group] || '#707070') : '#707070';
+    const sheetLbl = sm ? sm.label : item.sheet;
+    const isSelected = (idx === _globalSearchSelectedIdx);
+    const bg = isSelected ? 'var(--bg2)' : 'transparent';
+    return '<div data-gs-idx="' + idx + '" '
+      + 'onclick="_globalSearchPick(' + idx + ')" '
+      + 'onmouseover="_globalSearchSelectedIdx=' + idx + ';_globalSearchRender()" '
+      + 'style="display:grid;grid-template-columns:50px 1fr auto;gap:8px;padding:8px 10px;cursor:pointer;align-items:center;background:' + bg + ';border-bottom:1px solid var(--border)">'
+      +   '<code style="color:var(--gold);font-size:11px">#' + e(cn(item.id)) + '</code>'
+      +   '<div style="font-size:12px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + e(item.desc || '\u2014') + '</div>'
+      +   '<span style="font-size:9px;background:' + gc + '18;color:' + gc + ';border:1px solid ' + gc + '40;padding:2px 6px;border-radius:3px;white-space:nowrap">' + e(sheetLbl) + '</span>'
+      + '</div>';
+  }).join('');
+  const overflow = results.length > 20
+    ? '<div style="padding:8px 12px;font-size:10px;color:var(--dim);font-style:italic;text-align:center;border-top:1px solid var(--border)">Showing 20 of ' + results.length + ' \u2014 refine the query for fewer matches</div>'
+    : '';
+  el.innerHTML = html + overflow;
+  el.hidden = false;
+}
+
+function _globalSearchPick(idx) {
+  const r = _globalSearchLastResults[idx];
+  if (!r) return;
+  _globalSearchClose();
+  _openDetailById(r.sheet, cn(r.id));
+}
+
+function _globalSearchClose() {
+  const el = document.getElementById('global-search-results');
+  const input = document.getElementById('global-search');
+  const shortcutKbd = document.getElementById('global-search-shortcut');
+  if (el) el.hidden = true;
+  if (input) { input.value = ''; input.blur(); }
+  if (shortcutKbd) shortcutKbd.style.display = '';
+  _globalSearchLastResults = [];
+  _globalSearchSelectedIdx = -1;
+}
+
+function _globalSearchKey(ev) {
+  // Arrow keys to navigate, Enter to select, Esc to close
+  if (ev.key === 'Escape') { _globalSearchClose(); return; }
+  if (!_globalSearchLastResults.length) return;
+  const max = Math.min(20, _globalSearchLastResults.length) - 1;
+  if (ev.key === 'ArrowDown') {
+    ev.preventDefault();
+    _globalSearchSelectedIdx = Math.min(max, _globalSearchSelectedIdx + 1);
+    _globalSearchRender();
+  } else if (ev.key === 'ArrowUp') {
+    ev.preventDefault();
+    _globalSearchSelectedIdx = Math.max(0, _globalSearchSelectedIdx - 1);
+    _globalSearchRender();
+  } else if (ev.key === 'Enter') {
+    ev.preventDefault();
+    if (_globalSearchSelectedIdx >= 0) _globalSearchPick(_globalSearchSelectedIdx);
+  }
+}
+
+// Document-level shortcut + click-outside-to-close. Wired after DOM exists.
+function _installGlobalSearchHotkeys() {
+  document.addEventListener('keydown', function(ev) {
+    // Ctrl+K or Cmd+K from anywhere
+    if ((ev.metaKey || ev.ctrlKey) && (ev.key === 'k' || ev.key === 'K')) {
+      ev.preventDefault();
+      const input = document.getElementById('global-search');
+      if (input) { input.focus(); input.select(); }
+    }
+  });
+  // Click outside the search wrapper closes results
+  document.addEventListener('click', function(ev) {
+    const wrap = document.getElementById('global-search-wrap');
+    if (!wrap) return;
+    if (!wrap.contains(ev.target)) {
+      const el = document.getElementById('global-search-results');
+      if (el && !el.hidden) el.hidden = true;
+    }
+  });
+}
+// #endregion [GLOBAL-SEARCH]
+
+// #region [CONN-STATUS]
+// ─── CONNECTION STATUS INDICATOR (v89) ────────────────────────────────
+// A small colored dot in the sidebar footer reflects the live sync state.
+// Updated every 3 seconds via setInterval (cheap — just reads in-memory
+// counts and updates one DOM node). Hovering over the dot reveals the
+// detailed status as a tooltip.
+//
+// States:
+//   green  — Supabase configured, no pending edits, last sync ok
+//   amber  — Pending local edits or label ops queued for upload
+//   red    — Last sync attempt failed
+//   gray   — Local-only mode (no Supabase URL/key configured)
+// ──────────────────────────────────────────────────────────────────────
+
+function _updateConnectionStatus() {
+  const dot = document.getElementById('conn-status-dot');
+  if (!dot) return;
+  const hasSupabase = !!(typeof SB_URL !== 'undefined' && SB_URL && typeof SB_KEY !== 'undefined' && SB_KEY);
+  const pendingEdits = (typeof PENDING_EDITS !== 'undefined' && PENDING_EDITS) ? PENDING_EDITS.length : 0;
+  const pendingLabels = (typeof PENDING_LABEL_OPS !== 'undefined' && PENDING_LABEL_OPS) ? PENDING_LABEL_OPS.length : 0;
+  const pendingTotal = pendingEdits + pendingLabels;
+  const lastFailed = window._lastSyncFailed === true;
+
+  let color, label;
+  if (!hasSupabase) {
+    color = 'var(--dim)';
+    label = 'Local only \u2014 Supabase not configured';
+  } else if (lastFailed) {
+    color = 'var(--red)';
+    label = 'Last sync failed';
+  } else if (pendingTotal > 0) {
+    color = '#d98c2b'; // amber
+    const parts = [];
+    if (pendingEdits)  parts.push(pendingEdits  + ' edit'  + (pendingEdits  === 1 ? '' : 's'));
+    if (pendingLabels) parts.push(pendingLabels + ' label op' + (pendingLabels === 1 ? '' : 's'));
+    label = parts.join(' + ') + ' pending \u2014 will retry on next Sync';
+  } else {
+    color = 'var(--green)';
+    label = 'Synced \u2014 all local changes are up on Supabase';
+  }
+  if (dot.dataset._color !== color) {
+    dot.style.background = color;
+    dot.dataset._color = color;
+  }
+  dot.title = label;
+}
+
+// Light polling — DOM update is cheap, no network calls. 3s feels live without
+// thrashing. Started once at boot.
+let _connStatusInterval = null;
+function _startConnectionStatusPolling() {
+  if (_connStatusInterval) return;
+  _updateConnectionStatus();
+  _connStatusInterval = setInterval(_updateConnectionStatus, 3000);
+}
+// #endregion [CONN-STATUS]
 
 // #region [SYNC-LOCK]
 // ─── SYNC LOCK ──────────────────────────────────────────────────────
@@ -5015,6 +5246,7 @@ async function loadFromSupabase() {
     const loadedCount = allRows.length;
     const bannerDetail = loadedCount + (total && total !== loadedCount ? ' of ' + total : '') + ' records · ' + new Date().toLocaleTimeString();
     updateSyncBanner('ok', bannerDetail);
+    window._lastSyncFailed = false;   // v89: connection dot can go green
     return true;
   } catch(err) {
     const m = err.message || '';
@@ -5027,6 +5259,7 @@ async function loadFromSupabase() {
       : 'Supabase load failed: ' + m;
     updateSyncBanner('error', hint);
     console.error('[Supabase] load error:', err);
+    window._lastSyncFailed = true;    // v89: connection dot goes red
     return false;
   } finally {
     _syncLockRelease('supabase-pull');
@@ -9395,6 +9628,11 @@ function renderSettings(){
 
 // #region [BOOT]
 setTheme(localStorage.getItem('cv_theme') || 'dark');
+// v89: global search keyboard hotkey (Ctrl/Cmd+K) and outside-click handler,
+// and connection status polling. Safe to call at this point — DOM has parsed
+// the sidebar so the elements they target exist.
+if (typeof _installGlobalSearchHotkeys === 'function') _installGlobalSearchHotkeys();
+if (typeof _startConnectionStatusPolling === 'function') _startConnectionStatusPolling();
 // Populate the version indicators wired up in the HTML markup. Done once at boot
 // since these elements never change between renders.
 (function _stampVersion() {
