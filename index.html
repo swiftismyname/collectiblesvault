@@ -230,6 +230,52 @@ tbody tr.sel td{background:rgba(201,168,76,.06)}
   margin-left:auto;margin-right:8px;letter-spacing:.04em;
 }
 .dp-group-body{padding-top:4px}
+
+/* v94: Data Health page — card grid for integrity checks. Each card is a
+   self-contained problem report: icon, title, count, description, action.
+   Cards wrap responsively; on narrow viewports they stack one per row. */
+.health-grid{
+  display:grid;
+  grid-template-columns:repeat(auto-fill, minmax(280px, 1fr));
+  gap:14px;
+  margin-top:14px;
+}
+.health-card{
+  background:var(--bg2);
+  border:1px solid var(--border);
+  border-radius:8px;
+  padding:16px;
+  display:flex;flex-direction:column;gap:10px;
+  transition:border-color .15s ease, transform .15s ease;
+}
+.health-card:hover{border-color:var(--gold3);transform:translateY(-1px)}
+.health-card-head{
+  display:flex;align-items:center;gap:10px;
+}
+.health-icon{
+  width:34px;height:34px;border-radius:6px;
+  background:var(--bg3);
+  display:flex;align-items:center;justify-content:center;
+  font-size:18px;flex-shrink:0;
+}
+.health-card-title{
+  font-size:14px;color:var(--text);font-weight:500;flex:1;
+  font-family:var(--font-display, 'Cormorant Garamond', serif);
+}
+.health-count{
+  font-size:22px;font-weight:600;font-variant-numeric:tabular-nums;
+  font-family:var(--font-mono, 'DM Mono', monospace);
+}
+.health-desc{
+  font-size:12px;color:var(--muted);line-height:1.45;
+  min-height:34px;
+}
+.health-action{
+  margin-top:auto;font-size:12px;padding:7px 12px;
+}
+.health-action[disabled]{
+  opacity:.4;cursor:not-allowed;pointer-events:none;
+}
 /* Empty */
 .empty{text-align:center;padding:60px 20px;color:var(--muted)}
 .empty-i{font-size:36px;opacity:.3;margin-bottom:12px}
@@ -1247,6 +1293,16 @@ body.theme-modern-dark select option{
       Duplicates
       <span id="b-dups" class="nbadge red" style="display:none">0</span>
     </div>
+    <!-- v94: Data Health — consolidated audit & integrity check surface.
+         Houses Silver Audit, Silver Series Cleanup, missing-field counts,
+         duplicates, and pending sync indicators. Badge sums all problem
+         counts across checks so the user sees at a glance whether their
+         collection has integrity issues to fix. -->
+    <div class="ni" data-v="health" onclick="nav('health')">
+      <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 14.5c-3-2-6-4.5-6-8.5a3.5 3.5 0 016-2.5 3.5 3.5 0 016 2.5c0 4-3 6.5-6 8.5z" opacity=".25"/><path d="M2 8h2.5l1-2 2 4 1.5-3 1 2H14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      Data Health
+      <span id="b-health" class="nbadge red" style="display:none">0</span>
+    </div>
     <div class="ni" data-v="breakdown" onclick="nav('breakdown')">
       <svg viewBox="0 0 16 16" fill="currentColor"><path d="M2 2h4v4H2V2zm0 6h4v6H2V8zm6-6h6v3H8V2zm0 5h6v7H8V7z"/></svg>
       Category Breakdown
@@ -1293,7 +1349,7 @@ body.theme-modern-dark select option{
 // Bump this on every deploy so the user can see at a glance which build is
 // running in their browser. Surfaced in three places: the sidebar footer
 // (desktop), the mobile header badge, and the Settings → About section.
-const APP_VERSION = 'v93';
+const APP_VERSION = 'v94';
 const APP_BUILD_DATE = '2026-06-15';
 
 // Tracks whether the very first Supabase fetch has completed. Used to show
@@ -2725,6 +2781,7 @@ async function loadSpotPrices() {
       if (ST.view === 'dash')        renderDash();
       else if (ST.view === 'inv')    renderInv();
       else if (ST.view === 'dups')   renderDups();
+      else if (ST.view === 'health') renderDataHealth();
       else if (ST.view === 'labels') renderLabels();
     }
   } catch(e) {
@@ -2796,6 +2853,15 @@ function updateBadges(){
     const dupCount = countDupGroups();
     dupBadge.textContent = dupCount;
     dupBadge.style.display = dupCount > 0 ? '' : 'none';
+  }
+  // v94: Data Health badge — sums all countable checks (missing cost / desc
+  // / images + dup groups + pending sync). Skip during initial load to avoid
+  // showing "every record needs a cost" before Supabase has populated ALL_ITEMS.
+  const healthBadge = document.getElementById('b-health');
+  if (healthBadge && !_initial && typeof _healthBadgeCount === 'function') {
+    const healthCount = _healthBadgeCount();
+    healthBadge.textContent = healthCount > 9999 ? '9999+' : healthCount.toLocaleString();
+    healthBadge.style.display = healthCount > 0 ? '' : 'none';
   }
   // Note: checkSyncState() intentionally NOT called here.
   // Badges reflect local UI state only. Connection status is managed by the sync banner.
@@ -3489,6 +3555,7 @@ function nav(v){
     renderLabels();
   }
   else if(v==='dups') renderDups();
+  else if(v==='health') renderDataHealth();
   else if(v==='breakdown') renderBreakdown();
   else if(v==='add') renderAdd();
   else if(v==='settings') renderSettings();
@@ -4071,8 +4138,10 @@ ${(function _recentActivityHTML() {
     + ' <span style="font-size:11px;text-transform:none;letter-spacing:0;color:var(--dim);font-style:italic">'
     + '\u2014 last ' + withTs.length + ' records added or edited, newest first. Click to view.</span></span>'
     + '<button onclick="showColumnPicker(\'recent\',\'Recent Activity\',renderDash)" title="Show or hide extra columns" style="margin-left:auto;font-size:11px;text-transform:none;letter-spacing:0;background:var(--bg4);border:1px solid var(--border);color:var(--muted);padding:4px 10px;border-radius:4px;cursor:pointer">\u2699 Columns</button>'
-    + '<button onclick="showSilverAuditModal()" title="Scan silver records for likely-wrong purity (silverContent) or weight values" style="font-size:11px;text-transform:none;letter-spacing:0;background:var(--bg4);border:1px solid var(--border);color:var(--muted);padding:4px 10px;border-radius:4px;cursor:pointer">\u2696 Silver Audit</button>'
-    + '<button onclick="showSilverSeriesCleanupModal()" title="Bulk-apply standard purity, silver weight, and total grams to all records in a US silver series" style="font-size:11px;text-transform:none;letter-spacing:0;background:var(--bg4);border:1px solid var(--border);color:var(--muted);padding:4px 10px;border-radius:4px;cursor:pointer">\ud83e\ude99 Series Cleanup</button>'
+    // v94: Silver Audit + Series Cleanup buttons moved to Data Health page.
+    // Single link here is enough — keeps the dashboard focused on the timeline
+    // and surfaces the badge count when checks find issues.
+    + '<button onclick="nav(\'health\')" title="Open Data Health page \u2014 silver audit, series cleanup, missing fields, duplicates, pending sync" style="font-size:11px;text-transform:none;letter-spacing:0;background:var(--bg4);border:1px solid var(--gold3);color:var(--gold);padding:4px 10px;border-radius:4px;cursor:pointer">\u2764 Data Health</button>'
     + '</div>'
     + '<div class="tw"><table><thead><tr>'
     + '<th style="width:70px">Time</th>'
@@ -4842,6 +4911,7 @@ function deleteRecord(item) {
   // If on a tab where this matters, re-render
   if (ST.view === 'inv') renderInv();
   else if (ST.view === 'dups') renderDups();
+  else if (ST.view === 'health') renderDataHealth();
   else if (ST.view === 'dash') renderDash();
   // Sync deletion — Supabase takes priority, GAS/Sheets as fallback
   if (SB_URL && SB_KEY) {
@@ -8443,6 +8513,253 @@ function renderDups(){
   $.innerHTML = body;
 }
 
+// #region [DATA-HEALTH]
+// ─── DATA HEALTH (v94) ────────────────────────────────────────────────
+// Consolidates all data-quality checks into one page:
+//   • Silver Audit (links to existing modal)
+//   • Silver Series Cleanup (links to existing modal)
+//   • Duplicates (links to dedicated view)
+//   • Missing Cost / Description / Images (in-place list modals)
+//   • Pending sync edits (triggers Sync Now)
+//
+// Each check is rendered as a card with count + action. Total problem
+// count is summed into the sidebar badge for at-a-glance status. Adding
+// a new check is a single object in _healthChecks() — auto picks up
+// counting and rendering.
+// ──────────────────────────────────────────────────────────────────────
+
+let _HEALTH_CACHE = null;
+
+function _healthChecks() {
+  const checks = [];
+
+  // 1. Missing cost — records with cost=0 or null. Common for inherited
+  //    records or quick-add scans the user never filled in.
+  const noCost = ALL_ITEMS.filter(function(i){ return !i.cost || i.cost === 0; });
+  checks.push({
+    id: 'no-cost',
+    label: 'Missing Cost',
+    desc: 'Records with no cost value entered. May skew portfolio totals.',
+    icon: '$',
+    count: noCost.length,
+    items: noCost,
+    countable: true
+  });
+
+  // 2. Missing description
+  const noDesc = ALL_ITEMS.filter(function(i){
+    return !i.desc || !String(i.desc).trim();
+  });
+  checks.push({
+    id: 'no-desc',
+    label: 'Missing Description',
+    desc: 'Records with empty description field.',
+    icon: '?',
+    count: noDesc.length,
+    items: noDesc,
+    countable: true
+  });
+
+  // 3. Missing images — neither imageFrontUrl nor imageBackUrl set, in any spelling
+  const noImg = ALL_ITEMS.filter(function(i){
+    const r = i.raw || {};
+    const front = r.imageFrontUrl || r.imagefronturl || r.image_front_url;
+    const back  = r.imageBackUrl  || r.imagebackurl  || r.image_back_url;
+    return !front && !back;
+  });
+  checks.push({
+    id: 'no-img',
+    label: 'No Images',
+    desc: 'Records without a front or back image.',
+    icon: '\ud83d\udcf7',
+    count: noImg.length,
+    items: noImg,
+    countable: true
+  });
+
+  // 4. Duplicates — reuses existing dup-group counter
+  if (typeof countDupGroups === 'function') {
+    const dupCount = countDupGroups();
+    checks.push({
+      id: 'dups',
+      label: 'Duplicate Record Numbers',
+      desc: 'Multiple records sharing the same ID. Resolve by renumbering.',
+      icon: '\u26a0',
+      count: dupCount,
+      action: function(){ nav('dups'); },
+      countable: true
+    });
+  }
+
+  // 5. Pending sync — edits queued for retry. Only show if non-zero.
+  const pendingEdits = (typeof PENDING_EDITS !== 'undefined' && PENDING_EDITS)
+    ? PENDING_EDITS.length : 0;
+  if (pendingEdits > 0) {
+    checks.push({
+      id: 'pending',
+      label: 'Pending Sync',
+      desc: 'Local edits not yet uploaded to Supabase.',
+      icon: '\u2191',
+      count: pendingEdits,
+      action: function(){
+        if (typeof flushPendingEdits === 'function') flushPendingEdits();
+        else if (typeof loadFromSupabase === 'function') loadFromSupabase();
+      },
+      countable: true
+    });
+  }
+
+  // 6. Silver Audit — modal handles its own counting and resolution
+  checks.push({
+    id: 'silver-audit',
+    label: 'Silver Audit',
+    desc: 'Scan silver records for likely-wrong purity, weight, or grams-vs-troy-oz mistakes.',
+    icon: '\u2696',
+    count: null, // not aggregated — modal shows breakdown by category
+    action: function(){
+      if (typeof showSilverAuditModal === 'function') showSilverAuditModal();
+    },
+    countable: false
+  });
+
+  // 7. Silver Series Cleanup — bulk standard values
+  checks.push({
+    id: 'series-cleanup',
+    label: 'Silver Series Cleanup',
+    desc: 'Bulk-apply canonical purity and weight for 20 US silver series (Morgan, ASE, Walking Liberty…).',
+    icon: '\ud83e\ude99',
+    count: null,
+    action: function(){
+      if (typeof showSilverSeriesCleanupModal === 'function') showSilverSeriesCleanupModal();
+    },
+    countable: false
+  });
+
+  return checks;
+}
+
+function _healthBadgeCount() {
+  // Sum of countable checks. Excludes Silver Audit / Series Cleanup which
+  // surface their own counts inside their modals.
+  try {
+    const checks = _healthChecks();
+    return checks.reduce(function(sum, c){
+      return sum + (c.countable && c.count > 0 ? c.count : 0);
+    }, 0);
+  } catch (e) {
+    return 0;
+  }
+}
+
+function _healthAction(checkId) {
+  if (!_HEALTH_CACHE) _HEALTH_CACHE = _healthChecks();
+  const c = _HEALTH_CACHE.find(function(x){ return x.id === checkId; });
+  if (!c) return;
+  if (typeof c.action === 'function') return c.action();
+  if (c.items && c.items.length) {
+    _showHealthListModal(c.label, c.desc, c.items);
+  } else if (c.items && c.items.length === 0) {
+    cvToast('All clear — no records match this check', 'ok');
+  }
+}
+
+// Modal that lists a set of records with click-to-open detail. Used for
+// the "show records" actions on Missing Cost / Description / Images.
+// Reuses the existing modal pattern (overlay + closeable panel).
+function _showHealthListModal(title, desc, items) {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:200;display:flex;align-items:center;justify-content:center;padding:20px';
+  overlay.onclick = function(ev){ if (ev.target === overlay) overlay.remove(); };
+
+  const rowsHtml = items.slice(0, 200).map(function(i){
+    const sm = SHEET_MAP[i.sheet];
+    const gc = sm ? (GC[sm.group] || '#707070') : '#707070';
+    const sheetLbl = sm ? sm.label : i.sheet;
+    const safeSheet = String(i.sheet).replace(/'/g, "\\'");
+    const safeId = String(cn(i.id)).replace(/'/g, "\\'");
+    return '<div class="hl-row" '
+      + 'onmousedown="event.preventDefault();document.querySelector(\'.modal-overlay\').remove();_openDetailById(\''+safeSheet+'\',\''+safeId+'\')" '
+      + 'style="display:grid;grid-template-columns:55px 1fr auto;gap:10px;padding:9px 12px;cursor:pointer;align-items:center;border-bottom:1px solid var(--border)">'
+      +   '<code style="color:var(--gold);font-size:11px">#'+e(cn(i.id))+'</code>'
+      +   '<div style="font-size:12px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+e(i.desc || '\u2014 (no description)')+'</div>'
+      +   '<span style="font-size:9px;background:'+gc+'18;color:'+gc+';border:1px solid '+gc+'40;padding:2px 6px;border-radius:3px;white-space:nowrap">'+e(sheetLbl)+'</span>'
+      + '</div>';
+  }).join('');
+
+  const overflow = items.length > 200
+    ? '<div style="padding:8px 12px;font-size:11px;color:var(--dim);font-style:italic;text-align:center;border-top:1px solid var(--border)">Showing 200 of '+items.length+' \u2014 fix some, then re-open to see more</div>'
+    : '';
+
+  const panel = document.createElement('div');
+  panel.style.cssText = 'background:var(--bg2);border:1px solid var(--gold3);border-radius:8px;max-width:680px;width:100%;max-height:85vh;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 12px 32px rgba(0,0,0,.6)';
+  panel.innerHTML = ''
+    + '<div style="padding:18px 22px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">'
+    +   '<div>'
+    +     '<h2 style="margin:0;font-family:var(--font-display);font-size:18px;color:var(--gold)">'+e(title)+'</h2>'
+    +     '<div style="font-size:11px;color:var(--muted);margin-top:3px">'+e(desc)+' \u00b7 <strong style="color:var(--text)">'+items.length+' record'+(items.length===1?'':'s')+'</strong></div>'
+    +   '</div>'
+    +   '<button onclick="this.closest(\'.modal-overlay\').remove()" style="background:transparent;border:1px solid var(--border);color:var(--muted);padding:6px 14px;border-radius:4px;cursor:pointer;font-size:12px">Close</button>'
+    + '</div>'
+    + '<div style="overflow-y:auto;flex:1">'+rowsHtml+overflow+'</div>';
+  overlay.appendChild(panel);
+  document.body.appendChild(overlay);
+}
+
+function renderDataHealth() {
+  const $ = document.getElementById('content');
+  if (!$) return;
+  _HEALTH_CACHE = _healthChecks();
+  const checks = _HEALTH_CACHE;
+
+  // Count cards with non-zero problem counts (for the header summary)
+  const problemCards = checks.filter(function(c){ return c.countable && c.count > 0; });
+  const totalProblems = problemCards.reduce(function(s,c){ return s + c.count; }, 0);
+
+  const cardsHtml = checks.map(function(c){
+    let countDisplay, countColor;
+    if (c.count == null) {
+      countDisplay = '\u2192';
+      countColor = 'var(--muted)';
+    } else if (c.count === 0) {
+      countDisplay = '\u2713';
+      countColor = 'var(--green)';
+    } else if (c.count > 100) {
+      countDisplay = c.count.toLocaleString();
+      countColor = 'var(--red)';
+    } else {
+      countDisplay = c.count.toLocaleString();
+      countColor = '#d98c2b';
+    }
+    const actionLbl = c.action ? 'Open' : (c.count === 0 ? '\u2014' : 'View records');
+    const disabled = (c.count === 0 && !c.action) ? ' disabled' : '';
+    return '<div class="health-card">'
+      +   '<div class="health-card-head">'
+      +     '<span class="health-icon">'+e(c.icon)+'</span>'
+      +     '<div class="health-card-title">'+e(c.label)+'</div>'
+      +     '<div class="health-count" style="color:'+countColor+'">'+e(countDisplay)+'</div>'
+      +   '</div>'
+      +   '<div class="health-desc">'+e(c.desc)+'</div>'
+      +   '<button class="bp health-action" onclick="_healthAction(\''+c.id+'\')"'+disabled+'>'+e(actionLbl)+'</button>'
+      + '</div>';
+  }).join('');
+
+  const headerSub = totalProblems === 0
+    ? '<span style="color:var(--green)">\u2713 All clear \u2014 no integrity issues detected across countable checks.</span>'
+    : '<strong style="color:var(--text)">'+totalProblems.toLocaleString()+'</strong> issue'+(totalProblems===1?'':'s')+' across <strong style="color:var(--text)">'+problemCards.length+'</strong> check'+(problemCards.length===1?'':'s')+'. Review and resolve below.';
+
+  $.innerHTML = ''
+    + '<div class="ph">'
+    +   '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:14px;flex-wrap:wrap">'
+    +     '<h1 style="margin:0">Data Health</h1>'
+    +     '<button class="bg" onclick="renderDataHealth()" style="font-size:11px">\u21bb Refresh</button>'
+    +   '</div>'
+    +   '<p class="ph-sub">'+headerSub+'</p>'
+    + '</div>'
+    + '<div class="health-grid">'+cardsHtml+'</div>';
+}
+// #endregion [DATA-HEALTH]
+
 function filterDupsBySearch(q) {
   q = (q || '').trim().toLowerCase();
   document.querySelectorAll('#dup-list .dg').forEach(el => {
@@ -9110,6 +9427,7 @@ async function loadFromSheets(url){
     else if (ST.view === 'inv')    renderInv();
     else if (ST.view === 'labels') renderLabels();
     else if (ST.view === 'dups')   renderDups();
+      else if (ST.view === 'health') renderDataHealth();
     else if (ST.view === 'breakdown') renderBreakdown();
     else if (ST.view === 'settings') renderSettings();
     updateSyncBanner('ok', new Date().toISOString());
