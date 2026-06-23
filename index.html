@@ -1222,7 +1222,7 @@ body.theme-modern-dark select option{
 // Bump this on every deploy so the user can see at a glance which build is
 // running in their browser. Surfaced in three places: the sidebar footer
 // (desktop), the mobile header badge, and the Settings → About section.
-const APP_VERSION = 'v87';
+const APP_VERSION = 'v88';
 const APP_BUILD_DATE = '2026-06-15';
 
 // Tracks whether the very first Supabase fetch has completed. Used to show
@@ -2277,6 +2277,11 @@ async function flushPendingLabelOps() {
   }
 }
 
+// v88: sentinel sheet name used to store "labels printed" markers inside the
+// SAME label_queue Supabase table — avoids needing a second table or any
+// migration. Reader code separates these rows from real manual-queue entries.
+const PRINTED_SHEET_SENTINEL = '__printed__';
+
 async function loadLabelQueueFromSupabase() {
   if (!SB_URL || !SB_KEY) return;
   // Surface "syncing…" state in the labels view header if it's currently open
@@ -2297,32 +2302,52 @@ async function loadLabelQueueFromSupabase() {
       } else {
         console.warn('[label-queue] load failed:', r.status, body.slice(0, 200));
       }
+      if (_statusEl) _statusEl.textContent = 'sync failed';
       return;
     }
     const remote = await r.json();
     if (!Array.isArray(remote)) return;
 
-    const remoteKeys = new Set(remote.map(row => row.sheet + '|' + row.id));
-    const localOnly  = [...MANUAL_LABELS].filter(k => !remoteKeys.has(k));
+    // Split rows: real label_queue entries (sheet=actual sheet name) vs printed
+    // markers (sheet=PRINTED_SHEET_SENTINEL). Same table, different semantics.
+    const printedRows = remote.filter(row => row.sheet === PRINTED_SHEET_SENTINEL);
+    const labelRows   = remote.filter(row => row.sheet !== PRINTED_SHEET_SENTINEL);
 
-    // Source of truth = remote ∪ local-only (haven't been pushed yet)
+    // ── Manual labels (existing 2-way merge) ─────────────────────────
+    const remoteKeys  = new Set(labelRows.map(row => row.sheet + '|' + row.id));
+    const localOnly   = [...MANUAL_LABELS].filter(k => !remoteKeys.has(k));
     MANUAL_LABELS = new Set([
-      ...remote.map(row => row.sheet + '|' + row.id),
+      ...labelRows.map(row => row.sheet + '|' + row.id),
       ...localOnly
     ]);
     saveManualLabels();
-
-    // Push local-only entries up (fire-and-forget)
+    // Push local-only manual entries up (fire-and-forget)
     localOnly.forEach(key => {
       const sep = key.indexOf('|');
       if (sep < 0) return;
       pushLabelToSupabase(key.slice(0, sep), key.slice(sep + 1));
     });
 
+    // ── Printed markers (new in v88) ─────────────────────────────────
+    // Same 2-way merge logic: pull remote into local set, push any local-only
+    // entries up. This is what makes "Mark All Printed" propagate across
+    // devices: device A pushes the printed markers, device B pulls them down,
+    // and renderLabels() then suppresses those records from "pending".
+    const remotePrintedIds = new Set(printedRows.map(row => String(row.id)));
+    const localOnlyPrinted = [...labelsPrinted].filter(id => !remotePrintedIds.has(String(id)));
+    labelsPrinted = new Set([
+      ...printedRows.map(row => String(row.id)),
+      ...localOnlyPrinted.map(String)
+    ]);
+    saveLabelsPrinted();
+    localOnlyPrinted.forEach(id => {
+      pushLabelToSupabase(PRINTED_SHEET_SENTINEL, String(id));
+    });
+
     // Retry any queued ops
     flushPendingLabelOps();
 
-    console.log('[label-queue] Synced — ' + remote.length + ' remote, ' + localOnly.length + ' local-only uploaded');
+    console.log('[label-queue] Synced — ' + labelRows.length + ' manual (' + localOnly.length + ' pushed up), ' + printedRows.length + ' printed markers (' + localOnlyPrinted.length + ' pushed up)');
     // Mark successful sync time so the UI can show "synced 5s ago"
     window.LABEL_QUEUE_LAST_SYNC = Date.now();
     if (_statusEl) _statusEl.textContent = 'synced just now';
@@ -7474,12 +7499,24 @@ async function markAllPrinted() {
   
   if (!confirm('Mark all ' + totalPending + ' pending label(s) as printed?')) return;
   
-  // Mark new records as printed
-  newRecLabels.forEach(r => labelsPrinted.add(String(r.id)));
+  // v88: track newly-added printed IDs so we can push them to Supabase for
+  // cross-device sync. Without this, marking 33 as printed on desktop never
+  // reached the phone — phone's labelsPrinted was localStorage-only.
+  const newlyPrinted = [];
+  newRecLabels.forEach(r => {
+    const idStr = String(r.id);
+    if (!labelsPrinted.has(idStr)) {
+      labelsPrinted.add(idStr);
+      newlyPrinted.push(idStr);
+    }
+  });
   // For manual labels (keyed as "sheet|id"), extract the ID part
   manualLabels.forEach(key => {
     const id = key.split('|')[1];
-    if (id) labelsPrinted.add(id);
+    if (id && !labelsPrinted.has(id)) {
+      labelsPrinted.add(id);
+      newlyPrinted.push(id);
+    }
   });
   
   // Clear manual labels queue (and sync the deletions to Supabase so other devices see it)
@@ -7492,8 +7529,17 @@ async function markAllPrinted() {
     removeLabelFromSupabase(key.slice(0, sep), key.slice(sep + 1));
   });
   
-  // Persist labelsPrinted
+  // Persist labelsPrinted locally
   saveLabelsPrinted();
+  
+  // v88: push each newly-printed ID to Supabase as a sentinel row so other
+  // devices pick it up on their next refresh. Same retry/pending queue as
+  // regular label sync — silently retries if Supabase is unreachable.
+  if (typeof PRINTED_SHEET_SENTINEL !== 'undefined') {
+    newlyPrinted.forEach(id => {
+      pushLabelToSupabase(PRINTED_SHEET_SENTINEL, id);
+    });
+  }
   
   renderLabels();
   updateBadges();
@@ -9832,10 +9878,21 @@ function renderAdd(){
     +'<button type="button" onclick="document.getElementById(\'af-id\').value='+suggestedId+'" class="bg" style="white-space:nowrap;font-size:11px">Use #'+suggestedId+'</button>'
     +'</div>'
     +'<div style="font-size:11px;color:var(--muted);margin-top:6px">Scan a barcode here or type manually. Leave blank for auto-assignment.</div>'
+    // v88: Quantity for bulk-add identical records (e.g., 20 of the same 1971-S
+    // Lincoln cents). Each gets its own auto-assigned sequential ID; the
+    // Record Number input above is ignored when Quantity > 1 (can't type 20
+    // IDs at once). Capped at 100 per submit to avoid runaway loops.
+    +'<div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">'
+    +'<label style="display:block;font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--gold);margin-bottom:6px">Quantity</label>'
+    +'<div style="display:flex;gap:8px;align-items:center">'
+    +'<input type="number" id="af-quantity" value="1" min="1" max="100" onchange="_handleAddQuantityChange()" oninput="_handleAddQuantityChange()" style="width:90px;background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:4px;font-size:13px">'
+    +'<div id="af-quantity-hint" style="font-size:11px;color:var(--muted);flex:1">Default 1. For bulk-add (e.g. 20 identical 1971-S cents), set this. Each new record gets its own auto-assigned ID.</div>'
+    +'</div>'
+    +'</div>'
     +'</div>'
     +fields
     +'<div style="display:flex;gap:10px;margin-top:8px">'
-    +'<button class="bp" onclick="submitAdd()" style="flex:1">Add to Collection</button>'
+    +'<button class="bp" id="af-submit-btn" onclick="submitAdd()" style="flex:1">Add to Collection</button>'
     +'<button class="bg" onclick="resetAdd();renderAdd()" style="flex:1">Clear</button>'
     +'</div></div>';
 
@@ -9904,6 +9961,118 @@ function duplicateLastRecord() {
   }
 }
 
+// v88: Bulk-add path for "20 of the same 1971-S Lincoln cent". Receives the
+// base record (with all the user's input fields filled in identically) and a
+// quantity. Auto-assigns sequential IDs, inserts each into Supabase, pushes
+// each to the label queue. Stays on the Add page only on full failure;
+// otherwise navigates to Inventory at the end.
+async function _submitBulkAdd(sheet, baseRec, quantity) {
+  // Compute starting auto-assigned ID
+  const allIdsNum = ALL_ITEMS.map(r => parseInt(cn(r.id)) || 0).filter(n => !isNaN(n));
+  const startId = Math.max(...allIdsNum, MAX_EXISTING_ID, 0) + 1;
+  const endId   = startId + quantity - 1;
+
+  if (!confirm('Create ' + quantity + ' identical records?\n\n'
+             + '\u2022 Sheet: ' + (SHEET_LABELS[sheet] || sheet) + '\n'
+             + '\u2022 IDs: #' + startId + ' \u2013 #' + endId + ' (auto-assigned)\n'
+             + '\u2022 Same fields applied to all\n\n'
+             + 'All records also added to the label print queue.')) return;
+
+  const btn = document.getElementById('af-submit-btn') || document.querySelector('#content button.bp');
+  if (btn) { btn.disabled = true; }
+
+  const arr = D[sheet] || [];
+  let successCount = 0;
+  let failCount = 0;
+  const createdIds = [];
+
+  for (let i = 0; i < quantity; i++) {
+    // Clone the base record so each insert doesn't pollute the others.
+    // (Object spread is shallow but baseRec only contains primitives + a
+    // couple of string URLs, so a single spread is fully sufficient.)
+    const rec = Object.assign({}, baseRec);
+    rec.id = String(startId + i);
+    rec._localId = Date.now() + i;
+    _touchRecord(rec);
+
+    arr.push(rec);
+    NEW_RECORDS.push(Object.assign({sheet}, rec));
+
+    // Add to label print queue (Supabase + local) for cross-device sync
+    const _qKey = sheet + '|' + cn(rec.id);
+    if (!MANUAL_LABELS.has(_qKey)) {
+      MANUAL_LABELS.add(_qKey);
+      pushLabelToSupabase(sheet, cn(rec.id));
+    }
+
+    if (SB_URL && SB_KEY) {
+      if (btn) btn.textContent = 'Saving ' + (i + 1) + ' / ' + quantity + '\u2026';
+      try {
+        await insertInSupabase(sheet, rec);
+        // Successfully synced — remove from NEW_RECORDS queue
+        const nrIdx = NEW_RECORDS.findIndex(r => String(r.id) === String(rec.id));
+        if (nrIdx >= 0) NEW_RECORDS.splice(nrIdx, 1);
+        if (GSHEETS_URL) _writeToGAS(sheet, cn(rec.id), rec).catch(() => {});
+        successCount++;
+        createdIds.push(cn(rec.id));
+      } catch (ex) {
+        console.error('[submitBulkAdd] insert failed:', ex);
+        cvLogError('Bulk-add Supabase insert failed', { sheet, id: rec.id, message: ex.message });
+        failCount++;
+      }
+    } else {
+      // No Supabase configured — local-only success
+      successCount++;
+      createdIds.push(cn(rec.id));
+    }
+  }
+
+  D[sheet] = arr;
+  saveNR();
+  saveManualLabels();
+
+  buildFlat();
+  updateBadges();
+  refreshSidebarTotal();
+  renderDash();
+  resetAdd();
+
+  if (failCount === 0) {
+    cvToast(successCount + ' records (#' + startId + '\u2013#' + endId + ') added to "' + (SHEET_LABELS[sheet] || sheet) + '"', 'ok');
+  } else if (successCount > 0) {
+    cvToast(successCount + ' added, ' + failCount + ' failed Supabase sync \u2014 try Sync Now', 'warn', { duration: 8000 });
+  } else {
+    cvToast('All ' + quantity + ' failed to save \u2014 check connection and try again', 'error', { duration: 8000 });
+  }
+  nav('inv');
+}
+
+
+// input and update the submit button text. With qty > 1, manually-typed IDs
+// don't make sense (can't enter 20 IDs at once), so the user's intent is
+// always "auto-assign sequentially." Visual feedback matches that.
+function _handleAddQuantityChange() {
+  const qtyInput = document.getElementById('af-quantity');
+  const idInput  = document.getElementById('af-id');
+  const hint     = document.getElementById('af-quantity-hint');
+  const btn      = document.getElementById('af-submit-btn');
+  const qty = Math.max(1, Math.min(100, parseInt(qtyInput && qtyInput.value) || 1));
+  const bulk = qty > 1;
+  if (idInput) {
+    idInput.disabled = bulk;
+    idInput.style.opacity = bulk ? '0.5' : '1';
+    idInput.style.pointerEvents = bulk ? 'none' : 'auto';
+    if (bulk) idInput.value = '';
+  }
+  if (hint) {
+    hint.textContent = bulk
+      ? '\u2728 Bulk-add mode: ' + qty + ' records will be created with sequential auto-assigned IDs. Record Number input above is disabled.'
+      : 'Default 1. For bulk-add (e.g. 20 identical 1971-S cents), set this. Each new record gets its own auto-assigned ID.';
+    hint.style.color = bulk ? 'var(--gold)' : 'var(--muted)';
+  }
+  if (btn) btn.textContent = bulk ? ('Add ' + qty + ' Records to Collection') : 'Add to Collection';
+}
+
 async function submitAdd(){
   const schema = SCHEMAS[ADD_SHEET] || [];
   const sheet  = ADD_SHEET;
@@ -9924,6 +10093,18 @@ async function submitAdd(){
   }
 
   if(missing.length){ alert('Please fill in: '+missing.join(', ')); return; }
+
+  // v88: Quantity branch — if > 1, route into the bulk-add path. Each record
+  // gets the same fields but its own sequential auto-assigned ID. The
+  // user-typed Record Number input is ignored (input is disabled in the UI
+  // when qty > 1; this defensive check covers race conditions where the
+  // user typed an ID and then bumped quantity).
+  const qtyInput = document.getElementById('af-quantity');
+  const quantity = Math.max(1, Math.min(100, parseInt(qtyInput && qtyInput.value) || 1));
+  if (quantity > 1) {
+    await _submitBulkAdd(sheet, rec, quantity);
+    return;
+  }
 
   // Read user-provided ID (optional)
   const idInput = document.getElementById('af-id');
