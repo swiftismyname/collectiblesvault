@@ -1375,8 +1375,19 @@ body.theme-modern-dark select option{
 // Bump this on every deploy so the user can see at a glance which build is
 // running in their browser. Surfaced in three places: the sidebar footer
 // (desktop), the mobile header badge, and the Settings → About section.
-const APP_VERSION = 'v97';
+const APP_VERSION = 'v99';
 const APP_BUILD_DATE = '2026-06-15';
+
+// ── EARLY-HOISTED MODULE STATE ──────────────────────────────────────────────
+// v99: _FANCY_CACHE moved here from its original location in the FANCY-SERIAL
+// region (~line 8960). Reason: _invalidateFancyCache() is called from
+// _touchRecord() (line ~1576) and from the ALL_ITEMS rebuild block (line
+// ~3026), both of which can fire during initial script execution — BEFORE
+// the original declaration would have been reached. Even with `var` hoisting,
+// keeping the binding physically close to its early callers is more robust
+// against future edits. The original FANCY-SERIAL location keeps a comment
+// pointer; do NOT re-declare it there.
+var _FANCY_CACHE = null;
 
 // Tracks whether the very first Supabase fetch has completed. Used to show
 // "Loading…" placeholders instead of "0 records / $0.00" during initial boot.
@@ -8942,14 +8953,16 @@ const FANCY_RARITY = {
   1: { label: 'Common+',        color: '#6a8aab', premium: 'small premium' }
 };
 
-// ── Fancy-serial cache (v96) ──────────────────────────────────────────
-// Keyed by `sheet|cn(id)` → {tier, count, names}. Built once per session
-// (or after explicit invalidation from add/edit/sync paths) so the
-// inventory render loop, filter chain, and Data Health count all share
-// one O(n) computation instead of re-running the checker per cell. With
-// ~1100 currency records in the user's collection, the full build is
-// well under 10ms — fine to run synchronously on first need.
-let _FANCY_CACHE = null;
+// ── Fancy-serial cache (v96, hoisted in v99) ──────────────────────────
+// _FANCY_CACHE declared at the TOP of this script block (see line ~1382)
+// so it's bound before _invalidateFancyCache() can be called from early
+// boot paths in _touchRecord() and the ALL_ITEMS rebuild. DO NOT re-
+// declare here — declaration was moved up after v98's `var` fix proved
+// insufficient against browser caching of pre-fix builds.
+//
+// Cache shape: Map<sheet|cn(id), {tier, count, names}>. Built once per
+// session (or after explicit invalidation), shared across the inventory
+// render loop, filter chain, and Data Health count.
 
 function _buildFancyCache() {
   const m = new Map();
