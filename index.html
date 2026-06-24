@@ -1375,7 +1375,7 @@ body.theme-modern-dark select option{
 // Bump this on every deploy so the user can see at a glance which build is
 // running in their browser. Surfaced in three places: the sidebar footer
 // (desktop), the mobile header badge, and the Settings → About section.
-const APP_VERSION = 'v99';
+const APP_VERSION = 'v100';
 const APP_BUILD_DATE = '2026-06-15';
 
 // ── EARLY-HOISTED MODULE STATE ──────────────────────────────────────────────
@@ -4776,15 +4776,26 @@ function showDetail(item){
   // the top of the panel summarizing the rarity tier and pattern names.
   // Click opens the full Fancy Serial Checker modal pre-filled with this
   // serial for the complete breakdown + market estimates.
+  // v95: fancy-serial banner at top of detail panel (quick visual flag).
+  // v100: ALSO build a full collapsible "Fancy Serial Analysis" section
+  // that lives alongside the standard FIELD_SECTIONS groups. The banner is
+  // for at-a-glance recognition; the section is the full breakdown with
+  // every matched pattern, individual tier colors, and typical premium
+  // ranges. Both reference the same _checkFancySerial result so they can
+  // never disagree.
   let fancyBanner = '';
+  let fancySection = '';
   if (FANCY_SERIAL_SHEETS.has(item.sheet)) {
     const _serialRaw = raw.serial || raw.serialNumber || raw.serialnumber || raw.Serial || '';
     if (_serialRaw) {
       const _fr = _checkFancySerial(_serialRaw);
+      const _safeSerial = String(_serialRaw).replace(/'/g, "\\'");
+
+      // Banner at top — only when patterns matched (otherwise the panel
+      // doesn't need extra visual noise pointing out "this is a normal note")
       if (_fr.isFancy) {
         const _ti = FANCY_RARITY[_fr.tier];
         const _pNames = _fr.patterns.map(function(p){ return p.name; }).join(' \u2022 ');
-        const _safeSerial = String(_serialRaw).replace(/'/g, "\\'");
         fancyBanner = '<div onclick="showFancySerialChecker(\''+_safeSerial+'\')" '
           + 'style="margin:0 0 14px 0;padding:10px 14px;background:'+_ti.color+'18;border:1px solid '+_ti.color+'60;border-left:3px solid '+_ti.color+';border-radius:6px;cursor:pointer;transition:background .15s ease" '
           + 'onmouseover="this.style.background=\''+_ti.color+'25\'" '
@@ -4797,6 +4808,51 @@ function showDetail(item){
           +   '<div style="font-size:11px;color:var(--muted);margin-top:3px">'+e(_pNames)+'</div>'
           + '</div>';
       }
+
+      // Section — ALWAYS rendered for paper-currency records with a serial,
+      // including "standard serial — no patterns" status. Open by default
+      // when patterns are found; collapsed by default when not (so the
+      // panel reads cleanly for ordinary notes). Reuses _renderFancyResult
+      // in full mode for consistency with the standalone checker modal.
+      const _sectionOpen = _fr.isFancy ? ' open' : '';
+      const _sectionCount = _fr.isFancy
+        ? _fr.patterns.length + ' pattern' + (_fr.patterns.length === 1 ? '' : 's')
+        : 'standard';
+      const _tierColor = _fr.isFancy ? FANCY_RARITY[_fr.tier].color : 'var(--muted)';
+
+      // Header strip showing serial + rarity badge — sits just above the
+      // pattern detail block so the user sees "what's being analyzed" first.
+      const _sectionHeader = '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;background:var(--bg3);border-bottom:1px solid var(--border)">'
+        + '<div>'
+        +   '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim)">Serial Number</div>'
+        +   '<div style="font-family:var(--font-mono,monospace);font-size:15px;color:var(--text);margin-top:2px;letter-spacing:.04em">'+e(_serialRaw)+'</div>'
+        + '</div>'
+        + (_fr.isFancy
+            ? '<div style="font-size:10px;background:'+_tierColor+'18;color:'+_tierColor+';border:1px solid '+_tierColor+'40;padding:3px 9px;border-radius:3px;white-space:nowrap;font-weight:600">\u2728 '+e(FANCY_RARITY[_fr.tier].label)+'</div>'
+            : '<div style="font-size:10px;color:var(--dim);font-style:italic">Standard serial</div>')
+        + '</div>';
+
+      // Body: the existing _renderFancyResult helper produces the per-pattern
+      // breakdown with tier colors, descriptions, and premium ranges.
+      const _sectionBody = _renderFancyResult(_fr, 'full');
+
+      // Footer: link to open the standalone checker modal pre-filled with
+      // this serial — gives the user a focused view if they want to share
+      // a screenshot or play with variations.
+      const _sectionFooter = '<div style="padding:8px 12px;border-top:1px solid var(--border);background:var(--bg3);text-align:right">'
+        + '<button onclick="showFancySerialChecker(\''+_safeSerial+'\')" style="font-size:11px;background:transparent;border:1px solid var(--border);color:var(--muted);padding:4px 10px;border-radius:3px;cursor:pointer">Open in Checker \u2192</button>'
+        + '</div>';
+
+      fancySection = '<details class="dp-group"'+_sectionOpen+'>'
+        + '<summary>\u2728 Fancy Serial Analysis'
+        +   '<span class="dp-group-count" style="color:'+_tierColor+'">'+_sectionCount+'</span>'
+        + '</summary>'
+        + '<div class="dp-group-body" style="padding:0">'
+        +   _sectionHeader
+        +   _sectionBody
+        +   _sectionFooter
+        + '</div>'
+        + '</details>';
     }
   }
 
@@ -4850,6 +4906,7 @@ function showDetail(item){
       return `<div class="dp-row"><span class="dp-label">Last Modified</span><span class="dp-value" style="color:var(--dim);font-size:11px" title="${e(full)}">${e(mod)}</span></div>`;
     })()}
     ${rows}
+    ${fancySection}
     ${imagesHtml}
   `;
   // Action buttons (Edit / Delete)
