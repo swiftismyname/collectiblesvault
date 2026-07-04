@@ -298,6 +298,308 @@ tbody tr.sel td{background:rgba(201,168,76,.06)}
    inventory tells you which currency notes are the rare ones. */
 .row-fancy-marker{display:inline-block;margin-left:4px;vertical-align:middle;font-size:10px;line-height:1}
 
+/* ══════════════════════════════════════════════════════════════════════
+   COMMAND CENTER LAYOUT (v102)
+   Grid-based widget dashboard inspired by pro analytics dashboards.
+   Activated by setLayoutMode('command') → body.layout-command class.
+   Uses CSS variables so it adapts to the active theme (dark/light).
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* Palette — 8 accent colors used for chart series. Fallback to hex if
+   theme doesn't define them; themes can override for e.g. muted palettes. */
+:root {
+  --cmd-c1: #06b6d4;  /* cyan */
+  --cmd-c2: #a855f7;  /* purple */
+  --cmd-c3: #14b8a6;  /* teal */
+  --cmd-c4: #f59e0b;  /* amber */
+  --cmd-c5: #ec4899;  /* pink */
+  --cmd-c6: #22c55e;  /* green */
+  --cmd-c7: #3b82f6;  /* blue */
+  --cmd-c8: #ef4444;  /* red */
+}
+
+.cmd-dash {
+  padding: 22px 24px 40px;
+  max-width: 1600px;
+  margin: 0 auto;
+  font-family: var(--font-body, 'Karla', system-ui, sans-serif);
+}
+.cmd-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  margin-bottom: 24px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--border);
+}
+.cmd-eyebrow {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .18em;
+  color: var(--cmd-c1);
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+.cmd-title {
+  font-family: var(--font-display, 'Cormorant Garamond', serif);
+  font-size: 32px;
+  color: var(--text);
+  line-height: 1;
+  letter-spacing: .01em;
+}
+.cmd-header-meta {
+  font-size: 11px;
+  color: var(--dim);
+  font-family: var(--font-mono, 'DM Mono', monospace);
+  letter-spacing: .04em;
+}
+
+/* KPI row — 4 cards across on wide, wraps on narrow */
+.cmd-kpi-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+  margin-bottom: 18px;
+}
+@media (max-width: 900px) { .cmd-kpi-row { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 480px) { .cmd-kpi-row { grid-template-columns: 1fr; } }
+
+.cmd-card {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px 20px;
+  transition: transform .15s ease, box-shadow .15s ease;
+}
+.cmd-card:hover { box-shadow: 0 8px 24px rgba(0,0,0,.15); }
+.cmd-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 14px;
+}
+.cmd-card-title {
+  font-size: 12px;
+  color: var(--text);
+  text-transform: uppercase;
+  letter-spacing: .1em;
+  font-weight: 600;
+}
+.cmd-card-sub {
+  font-size: 11px;
+  color: var(--dim);
+  font-family: var(--font-mono, monospace);
+}
+
+/* KPI cards — big number treatment */
+.cmd-kpi { position: relative; overflow: hidden; }
+.cmd-kpi::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, var(--cmd-c1), var(--cmd-c2));
+  opacity: .8;
+}
+.cmd-kpi-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .12em;
+  color: var(--dim);
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+.cmd-kpi-value {
+  font-family: var(--font-display, 'Cormorant Garamond', serif);
+  font-size: 32px;
+  line-height: 1;
+  letter-spacing: .02em;
+  margin-bottom: 6px;
+}
+.cmd-kpi-sub {
+  font-size: 11px;
+  color: var(--muted);
+  font-family: var(--font-mono, monospace);
+}
+
+/* Hero row — 2/3 chart + 1/3 donut */
+.cmd-hero-row {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 14px;
+  margin-bottom: 18px;
+}
+@media (max-width: 900px) { .cmd-hero-row { grid-template-columns: 1fr; } }
+.cmd-hero-chart { display: flex; flex-direction: column; min-height: 240px; }
+.cmd-hero-chart .cmd-spark { flex: 1; min-height: 140px; }
+
+/* Widget rows — 3 columns */
+.cmd-widget-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+  margin-bottom: 18px;
+}
+.cmd-widget-row-2 { grid-template-columns: repeat(2, 1fr); }
+@media (max-width: 1100px) { .cmd-widget-row { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 700px)  { .cmd-widget-row, .cmd-widget-row-2 { grid-template-columns: 1fr; } }
+
+/* Donut */
+.cmd-donut-wrap { display: flex; flex-direction: column; align-items: center; }
+.cmd-donut { width: 180px; height: 180px; margin-bottom: 12px; }
+.cmd-donut-lbl {
+  font-size: 9px;
+  fill: var(--dim);
+  text-transform: uppercase;
+  letter-spacing: .12em;
+  font-family: var(--font-body, 'Karla', sans-serif);
+}
+.cmd-donut-val {
+  font-size: 18px;
+  fill: var(--text);
+  font-family: var(--font-display, 'Cormorant Garamond', serif);
+  font-weight: 600;
+}
+.cmd-legend {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 12px;
+  font-size: 11px;
+}
+.cmd-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 0;
+}
+.cmd-legend-dot {
+  width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0;
+}
+.cmd-legend-lbl {
+  color: var(--muted);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cmd-legend-pct {
+  color: var(--dim);
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+}
+
+/* Horizontal bar chart */
+.cmd-hbar { display: flex; flex-direction: column; gap: 10px; }
+.cmd-hbar-row {
+  display: grid;
+  grid-template-columns: 90px 1fr 80px;
+  gap: 10px;
+  align-items: center;
+  font-size: 11px;
+}
+.cmd-hbar-lbl {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cmd-hbar-track {
+  height: 8px;
+  background: var(--bg3);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.cmd-hbar-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width .4s ease-out;
+}
+.cmd-hbar-val {
+  color: var(--text);
+  font-family: var(--font-mono, monospace);
+  text-align: right;
+  font-size: 11px;
+}
+
+/* Vertical bar chart */
+.cmd-vbar-val {
+  font-size: 9px;
+  fill: var(--text);
+  font-family: var(--font-mono, monospace);
+}
+.cmd-vbar-lbl {
+  font-size: 9px;
+  fill: var(--dim);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+
+/* Radar */
+.cmd-radar { width: 220px; height: 220px; display: block; margin: 0 auto; }
+.cmd-radar-lbl {
+  font-size: 9px;
+  fill: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .06em;
+}
+
+/* Sparkline */
+.cmd-spark { width: 100%; display: block; }
+.cmd-spark-empty { padding: 40px; text-align: center; color: var(--dim); font-size: 12px; }
+
+/* Lists (top holdings, recent activity) */
+.cmd-list { display: flex; flex-direction: column; gap: 4px; }
+.cmd-list-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background .12s ease;
+}
+.cmd-list-item:hover { background: var(--bg3); }
+.cmd-list-main { flex: 1; overflow: hidden; }
+.cmd-list-title {
+  font-size: 12px;
+  color: var(--text);
+  margin-bottom: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cmd-list-sub {
+  font-size: 10px;
+  color: var(--dim);
+}
+.cmd-list-val {
+  font-family: var(--font-mono, monospace);
+  color: var(--cmd-c1);
+  font-size: 12px;
+  font-weight: 600;
+  padding-left: 10px;
+}
+.cmd-empty { padding: 24px; text-align: center; color: var(--dim); font-size: 12px; font-style: italic; }
+
+/* Layout mode indicator on the body — sidebar swap button styling */
+.cmd-swap-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 10px;
+  cursor: pointer;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  font-family: var(--font-body, 'Karla', sans-serif);
+  transition: all .15s ease;
+}
+.cmd-swap-btn:hover { border-color: var(--cmd-c1); color: var(--cmd-c1); }
+body.layout-command .cmd-swap-btn { background: var(--cmd-c1); color: var(--bg); border-color: var(--cmd-c1); }
+
+
 /* v101: detail-panel action buttons (Edit, Add Images, lookup buttons like
    PCGS / NGC / ICG / eBay) must reflow gracefully as the panel narrows.
    The inline style on .detail-actions already sets flex-wrap:wrap, so the
@@ -1393,7 +1695,7 @@ body.theme-modern-dark select option{
 // Bump this on every deploy so the user can see at a glance which build is
 // running in their browser. Surfaced in three places: the sidebar footer
 // (desktop), the mobile header badge, and the Settings → About section.
-const APP_VERSION = 'v101';
+const APP_VERSION = 'v102';
 const APP_BUILD_DATE = '2026-06-15';
 
 // ── EARLY-HOISTED MODULE STATE ──────────────────────────────────────────────
@@ -1845,7 +2147,7 @@ function _colPickerReset(tableId) {
   if (modal) modal.remove();
   // Re-render the affected view
   if (tableId === 'inv' && typeof renderInv === 'function' && ST && ST.view === 'inv') renderInv();
-  else if (tableId === 'recent' && typeof renderDash === 'function' && ST && ST.view === 'dash') renderDash();
+  else if (tableId === 'recent' && typeof renderDashRouted === 'function' && ST && ST.view === 'dash') renderDashRouted();
 }
 // #endregion [COLUMNS]
 
@@ -2843,7 +3145,7 @@ async function loadSpotPrices() {
     refreshSidebarTotal();
     // Re-render whichever view is active so live melt values update everywhere
     if (typeof ST !== 'undefined') {
-      if (ST.view === 'dash')        renderDash();
+      if (ST.view === 'dash')        renderDashRouted();
       else if (ST.view === 'inv')    renderInv();
       else if (ST.view === 'dups')   renderDups();
       else if (ST.view === 'health') renderDataHealth();
@@ -2863,7 +3165,7 @@ function setCopperPrice(v) {
   if (!isNaN(n) && n > 0) {
     localStorage.setItem('cv_copper_price', n);
     if (SPOTS) SPOTS.copper = n;
-    if (typeof ST !== 'undefined' && ST.view === 'dash') renderDash();
+    if (typeof ST !== 'undefined' && ST.view === 'dash') renderDashRouted();
     if (typeof ST !== 'undefined' && ST.view === 'settings') renderSettings();
   }
 }
@@ -3612,7 +3914,7 @@ function nav(v){
   if (typeof window !== 'undefined' && window.scrollTo) {
     try { window.scrollTo({top:0, behavior:'instant'}); } catch(e) { window.scrollTo(0,0); }
   }
-  if(v==='dash')    renderDash();
+  if(v==='dash')    renderDashRouted();
   else if(v==='inv') renderInv();
   else if(v==='labels') {
     // Cross-device sync fix (v73): the label queue used to load only on the
@@ -3873,6 +4175,400 @@ function refreshSidebarTotal() {
     info.textContent = t.totCount.toLocaleString() + ' records \u00b7 ' + activeCats + ' categories';
   }
 }
+
+// #region [LAYOUT_MODE]
+// ═══════════════════════════════════════════════════════════════════════
+// LAYOUT MODE SYSTEM (v102) — swap between "Classic" and "Command Center"
+// ═══════════════════════════════════════════════════════════════════════
+// The existing theme system recolors the SAME structural layout. Layout
+// modes go further: they swap the actual STRUCTURE of the dashboard
+// (widget grid vs. classic totals + charts), typography scale, and chart
+// styles. Both modes still respect the active theme's CSS variables so
+// dark/light themes continue to work in either layout.
+//
+// State: localStorage['cv_layout_mode'] = 'classic' (default) | 'command'
+// UI:    toggle in Settings + quick swap button in the sidebar footer.
+// ═══════════════════════════════════════════════════════════════════════
+const LAYOUT_MODES = ['classic', 'command'];
+const LAYOUT_MODE_LABELS = {
+  classic: 'Classic',
+  command: 'Command Center'
+};
+
+function getLayoutMode() {
+  const m = localStorage.getItem('cv_layout_mode');
+  return LAYOUT_MODES.indexOf(m) >= 0 ? m : 'classic';
+}
+
+function setLayoutMode(mode) {
+  if (LAYOUT_MODES.indexOf(mode) < 0) return;
+  localStorage.setItem('cv_layout_mode', mode);
+  document.body.classList.toggle('layout-command', mode === 'command');
+  document.body.classList.toggle('layout-classic', mode === 'classic');
+  // Re-render whatever view we're on so the new layout kicks in immediately
+  if (typeof ST !== 'undefined' && ST.view === 'dash') {
+    if (typeof renderDashRouted === 'function') renderDashRouted();
+  }
+  if (typeof cvToast === 'function') cvToast('Layout: ' + LAYOUT_MODE_LABELS[mode], 'ok');
+}
+
+// Router — called instead of renderDash() directly. Picks the right renderer
+// for the current layout mode. Classic falls through to the untouched
+// renderDash(); Command routes to renderDashCommand().
+function renderDashRouted() {
+  const mode = getLayoutMode();
+  if (mode === 'command' && typeof renderDashCommand === 'function') {
+    renderDashCommand();
+  } else {
+    renderDash();
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// SVG CHART HELPERS — inline, theme-var-aware, no external deps
+// ═══════════════════════════════════════════════════════════════════════
+// All helpers return a string of raw SVG. Colors reference CSS vars so
+// they follow the active theme. Widget backgrounds are transparent so the
+// containing card provides the background context.
+
+const _CMD_COLORS = [
+  'var(--cmd-c1, #06b6d4)',
+  'var(--cmd-c2, #a855f7)',
+  'var(--cmd-c3, #14b8a6)',
+  'var(--cmd-c4, #f59e0b)',
+  'var(--cmd-c5, #ec4899)',
+  'var(--cmd-c6, #22c55e)',
+  'var(--cmd-c7, #3b82f6)',
+  'var(--cmd-c8, #ef4444)'
+];
+
+// KPI card — large number, small label, optional trend
+function _cmdKpiCard(label, value, sub, accent) {
+  const c = accent || 'var(--cmd-c1)';
+  return '<div class="cmd-card cmd-kpi">'
+    + '<div class="cmd-kpi-label">' + e(label) + '</div>'
+    + '<div class="cmd-kpi-value" style="color:' + c + '">' + value + '</div>'
+    + (sub ? '<div class="cmd-kpi-sub">' + sub + '</div>' : '')
+    + '</div>';
+}
+
+// Donut / ring chart — slices with a hollow center for a total. `data` is
+// an array of {label, value, color}. Renders labels in a legend below.
+function _cmdDonut(data, centerLabel, centerValue) {
+  const total = data.reduce(function(s, d){ return s + Math.max(0, d.value); }, 0) || 1;
+  const cx = 100, cy = 100, r = 78, rInner = 55;
+  let angle = -Math.PI / 2; // start at 12 o'clock
+  const paths = data.map(function(d, i){
+    const value = Math.max(0, d.value);
+    const slice = (value / total) * Math.PI * 2;
+    const a1 = angle, a2 = angle + slice;
+    angle = a2;
+    if (slice <= 0.0001) return '';
+    const x1 = cx + r * Math.cos(a1), y1 = cy + r * Math.sin(a1);
+    const x2 = cx + r * Math.cos(a2), y2 = cy + r * Math.sin(a2);
+    const xi1 = cx + rInner * Math.cos(a1), yi1 = cy + rInner * Math.sin(a1);
+    const xi2 = cx + rInner * Math.cos(a2), yi2 = cy + rInner * Math.sin(a2);
+    const large = slice > Math.PI ? 1 : 0;
+    const color = d.color || _CMD_COLORS[i % _CMD_COLORS.length];
+    return '<path d="M ' + x1 + ' ' + y1
+      + ' A ' + r + ' ' + r + ' 0 ' + large + ' 1 ' + x2 + ' ' + y2
+      + ' L ' + xi2 + ' ' + yi2
+      + ' A ' + rInner + ' ' + rInner + ' 0 ' + large + ' 0 ' + xi1 + ' ' + yi1
+      + ' Z" fill="' + color + '"/>';
+  }).join('');
+
+  const legend = data.map(function(d, i){
+    const pct = ((Math.max(0, d.value) / total) * 100).toFixed(1);
+    const color = d.color || _CMD_COLORS[i % _CMD_COLORS.length];
+    return '<div class="cmd-legend-item">'
+      + '<span class="cmd-legend-dot" style="background:' + color + '"></span>'
+      + '<span class="cmd-legend-lbl">' + e(d.label) + '</span>'
+      + '<span class="cmd-legend-pct">' + pct + '%</span>'
+      + '</div>';
+  }).join('');
+
+  return '<div class="cmd-donut-wrap">'
+    + '<svg viewBox="0 0 200 200" class="cmd-donut">' + paths
+    + '<text x="100" y="94" text-anchor="middle" class="cmd-donut-lbl">' + e(centerLabel || '') + '</text>'
+    + '<text x="100" y="118" text-anchor="middle" class="cmd-donut-val">' + e(centerValue || '') + '</text>'
+    + '</svg>'
+    + '<div class="cmd-legend">' + legend + '</div>'
+    + '</div>';
+}
+
+// Horizontal bar chart — comparison of categories with $ values on the right
+function _cmdHBar(data, maxLabel) {
+  const max = data.reduce(function(m, d){ return Math.max(m, d.value); }, 0) || 1;
+  const bars = data.map(function(d, i){
+    const pct = (d.value / max) * 100;
+    const color = d.color || _CMD_COLORS[i % _CMD_COLORS.length];
+    return '<div class="cmd-hbar-row">'
+      + '<div class="cmd-hbar-lbl">' + e(d.label) + '</div>'
+      + '<div class="cmd-hbar-track"><div class="cmd-hbar-fill" style="width:' + pct.toFixed(2) + '%;background:' + color + '"></div></div>'
+      + '<div class="cmd-hbar-val">' + (d.display || d.value) + '</div>'
+      + '</div>';
+  }).join('');
+  return '<div class="cmd-hbar">' + bars + '</div>';
+}
+
+// Vertical bar chart — used for record-count by category
+function _cmdVBar(data, height) {
+  height = height || 140;
+  const max = data.reduce(function(m, d){ return Math.max(m, d.value); }, 0) || 1;
+  const w = 100 / data.length;
+  const bars = data.map(function(d, i){
+    const h = (d.value / max) * (height - 30);
+    const y = height - h - 22;
+    const x = i * w + w * 0.15;
+    const bw = w * 0.7;
+    const color = d.color || _CMD_COLORS[i % _CMD_COLORS.length];
+    return '<g>'
+      + '<rect x="' + x + '%" y="' + y + '" width="' + bw + '%" height="' + h + '" fill="' + color + '" rx="2"/>'
+      + '<text x="' + (x + bw / 2) + '%" y="' + (y - 4) + '" text-anchor="middle" class="cmd-vbar-val">' + e(d.display || String(d.value)) + '</text>'
+      + '<text x="' + (x + bw / 2) + '%" y="' + (height - 6) + '" text-anchor="middle" class="cmd-vbar-lbl">' + e(d.label) + '</text>'
+      + '</g>';
+  }).join('');
+  return '<svg viewBox="0 0 100% ' + height + '" preserveAspectRatio="none" class="cmd-vbar" style="width:100%;height:' + height + 'px">' + bars + '</svg>';
+}
+
+// Area sparkline — smooth-ish line with a gradient fill underneath
+function _cmdSpark(points, color) {
+  if (!points || points.length < 2) return '<div class="cmd-spark-empty">no data</div>';
+  color = color || 'var(--cmd-c1)';
+  const w = 300, h = 80;
+  const min = Math.min.apply(null, points);
+  const max = Math.max.apply(null, points);
+  const range = (max - min) || 1;
+  const stepX = w / (points.length - 1);
+  let d = 'M 0 ' + (h - ((points[0] - min) / range) * (h - 8) - 4);
+  for (let i = 1; i < points.length; i++) {
+    const x = i * stepX;
+    const y = h - ((points[i] - min) / range) * (h - 8) - 4;
+    d += ' L ' + x + ' ' + y;
+  }
+  const fillD = d + ' L ' + w + ' ' + h + ' L 0 ' + h + ' Z';
+  const gradId = 'cmd-spark-grad-' + Math.random().toString(36).slice(2, 8);
+  return '<svg viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none" class="cmd-spark">'
+    + '<defs><linearGradient id="' + gradId + '" x1="0" x2="0" y1="0" y2="1">'
+    + '<stop offset="0%" stop-color="' + color + '" stop-opacity=".45"/>'
+    + '<stop offset="100%" stop-color="' + color + '" stop-opacity="0"/>'
+    + '</linearGradient></defs>'
+    + '<path d="' + fillD + '" fill="url(#' + gradId + ')"/>'
+    + '<path d="' + d + '" fill="none" stroke="' + color + '" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>'
+    + '</svg>';
+}
+
+// Radar / spider chart — 5–8 axes for category coverage
+function _cmdRadar(data) {
+  const cx = 110, cy = 110, r = 82;
+  const n = data.length;
+  const max = data.reduce(function(m, d){ return Math.max(m, d.value); }, 0) || 1;
+  const angleStep = (Math.PI * 2) / n;
+  const angleOff = -Math.PI / 2;
+
+  // Grid rings
+  let rings = '';
+  [0.25, 0.5, 0.75, 1].forEach(function(f){
+    const pts = [];
+    for (let i = 0; i < n; i++) {
+      const a = angleOff + i * angleStep;
+      pts.push((cx + r * f * Math.cos(a)).toFixed(1) + ',' + (cy + r * f * Math.sin(a)).toFixed(1));
+    }
+    rings += '<polygon points="' + pts.join(' ') + '" fill="none" stroke="var(--border)" stroke-opacity=".35"/>';
+  });
+
+  // Axis lines + labels
+  let axes = '';
+  data.forEach(function(d, i){
+    const a = angleOff + i * angleStep;
+    const x2 = cx + r * Math.cos(a);
+    const y2 = cy + r * Math.sin(a);
+    const lx = cx + (r + 14) * Math.cos(a);
+    const ly = cy + (r + 14) * Math.sin(a);
+    axes += '<line x1="' + cx + '" y1="' + cy + '" x2="' + x2 + '" y2="' + y2 + '" stroke="var(--border)" stroke-opacity=".35"/>';
+    axes += '<text x="' + lx + '" y="' + ly + '" text-anchor="middle" dominant-baseline="middle" class="cmd-radar-lbl">' + e(d.label) + '</text>';
+  });
+
+  // Data polygon
+  const dataPts = data.map(function(d, i){
+    const a = angleOff + i * angleStep;
+    const f = d.value / max;
+    return (cx + r * f * Math.cos(a)).toFixed(1) + ',' + (cy + r * f * Math.sin(a)).toFixed(1);
+  });
+
+  return '<svg viewBox="0 0 220 220" class="cmd-radar">'
+    + rings + axes
+    + '<polygon points="' + dataPts.join(' ') + '" fill="var(--cmd-c1)" fill-opacity=".2" stroke="var(--cmd-c1)" stroke-width="2"/>'
+    + dataPts.map(function(pt){ const p = pt.split(','); return '<circle cx="' + p[0] + '" cy="' + p[1] + '" r="3" fill="var(--cmd-c1)"/>'; }).join('')
+    + '</svg>';
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// COMMAND CENTER DASHBOARD RENDERER
+// ═══════════════════════════════════════════════════════════════════════
+// Grid of widgets across the top; hero chart in the middle; secondary
+// widgets below. Adapts to viewport width via CSS grid auto-flow.
+function renderDashCommand() {
+  const T = computeTotals();
+  const totVal   = T.totVal, totCost = T.totCost, totCount = T.totCount;
+  const gain     = totVal - totCost;
+  const gainPct  = totCost > 0 ? ((gain / totCost) * 100) : 0;
+  refreshSidebarTotal();
+
+  // Category value breakdown for the donut & legend
+  const categoryData = [];
+  SHEETS.forEach(function(s){
+    if (s.key === 'other') return;
+    const items = ALL_ITEMS.filter(function(i){ return i.sheet === s.key; });
+    const v = items.reduce(function(sum, it){ return sum + (n(it.value) || 0); }, 0);
+    if (v > 0) categoryData.push({ label: s.label, value: v, key: s.key });
+  });
+  categoryData.sort(function(a, b){ return b.value - a.value; });
+  const topCategories = categoryData.slice(0, 8);
+
+  // Precious metals composition (from silver/gold/platinum/etc totals)
+  const metalsData = [];
+  if (T.silverMelt > 0) metalsData.push({ label: 'Silver',    value: T.silverMelt, color: '#c0c0c8' });
+  if (T.goldMelt   > 0) metalsData.push({ label: 'Gold',      value: T.goldMelt,   color: '#e6b34a' });
+  if (T.platMelt   > 0) metalsData.push({ label: 'Platinum',  value: T.platMelt,   color: '#a3a8b8' });
+  if (T.pallMelt   > 0) metalsData.push({ label: 'Palladium', value: T.pallMelt,   color: '#b8a0d4' });
+  if (T.copperMelt > 0) metalsData.push({ label: 'Copper',    value: T.copperMelt, color: '#c47846' });
+
+  // Record count by category (top 6) — for the vertical bar chart
+  const countByCategory = SHEETS.map(function(s){
+    const c = ALL_ITEMS.filter(function(i){ return i.sheet === s.key; }).length;
+    return { label: (s.short || s.label.slice(0, 6)), value: c, key: s.key };
+  }).filter(function(d){ return d.value > 0; })
+    .sort(function(a, b){ return b.value - a.value; })
+    .slice(0, 8);
+
+  // Recent activity — 6 most recently modified records
+  const recent = ALL_ITEMS
+    .filter(function(i){ return i.raw && i.raw._modifiedAt; })
+    .sort(function(a, b){ return String(b.raw._modifiedAt).localeCompare(String(a.raw._modifiedAt)); })
+    .slice(0, 6);
+
+  // Top holdings by value
+  const topHoldings = ALL_ITEMS.slice()
+    .sort(function(a, b){ return (n(b.value) || 0) - (n(a.value) || 0); })
+    .slice(0, 6);
+
+  // Value-history sparkline: coarse cumulative view from records with a
+  // _createdAt. If not enough data, synthesize a flat line so the widget
+  // still renders without empty space.
+  const historyPoints = (function(){
+    const dated = ALL_ITEMS.filter(function(i){ return i.raw && i.raw._createdAt && n(i.value) > 0; });
+    if (dated.length < 3) return [totVal * 0.8, totVal * 0.85, totVal * 0.9, totVal * 0.95, totVal];
+    dated.sort(function(a, b){ return String(a.raw._createdAt).localeCompare(String(b.raw._createdAt)); });
+    const buckets = 24;
+    const step = Math.max(1, Math.ceil(dated.length / buckets));
+    const pts = [];
+    let running = 0;
+    for (let i = 0; i < dated.length; i++) {
+      running += n(dated[i].value) || 0;
+      if (i % step === 0 || i === dated.length - 1) pts.push(running);
+    }
+    return pts;
+  })();
+
+  // Radar — category coverage (record count normalized)
+  const radarData = countByCategory.slice(0, 6).map(function(d){ return { label: d.label, value: d.value }; });
+
+  const goldOz = T.goldOzPure, silverOz = T.silverOz;
+
+  const $ = document.getElementById('content');
+  $.innerHTML =
+      '<div class="cmd-dash">'
+    +   '<div class="cmd-header">'
+    +     '<div>'
+    +       '<div class="cmd-eyebrow">Portfolio Command Center</div>'
+    +       '<div class="cmd-title">Collection Overview</div>'
+    +     '</div>'
+    +     '<div class="cmd-header-meta">Last updated ' + e(new Date().toLocaleString()) + '</div>'
+    +   '</div>'
+
+    // KPI ROW — 4 cards
+    +   '<div class="cmd-kpi-row">'
+    +     _cmdKpiCard('Portfolio Value', fmt$(totVal), (gain >= 0 ? '\u25b2 ' : '\u25bc ') + '$' + Math.abs(gain).toLocaleString(undefined, {maximumFractionDigits:0}) + ' (' + (gain >= 0 ? '+' : '') + gainPct.toFixed(1) + '%)', 'var(--cmd-c1)')
+    +     _cmdKpiCard('Total Records', totCount.toLocaleString(), 'across ' + SHEETS.length + ' categories', 'var(--cmd-c3)')
+    +     _cmdKpiCard('Precious Metals', fmt$(T.totMelt), silverOz.toFixed(1) + ' oz Ag \u00b7 ' + goldOz.toFixed(2) + ' oz Au', 'var(--cmd-c4)')
+    +     _cmdKpiCard('Cost Basis', fmt$(totCost), 'unrealized ' + (gain >= 0 ? 'gain' : 'loss'), 'var(--cmd-c2)')
+    +   '</div>'
+
+    // HERO ROW — value history + category donut
+    +   '<div class="cmd-hero-row">'
+    +     '<div class="cmd-card cmd-hero-chart">'
+    +       '<div class="cmd-card-head">'
+    +         '<div class="cmd-card-title">Portfolio Value \u2014 Accumulation</div>'
+    +         '<div class="cmd-card-sub">' + fmt$(totVal) + '</div>'
+    +       '</div>'
+    +       _cmdSpark(historyPoints, 'var(--cmd-c1)')
+    +     '</div>'
+    +     '<div class="cmd-card cmd-donut-card">'
+    +       '<div class="cmd-card-head">'
+    +         '<div class="cmd-card-title">By Category</div>'
+    +       '</div>'
+    +       _cmdDonut(topCategories, 'TOTAL', fmt$(totVal))
+    +     '</div>'
+    +   '</div>'
+
+    // SECONDARY ROW — record counts + metals + radar
+    +   '<div class="cmd-widget-row">'
+    +     '<div class="cmd-card">'
+    +       '<div class="cmd-card-head"><div class="cmd-card-title">Records by Category</div></div>'
+    +       _cmdVBar(countByCategory, 160)
+    +     '</div>'
+    +     '<div class="cmd-card">'
+    +       '<div class="cmd-card-head"><div class="cmd-card-title">Precious Metals</div><div class="cmd-card-sub">' + fmt$(T.totMelt) + ' melt</div></div>'
+    +       (metalsData.length > 0
+              ? _cmdHBar(metalsData.map(function(m){ return { label: m.label, value: m.value, display: fmt$(m.value), color: m.color }; }))
+              : '<div class="cmd-empty">No precious metals in collection</div>')
+    +     '</div>'
+    +     '<div class="cmd-card">'
+    +       '<div class="cmd-card-head"><div class="cmd-card-title">Category Coverage</div></div>'
+    +       (radarData.length >= 3 ? _cmdRadar(radarData) : '<div class="cmd-empty">Need 3+ categories for radar</div>')
+    +     '</div>'
+    +   '</div>'
+
+    // TERTIARY ROW — top holdings + recent activity
+    +   '<div class="cmd-widget-row cmd-widget-row-2">'
+    +     '<div class="cmd-card">'
+    +       '<div class="cmd-card-head"><div class="cmd-card-title">Top Holdings</div><div class="cmd-card-sub">by value</div></div>'
+    +       '<div class="cmd-list">'
+    +       topHoldings.map(function(item){
+              const idx = ALL_ITEMS.indexOf(item);
+              const desc = item.desc || item.raw.description || item.sheet;
+              return '<div class="cmd-list-item" onclick="showDetail(ALL_ITEMS[' + idx + '])">'
+                + '<div class="cmd-list-main">'
+                +   '<div class="cmd-list-title">' + e(String(desc).slice(0, 42)) + '</div>'
+                +   '<div class="cmd-list-sub">' + e(SHEET_MAP[item.sheet] ? SHEET_MAP[item.sheet].label : item.sheet) + ' \u00b7 #' + e(item.id) + '</div>'
+                + '</div>'
+                + '<div class="cmd-list-val">' + fmt$(n(item.value) || 0) + '</div>'
+                + '</div>';
+            }).join('')
+    +       '</div>'
+    +     '</div>'
+    +     '<div class="cmd-card">'
+    +       '<div class="cmd-card-head"><div class="cmd-card-title">Recent Activity</div><div class="cmd-card-sub">latest edits</div></div>'
+    +       '<div class="cmd-list">'
+    +       (recent.length > 0 ? recent.map(function(item){
+              const idx = ALL_ITEMS.indexOf(item);
+              const desc = item.desc || item.raw.description || item.sheet;
+              const when = _fmtModified(item.raw) || '';
+              return '<div class="cmd-list-item" onclick="showDetail(ALL_ITEMS[' + idx + '])">'
+                + '<div class="cmd-list-main">'
+                +   '<div class="cmd-list-title">' + e(String(desc).slice(0, 42)) + '</div>'
+                +   '<div class="cmd-list-sub">' + e(when) + '</div>'
+                + '</div>'
+                + '<div class="cmd-list-val">' + fmt$(n(item.value) || 0) + '</div>'
+                + '</div>';
+            }).join('') : '<div class="cmd-empty">No recent activity</div>')
+    +       '</div>'
+    +     '</div>'
+    +   '</div>'
+    + '</div>';
+}
+// #endregion [LAYOUT_MODE]
 
 function renderDash(){
   const P = PRECOMPUTED;
@@ -10510,7 +11206,25 @@ function renderSettings(){
         return '<option value="'+m+'"'+(m===savedModel?' selected':'')+'>'+m+rec+'</option>';
       }).join('');
 
-      return '<div class="stt">AI Vision</div>'
+      return '<div class="stt">Layout</div>'
+        +'<div style="background:var(--bg3);border:1px solid var(--border);border-radius:7px;padding:18px;margin-bottom:24px">'
+        +'<div style="font-size:13px;color:var(--text);line-height:1.6;margin-bottom:14px">'
+        +'Swap between two structurally different dashboard layouts. <strong style="color:var(--gold)">Classic</strong> is the original stat-and-chart view; <strong style="color:var(--gold)">Command Center</strong> is a widget-grid dashboard with KPI cards, donut chart, radar, sparklines, and recent-activity feed. Both layouts respect the active theme colors.'
+        +'</div>'
+        +(function(){
+          const cur = getLayoutMode();
+          const opts = LAYOUT_MODES.map(function(m){
+            const active = (m === cur);
+            return '<button onclick="setLayoutMode(\''+m+'\')" style="flex:1;padding:14px 12px;background:'+(active?'var(--gold)':'var(--bg4)')+';color:'+(active?'var(--bg)':'var(--text)')+';border:1px solid '+(active?'var(--gold)':'var(--border)')+';border-radius:6px;cursor:pointer;font-family:var(--font-body,sans-serif);font-size:12px;font-weight:'+(active?'600':'400')+';letter-spacing:.04em;transition:all .15s ease">'
+              + '<div style="font-size:14px;margin-bottom:4px">'+e(LAYOUT_MODE_LABELS[m])+'</div>'
+              + '<div style="font-size:10px;opacity:.75">'+(m==='classic'?'Original stat + chart view':'Widget grid dashboard')+'</div>'
+              + '</button>';
+          }).join('');
+          return '<div style="display:flex;gap:10px">'+opts+'</div>';
+        })()
+        +'</div>'
+
+        +'<div class="stt">AI Vision</div>'
         +'<div style="background:var(--bg3);border:1px solid var(--border);border-radius:7px;padding:18px;margin-bottom:24px">'
         +'<div style="font-size:13px;color:var(--text);line-height:1.6;margin-bottom:14px">'
         +'Identify coins and paper currency by photographing them — the AI analyzes both sides and pre-fills the Add form with grade, denomination, country, composition, and estimated value.'
@@ -10777,6 +11491,14 @@ function renderSettings(){
 
 // #region [BOOT]
 setTheme(localStorage.getItem('cv_theme') || 'dark');
+// v102: apply saved layout mode as a body class so the Command Center CSS
+// activates on page load without waiting for a user interaction. Uses the
+// same getLayoutMode() helper the router uses.
+(function(){
+  const _lm = (typeof getLayoutMode === 'function') ? getLayoutMode() : 'classic';
+  document.body.classList.toggle('layout-command', _lm === 'command');
+  document.body.classList.toggle('layout-classic', _lm === 'classic');
+})();
 // v89: global search keyboard hotkey (Ctrl/Cmd+K) and outside-click handler,
 // and connection status polling. Safe to call at this point — DOM has parsed
 // the sidebar so the elements they target exist.
