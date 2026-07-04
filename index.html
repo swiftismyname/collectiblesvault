@@ -318,58 +318,166 @@ tbody tr.sel td{background:rgba(201,168,76,.06)}
   --cmd-c8: #ef4444;  /* red */
 }
 
-/* ── Command Center global palette override (v103) ────────────────────
-   When body.layout-command is active, override the theme's PRIMARY accent
-   vars so the ENTIRE app takes on a purple/blue aesthetic — not just the
-   dashboard widgets. Sidebar highlights, buttons, links, hover states,
-   the sparkle marker on fancy serials, etc. all shift to this palette.
-   The base theme's background/text colors are preserved so dark stays
-   dark and light stays light.
+/* ── Command Center global palette (v104) ─────────────────────────────
+   Full cyberpunk-dashboard aesthetic. Overrides the theme's core color
+   vars so the ENTIRE app takes on this palette when body.layout-command
+   is active — not just the dashboard widgets. Deep dark navy-purple
+   background with iridescent purple + electric cyan/blue accents.
+   Modeled on the reference screenshots: neon-on-dark analytics dashboards.
 
-   Palette rationale: a duotone of vivid purple (--gold role) and cyan
-   (--accent role) drives a "cyberpunk analytics" feel that matches the
-   dashboard mockups. Success and warning colors shift toward cyan/pink
-   for cohesion, keeping red as the only warm tone (for errors). */
-body.layout-command {
-  /* Primary "gold" role → vivid purple */
-  --gold:  #a855f7;
-  --gold2: #8b5cf6;
-  --gold3: #6d28d9;
-  --gold4: #4c1d95;
-  /* Secondary accents → cyan/blue */
-  --accent: #06b6d4;
-  --accent2: #3b82f6;
-  --green: #22d3ee;         /* success shifts to cyan */
-  --green-bg: rgba(34, 211, 238, .12);
-  --green-bd: rgba(34, 211, 238, .35);
-  /* Chart palette → purple-blue-pink dominant */
-  --cmd-c1: #06b6d4;  /* bright cyan */
-  --cmd-c2: #a855f7;  /* vivid purple */
-  --cmd-c3: #3b82f6;  /* electric blue */
-  --cmd-c4: #ec4899;  /* hot pink */
-  --cmd-c5: #8b5cf6;  /* violet */
-  --cmd-c6: #22d3ee;  /* aqua */
-  --cmd-c7: #d946ef;  /* fuchsia */
-  --cmd-c8: #6366f1;  /* indigo */
-  /* Subtle glow on the primary Command elements */
-  --cmd-glow: 0 0 24px rgba(168, 85, 247, .18);
+   Keyframe animation drives the iridescent effect on card borders and
+   the hero title — a slow cycle through purple→blue→pink→cyan hues.
+   ────────────────────────────────────────────────────────────────────── */
+@keyframes cmd-iridescent {
+  0%   { background-position:   0% 50%; }
+  100% { background-position: 400% 50%; }
+}
+@keyframes cmd-glow-pulse {
+  0%, 100% { box-shadow: 0 0 20px rgba(168, 85, 247, .10), 0 0 40px rgba(6, 182, 212, .05); }
+  50%      { box-shadow: 0 0 28px rgba(168, 85, 247, .18), 0 0 60px rgba(6, 182, 212, .10); }
 }
 
-/* Command-mode specific accents: gradient headers and glow on cards.
-   Applied only inside .cmd-dash so the rest of the app benefits from the
-   var overrides without extra visual weight. */
+body.layout-command {
+  /* ── Base surface: deep dark navy-purple, near-black ─────────────── */
+  --bg:  #0a0e1a;
+  --bg2: #131829;
+  --bg3: #1a2038;
+  --bg4: #232a47;
+  --bg5: #2d3555;
+
+  /* ── Text: near-white with cool undertone ───────────────────────── */
+  --text:  #e2e8f0;
+  --muted: #94a3b8;
+  --dim:   #64748b;
+
+  /* ── Borders: subtle purple tint so they read as "part of" the palette */
+  --border:   rgba(168, 85, 247, .22);
+  --border2:  rgba(6, 182, 212, .15);
+
+  /* ── Primary role (was gold): iridescent purple ─────────────────── */
+  --gold:  #c084fc;   /* lighter iridescent purple */
+  --gold2: #a855f7;   /* base purple */
+  --gold3: #7c3aed;   /* deep purple */
+  --gold4: #4c1d95;
+
+  /* ── Secondary role (was accent): electric cyan/blue ────────────── */
+  --accent:  #22d3ee;
+  --accent2: #06b6d4;
+  --accent3: #3b82f6;
+
+  /* ── Semantic colors shifted into the palette ───────────────────── */
+  --green:    #22d3ee;                          /* success → cyan */
+  --green-bg: rgba(34, 211, 238, .10);
+  --green-bd: rgba(34, 211, 238, .35);
+  --red:      #f472b6;                          /* error → hot pink (still readable as "bad") */
+
+  /* ── Chart palette: iridescent duotone core ─────────────────────── */
+  --cmd-c1: #22d3ee;   /* electric cyan */
+  --cmd-c2: #a855f7;   /* vivid purple */
+  --cmd-c3: #3b82f6;   /* electric blue */
+  --cmd-c4: #ec4899;   /* hot pink */
+  --cmd-c5: #c084fc;   /* light iridescent purple */
+  --cmd-c6: #06b6d4;   /* deep cyan */
+  --cmd-c7: #d946ef;   /* fuchsia */
+  --cmd-c8: #6366f1;   /* indigo */
+
+  /* Neon glow tokens used throughout Command Center */
+  --cmd-glow-purple: 0 0 24px rgba(168, 85, 247, .35);
+  --cmd-glow-cyan:   0 0 24px rgba(6, 182, 212, .30);
+  --cmd-glow-soft:   0 0 12px rgba(168, 85, 247, .15);
+
+  /* Body background: subtle radial glow layered on the dark base so it
+     doesn't read as flat black. Cyan glow bottom-left, purple top-right. */
+  background:
+    radial-gradient(circle at 15% 85%, rgba(6, 182, 212, .08) 0%, transparent 45%),
+    radial-gradient(circle at 85% 15%, rgba(168, 85, 247, .10) 0%, transparent 45%),
+    var(--bg) !important;
+  color: var(--text);
+}
+
+/* ── Iridescent title effect (animated purple↔cyan↔pink gradient) ─── */
 body.layout-command .cmd-title {
-  background: linear-gradient(90deg, #a855f7, #06b6d4);
+  background: linear-gradient(90deg, #a855f7, #06b6d4, #ec4899, #a855f7);
+  background-size: 400% 100%;
+  animation: cmd-iridescent 8s linear infinite;
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
   color: transparent;
 }
-body.layout-command .cmd-card:hover {
-  box-shadow: 0 8px 32px rgba(168, 85, 247, .18);
+
+/* ── Card treatment: subtle purple-glow border + neon hover ──────── */
+body.layout-command .cmd-card {
+  background: rgba(19, 24, 41, .85);
+  border: 1px solid rgba(168, 85, 247, .18);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  position: relative;
+  overflow: hidden;
 }
+body.layout-command .cmd-card::after {
+  /* Animated iridescent hairline at the top of every card */
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, #a855f7, #06b6d4, #ec4899, transparent);
+  background-size: 200% 100%;
+  animation: cmd-iridescent 6s linear infinite;
+  opacity: .6;
+}
+body.layout-command .cmd-card:hover {
+  border-color: rgba(6, 182, 212, .5);
+  box-shadow: 0 0 30px rgba(168, 85, 247, .18), 0 0 60px rgba(6, 182, 212, .08);
+  transform: translateY(-1px);
+}
+
+/* KPI cards get an extra glow-pulse animation */
+body.layout-command .cmd-kpi { animation: cmd-glow-pulse 4s ease-in-out infinite; }
 body.layout-command .cmd-kpi::before {
-  background: linear-gradient(90deg, #a855f7, #06b6d4, #ec4899);
+  height: 2px;
+  background: linear-gradient(90deg, #a855f7, #06b6d4, #ec4899, #22d3ee);
+  background-size: 300% 100%;
+  animation: cmd-iridescent 5s linear infinite;
+  opacity: 1;
+}
+body.layout-command .cmd-kpi-value {
+  background: linear-gradient(135deg, var(--cmd-c1), var(--cmd-c2));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  text-shadow: none;
+}
+
+/* Chart accents in command mode: donut center total glows */
+body.layout-command .cmd-donut-val {
+  fill: #22d3ee;
+  filter: drop-shadow(0 0 4px rgba(6, 182, 212, .5));
+}
+body.layout-command .cmd-legend-pct { color: #22d3ee; }
+
+/* Horizontal bars: neon glow along the fill */
+body.layout-command .cmd-hbar-fill {
+  box-shadow: 0 0 10px currentColor;
+  filter: brightness(1.1);
+}
+
+/* List item hover: purple wash */
+body.layout-command .cmd-list-item:hover {
+  background: linear-gradient(90deg, rgba(168, 85, 247, .10), rgba(6, 182, 212, .04));
+}
+body.layout-command .cmd-list-val {
+  color: #22d3ee;
+  text-shadow: 0 0 8px rgba(6, 182, 212, .4);
+}
+
+/* Ensure app chrome (sidebar highlights, buttons, etc.) picks up the
+   purple/cyan palette. These override any theme-specific gold values. */
+body.layout-command .sidebar-item.active,
+body.layout-command .sidebar-item:hover {
+  color: #c084fc;
+  border-left-color: #a855f7;
 }
 
 .cmd-dash {
@@ -1749,7 +1857,7 @@ body.theme-modern-dark select option{
 // Bump this on every deploy so the user can see at a glance which build is
 // running in their browser. Surfaced in three places: the sidebar footer
 // (desktop), the mobile header badge, and the Settings → About section.
-const APP_VERSION = 'v103';
+const APP_VERSION = 'v104';
 const APP_BUILD_DATE = '2026-06-15';
 
 // ── EARLY-HOISTED MODULE STATE ──────────────────────────────────────────────
@@ -4382,23 +4490,29 @@ function _cmdHBar(data, maxLabel) {
 }
 
 // Vertical bar chart — used for record-count by category
+// v104 fix: viewBox MUST be numeric coordinates, not "100%". Previous version
+// used percentages which produced an invalid viewBox that broke the entire
+// dashboard render silently in some browsers. All coords now in a normalized
+// 100-wide × height-tall coordinate space; SVG stretches to fit container.
 function _cmdVBar(data, height) {
   height = height || 140;
+  if (!data || data.length === 0) return '<div class="cmd-empty">No data</div>';
   const max = data.reduce(function(m, d){ return Math.max(m, d.value); }, 0) || 1;
-  const w = 100 / data.length;
+  const vbWidth = 100;                          // viewBox width
+  const slot = vbWidth / data.length;           // horizontal slot per bar
   const bars = data.map(function(d, i){
-    const h = (d.value / max) * (height - 30);
+    const h = (d.value / max) * (height - 32);
     const y = height - h - 22;
-    const x = i * w + w * 0.15;
-    const bw = w * 0.7;
+    const x = i * slot + slot * 0.15;
+    const bw = slot * 0.70;
     const color = d.color || _CMD_COLORS[i % _CMD_COLORS.length];
     return '<g>'
-      + '<rect x="' + x + '%" y="' + y + '" width="' + bw + '%" height="' + h + '" fill="' + color + '" rx="2"/>'
-      + '<text x="' + (x + bw / 2) + '%" y="' + (y - 4) + '" text-anchor="middle" class="cmd-vbar-val">' + e(d.display || String(d.value)) + '</text>'
-      + '<text x="' + (x + bw / 2) + '%" y="' + (height - 6) + '" text-anchor="middle" class="cmd-vbar-lbl">' + e(d.label) + '</text>'
+      + '<rect x="' + x.toFixed(2) + '" y="' + y.toFixed(2) + '" width="' + bw.toFixed(2) + '" height="' + h.toFixed(2) + '" fill="' + color + '" rx="0.6"/>'
+      + '<text x="' + (x + bw / 2).toFixed(2) + '" y="' + (y - 2).toFixed(2) + '" text-anchor="middle" class="cmd-vbar-val">' + e(d.display || String(d.value)) + '</text>'
+      + '<text x="' + (x + bw / 2).toFixed(2) + '" y="' + (height - 6).toFixed(2) + '" text-anchor="middle" class="cmd-vbar-lbl">' + e(d.label) + '</text>'
       + '</g>';
   }).join('');
-  return '<svg viewBox="0 0 100% ' + height + '" preserveAspectRatio="none" class="cmd-vbar" style="width:100%;height:' + height + 'px">' + bars + '</svg>';
+  return '<svg viewBox="0 0 ' + vbWidth + ' ' + height + '" preserveAspectRatio="none" class="cmd-vbar" style="width:100%;height:' + height + 'px">' + bars + '</svg>';
 }
 
 // Area sparkline — smooth-ish line with a gradient fill underneath
@@ -4478,6 +4592,13 @@ function _cmdRadar(data) {
 // ═══════════════════════════════════════════════════════════════════════
 // Grid of widgets across the top; hero chart in the middle; secondary
 // widgets below. Adapts to viewport width via CSS grid auto-flow.
+//
+// v104: every widget wrapped in a safe() helper. If any single widget
+// throws (bad data shape, undefined property, etc.), only that widget
+// shows a small error card — the rest of the dashboard still renders.
+// Previously a single bad expression somewhere in the innerHTML template
+// took down the entire render and the try/catch in renderDashRouted fell
+// back to Classic, hiding the fact that Command Center was 90% working.
 function renderDashCommand() {
   const T = computeTotals();
   const totVal   = T.totVal, totCost = T.totCost, totCount = T.totCount;
@@ -4485,66 +4606,16 @@ function renderDashCommand() {
   const gainPct  = totCost > 0 ? ((gain / totCost) * 100) : 0;
   refreshSidebarTotal();
 
-  // Category value breakdown for the donut & legend
-  const categoryData = [];
-  SHEETS.forEach(function(s){
-    if (s.key === 'other') return;
-    const items = ALL_ITEMS.filter(function(i){ return i.sheet === s.key; });
-    const v = items.reduce(function(sum, it){ return sum + (n(it.value) || 0); }, 0);
-    if (v > 0) categoryData.push({ label: s.label, value: v, key: s.key });
-  });
-  categoryData.sort(function(a, b){ return b.value - a.value; });
-  const topCategories = categoryData.slice(0, 8);
-
-  // Precious metals composition (from silver/gold/platinum/etc totals)
-  const metalsData = [];
-  if (T.silverMelt > 0) metalsData.push({ label: 'Silver',    value: T.silverMelt, color: '#c0c0c8' });
-  if (T.goldMelt   > 0) metalsData.push({ label: 'Gold',      value: T.goldMelt,   color: '#e6b34a' });
-  if (T.platMelt   > 0) metalsData.push({ label: 'Platinum',  value: T.platMelt,   color: '#a3a8b8' });
-  if (T.pallMelt   > 0) metalsData.push({ label: 'Palladium', value: T.pallMelt,   color: '#b8a0d4' });
-  if (T.copperMelt > 0) metalsData.push({ label: 'Copper',    value: T.copperMelt, color: '#c47846' });
-
-  // Record count by category (top 6) — for the vertical bar chart
-  const countByCategory = SHEETS.map(function(s){
-    const c = ALL_ITEMS.filter(function(i){ return i.sheet === s.key; }).length;
-    return { label: (s.short || s.label.slice(0, 6)), value: c, key: s.key };
-  }).filter(function(d){ return d.value > 0; })
-    .sort(function(a, b){ return b.value - a.value; })
-    .slice(0, 8);
-
-  // Recent activity — 6 most recently modified records
-  const recent = ALL_ITEMS
-    .filter(function(i){ return i.raw && i.raw._modifiedAt; })
-    .sort(function(a, b){ return String(b.raw._modifiedAt).localeCompare(String(a.raw._modifiedAt)); })
-    .slice(0, 6);
-
-  // Top holdings by value
-  const topHoldings = ALL_ITEMS.slice()
-    .sort(function(a, b){ return (n(b.value) || 0) - (n(a.value) || 0); })
-    .slice(0, 6);
-
-  // Value-history sparkline: coarse cumulative view from records with a
-  // _createdAt. If not enough data, synthesize a flat line so the widget
-  // still renders without empty space.
-  const historyPoints = (function(){
-    const dated = ALL_ITEMS.filter(function(i){ return i.raw && i.raw._createdAt && n(i.value) > 0; });
-    if (dated.length < 3) return [totVal * 0.8, totVal * 0.85, totVal * 0.9, totVal * 0.95, totVal];
-    dated.sort(function(a, b){ return String(a.raw._createdAt).localeCompare(String(b.raw._createdAt)); });
-    const buckets = 24;
-    const step = Math.max(1, Math.ceil(dated.length / buckets));
-    const pts = [];
-    let running = 0;
-    for (let i = 0; i < dated.length; i++) {
-      running += n(dated[i].value) || 0;
-      if (i % step === 0 || i === dated.length - 1) pts.push(running);
+  // safe() — try a widget-render function, return its HTML, or return an
+  // inline error placeholder + log the error so it's still visible to the
+  // user via console. Isolates widget failures from each other.
+  function safe(name, fn) {
+    try { return fn(); }
+    catch (err) {
+      console.error('[cmd-widget] "' + name + '" failed:', err);
+      return '<div class="cmd-card"><div class="cmd-card-head"><div class="cmd-card-title" style="color:#f472b6">' + name + ' \u2014 render error</div></div><div class="cmd-empty" style="color:#f472b6;font-size:11px">' + (err && err.message ? err.message : 'Unknown error') + '</div></div>';
     }
-    return pts;
-  })();
-
-  // Radar — category coverage (record count normalized)
-  const radarData = countByCategory.slice(0, 6).map(function(d){ return { label: d.label, value: d.value }; });
-
-  const goldOz = T.goldOzPure, silverOz = T.silverOz;
+  }
 
   const $ = document.getElementById('content');
   $.innerHTML =
@@ -4557,74 +4628,142 @@ function renderDashCommand() {
     +     '<div class="cmd-header-meta">Last updated ' + e(new Date().toLocaleString()) + '</div>'
     +   '</div>'
 
-    // KPI ROW — 4 cards
     +   '<div class="cmd-kpi-row">'
-    +     _cmdKpiCard('Portfolio Value', fmt$(totVal), (gain >= 0 ? '\u25b2 ' : '\u25bc ') + '$' + Math.abs(gain).toLocaleString(undefined, {maximumFractionDigits:0}) + ' (' + (gain >= 0 ? '+' : '') + gainPct.toFixed(1) + '%)', 'var(--cmd-c1)')
-    +     _cmdKpiCard('Total Records', totCount.toLocaleString(), 'across ' + SHEETS.length + ' categories', 'var(--cmd-c3)')
-    +     _cmdKpiCard('Precious Metals', fmt$(T.totMelt), silverOz.toFixed(1) + ' oz Ag \u00b7 ' + goldOz.toFixed(2) + ' oz Au', 'var(--cmd-c4)')
-    +     _cmdKpiCard('Cost Basis', fmt$(totCost), 'unrealized ' + (gain >= 0 ? 'gain' : 'loss'), 'var(--cmd-c2)')
+    +     safe('Portfolio Value', function(){
+            return _cmdKpiCard('Portfolio Value', fmt$(totVal),
+              (gain >= 0 ? '\u25b2 ' : '\u25bc ') + '$' + Math.abs(gain).toLocaleString(undefined, {maximumFractionDigits:0}) + ' (' + (gain >= 0 ? '+' : '') + gainPct.toFixed(1) + '%)',
+              'var(--cmd-c1)');
+          })
+    +     safe('Total Records', function(){
+            return _cmdKpiCard('Total Records', totCount.toLocaleString(),
+              'across ' + SHEETS.length + ' categories', 'var(--cmd-c3)');
+          })
+    +     safe('Precious Metals', function(){
+            const goldOz = T.goldOzPure || 0, silverOz = T.silverOz || 0;
+            return _cmdKpiCard('Precious Metals', fmt$(T.totMelt || 0),
+              silverOz.toFixed(1) + ' oz Ag \u00b7 ' + goldOz.toFixed(2) + ' oz Au',
+              'var(--cmd-c4)');
+          })
+    +     safe('Cost Basis', function(){
+            return _cmdKpiCard('Cost Basis', fmt$(totCost),
+              'unrealized ' + (gain >= 0 ? 'gain' : 'loss'), 'var(--cmd-c2)');
+          })
     +   '</div>'
 
-    // HERO ROW — value history + category donut
     +   '<div class="cmd-hero-row">'
-    +     '<div class="cmd-card cmd-hero-chart">'
-    +       '<div class="cmd-card-head">'
-    +         '<div class="cmd-card-title">Portfolio Value \u2014 Accumulation</div>'
-    +         '<div class="cmd-card-sub">' + fmt$(totVal) + '</div>'
-    +       '</div>'
-    +       _cmdSpark(historyPoints, 'var(--cmd-c1)')
-    +     '</div>'
-    +     '<div class="cmd-card cmd-donut-card">'
-    +       '<div class="cmd-card-head">'
-    +         '<div class="cmd-card-title">By Category</div>'
-    +       '</div>'
-    +       _cmdDonut(topCategories, 'TOTAL', fmt$(totVal))
-    +     '</div>'
+    +     safe('Portfolio Accumulation', function(){
+            const dated = ALL_ITEMS.filter(function(i){ return i.raw && i.raw._createdAt && n(i.value) > 0; });
+            let historyPoints;
+            if (dated.length < 3) {
+              historyPoints = [totVal * 0.8, totVal * 0.85, totVal * 0.9, totVal * 0.95, totVal];
+            } else {
+              dated.sort(function(a, b){ return String(a.raw._createdAt).localeCompare(String(b.raw._createdAt)); });
+              const buckets = 24;
+              const step = Math.max(1, Math.ceil(dated.length / buckets));
+              historyPoints = [];
+              let running = 0;
+              for (let i = 0; i < dated.length; i++) {
+                running += n(dated[i].value) || 0;
+                if (i % step === 0 || i === dated.length - 1) historyPoints.push(running);
+              }
+            }
+            return '<div class="cmd-card cmd-hero-chart">'
+              + '<div class="cmd-card-head">'
+              +   '<div class="cmd-card-title">Portfolio Value \u2014 Accumulation</div>'
+              +   '<div class="cmd-card-sub">' + fmt$(totVal) + '</div>'
+              + '</div>'
+              + _cmdSpark(historyPoints, 'var(--cmd-c1)')
+              + '</div>';
+          })
+    +     safe('By Category', function(){
+            const categoryData = [];
+            SHEETS.forEach(function(s){
+              if (s.key === 'other') return;
+              const items = ALL_ITEMS.filter(function(i){ return i.sheet === s.key; });
+              const v = items.reduce(function(sum, it){ return sum + (n(it.value) || 0); }, 0);
+              if (v > 0) categoryData.push({ label: s.label, value: v, key: s.key });
+            });
+            categoryData.sort(function(a, b){ return b.value - a.value; });
+            const topCategories = categoryData.slice(0, 8);
+            return '<div class="cmd-card cmd-donut-card">'
+              + '<div class="cmd-card-head"><div class="cmd-card-title">By Category</div></div>'
+              + _cmdDonut(topCategories, 'TOTAL', fmt$(totVal))
+              + '</div>';
+          })
     +   '</div>'
 
-    // SECONDARY ROW — record counts + metals + radar
     +   '<div class="cmd-widget-row">'
-    +     '<div class="cmd-card">'
-    +       '<div class="cmd-card-head"><div class="cmd-card-title">Records by Category</div></div>'
-    +       _cmdVBar(countByCategory, 160)
-    +     '</div>'
-    +     '<div class="cmd-card">'
-    +       '<div class="cmd-card-head"><div class="cmd-card-title">Precious Metals</div><div class="cmd-card-sub">' + fmt$(T.totMelt) + ' melt</div></div>'
-    +       (metalsData.length > 0
-              ? _cmdHBar(metalsData.map(function(m){ return { label: m.label, value: m.value, display: fmt$(m.value), color: m.color }; }))
-              : '<div class="cmd-empty">No precious metals in collection</div>')
-    +     '</div>'
-    +     '<div class="cmd-card">'
-    +       '<div class="cmd-card-head"><div class="cmd-card-title">Category Coverage</div></div>'
-    +       (radarData.length >= 3 ? _cmdRadar(radarData) : '<div class="cmd-empty">Need 3+ categories for radar</div>')
-    +     '</div>'
+    +     safe('Records by Category', function(){
+            const countByCategory = SHEETS.map(function(s){
+              const c = ALL_ITEMS.filter(function(i){ return i.sheet === s.key; }).length;
+              return { label: (s.short || String(s.label || '').slice(0, 6)), value: c, key: s.key };
+            }).filter(function(d){ return d.value > 0; })
+              .sort(function(a, b){ return b.value - a.value; })
+              .slice(0, 8);
+            return '<div class="cmd-card">'
+              + '<div class="cmd-card-head"><div class="cmd-card-title">Records by Category</div></div>'
+              + _cmdVBar(countByCategory, 160)
+              + '</div>';
+          })
+    +     safe('Precious Metals', function(){
+            const metalsData = [];
+            if (T.silverMelt > 0) metalsData.push({ label: 'Silver',    value: T.silverMelt, color: '#c0c0c8' });
+            if (T.goldMelt   > 0) metalsData.push({ label: 'Gold',      value: T.goldMelt,   color: '#e6b34a' });
+            if (T.platMelt   > 0) metalsData.push({ label: 'Platinum',  value: T.platMelt,   color: '#a3a8b8' });
+            if (T.pallMelt   > 0) metalsData.push({ label: 'Palladium', value: T.pallMelt,   color: '#b8a0d4' });
+            if (T.copperMelt > 0) metalsData.push({ label: 'Copper',    value: T.copperMelt, color: '#c47846' });
+            return '<div class="cmd-card">'
+              + '<div class="cmd-card-head"><div class="cmd-card-title">Precious Metals</div><div class="cmd-card-sub">' + fmt$(T.totMelt || 0) + ' melt</div></div>'
+              + (metalsData.length > 0
+                  ? _cmdHBar(metalsData.map(function(m){ return { label: m.label, value: m.value, display: fmt$(m.value), color: m.color }; }))
+                  : '<div class="cmd-empty">No precious metals in collection</div>')
+              + '</div>';
+          })
+    +     safe('Category Coverage', function(){
+            const countByCategory = SHEETS.map(function(s){
+              const c = ALL_ITEMS.filter(function(i){ return i.sheet === s.key; }).length;
+              return { label: (s.short || String(s.label || '').slice(0, 6)), value: c, key: s.key };
+            }).filter(function(d){ return d.value > 0; }).sort(function(a, b){ return b.value - a.value; });
+            const radarData = countByCategory.slice(0, 6).map(function(d){ return { label: d.label, value: d.value }; });
+            return '<div class="cmd-card">'
+              + '<div class="cmd-card-head"><div class="cmd-card-title">Category Coverage</div></div>'
+              + (radarData.length >= 3 ? _cmdRadar(radarData) : '<div class="cmd-empty">Need 3+ categories for radar</div>')
+              + '</div>';
+          })
     +   '</div>'
 
-    // TERTIARY ROW — top holdings + recent activity
     +   '<div class="cmd-widget-row cmd-widget-row-2">'
-    +     '<div class="cmd-card">'
-    +       '<div class="cmd-card-head"><div class="cmd-card-title">Top Holdings</div><div class="cmd-card-sub">by value</div></div>'
-    +       '<div class="cmd-list">'
-    +       topHoldings.map(function(item){
+    +     safe('Top Holdings', function(){
+            const topHoldings = ALL_ITEMS.slice()
+              .sort(function(a, b){ return (n(b.value) || 0) - (n(a.value) || 0); })
+              .slice(0, 6);
+            const rows = topHoldings.map(function(item){
               const idx = ALL_ITEMS.indexOf(item);
-              const desc = item.desc || item.raw.description || item.sheet;
+              const desc = item.desc || (item.raw && item.raw.description) || item.sheet;
+              const sheetLabel = (SHEET_MAP && SHEET_MAP[item.sheet]) ? SHEET_MAP[item.sheet].label : item.sheet;
               return '<div class="cmd-list-item" onclick="showDetail(ALL_ITEMS[' + idx + '])">'
                 + '<div class="cmd-list-main">'
                 +   '<div class="cmd-list-title">' + e(String(desc).slice(0, 42)) + '</div>'
-                +   '<div class="cmd-list-sub">' + e(SHEET_MAP[item.sheet] ? SHEET_MAP[item.sheet].label : item.sheet) + ' \u00b7 #' + e(item.id) + '</div>'
+                +   '<div class="cmd-list-sub">' + e(sheetLabel) + ' \u00b7 #' + e(item.id) + '</div>'
                 + '</div>'
                 + '<div class="cmd-list-val">' + fmt$(n(item.value) || 0) + '</div>'
                 + '</div>';
-            }).join('')
-    +       '</div>'
-    +     '</div>'
-    +     '<div class="cmd-card">'
-    +       '<div class="cmd-card-head"><div class="cmd-card-title">Recent Activity</div><div class="cmd-card-sub">latest edits</div></div>'
-    +       '<div class="cmd-list">'
-    +       (recent.length > 0 ? recent.map(function(item){
+            }).join('');
+            return '<div class="cmd-card">'
+              + '<div class="cmd-card-head"><div class="cmd-card-title">Top Holdings</div><div class="cmd-card-sub">by value</div></div>'
+              + '<div class="cmd-list">' + rows + '</div>'
+              + '</div>';
+          })
+    +     safe('Recent Activity', function(){
+            const recent = ALL_ITEMS
+              .filter(function(i){ return i.raw && i.raw._modifiedAt; })
+              .sort(function(a, b){ return String(b.raw._modifiedAt).localeCompare(String(a.raw._modifiedAt)); })
+              .slice(0, 6);
+            const rows = recent.length > 0 ? recent.map(function(item){
               const idx = ALL_ITEMS.indexOf(item);
-              const desc = item.desc || item.raw.description || item.sheet;
-              const when = _fmtModified(item.raw) || '';
+              const desc = item.desc || (item.raw && item.raw.description) || item.sheet;
+              let when = '';
+              try { when = (typeof _fmtModified === 'function') ? (_fmtModified(item.raw) || '') : ''; } catch(_) { when = ''; }
               return '<div class="cmd-list-item" onclick="showDetail(ALL_ITEMS[' + idx + '])">'
                 + '<div class="cmd-list-main">'
                 +   '<div class="cmd-list-title">' + e(String(desc).slice(0, 42)) + '</div>'
@@ -4632,9 +4771,12 @@ function renderDashCommand() {
                 + '</div>'
                 + '<div class="cmd-list-val">' + fmt$(n(item.value) || 0) + '</div>'
                 + '</div>';
-            }).join('') : '<div class="cmd-empty">No recent activity</div>')
-    +       '</div>'
-    +     '</div>'
+            }).join('') : '<div class="cmd-empty">No recent activity</div>';
+            return '<div class="cmd-card">'
+              + '<div class="cmd-card-head"><div class="cmd-card-title">Recent Activity</div><div class="cmd-card-sub">latest edits</div></div>'
+              + '<div class="cmd-list">' + rows + '</div>'
+              + '</div>';
+          })
     +   '</div>'
     + '</div>';
 }
