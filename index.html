@@ -318,6 +318,60 @@ tbody tr.sel td{background:rgba(201,168,76,.06)}
   --cmd-c8: #ef4444;  /* red */
 }
 
+/* ── Command Center global palette override (v103) ────────────────────
+   When body.layout-command is active, override the theme's PRIMARY accent
+   vars so the ENTIRE app takes on a purple/blue aesthetic — not just the
+   dashboard widgets. Sidebar highlights, buttons, links, hover states,
+   the sparkle marker on fancy serials, etc. all shift to this palette.
+   The base theme's background/text colors are preserved so dark stays
+   dark and light stays light.
+
+   Palette rationale: a duotone of vivid purple (--gold role) and cyan
+   (--accent role) drives a "cyberpunk analytics" feel that matches the
+   dashboard mockups. Success and warning colors shift toward cyan/pink
+   for cohesion, keeping red as the only warm tone (for errors). */
+body.layout-command {
+  /* Primary "gold" role → vivid purple */
+  --gold:  #a855f7;
+  --gold2: #8b5cf6;
+  --gold3: #6d28d9;
+  --gold4: #4c1d95;
+  /* Secondary accents → cyan/blue */
+  --accent: #06b6d4;
+  --accent2: #3b82f6;
+  --green: #22d3ee;         /* success shifts to cyan */
+  --green-bg: rgba(34, 211, 238, .12);
+  --green-bd: rgba(34, 211, 238, .35);
+  /* Chart palette → purple-blue-pink dominant */
+  --cmd-c1: #06b6d4;  /* bright cyan */
+  --cmd-c2: #a855f7;  /* vivid purple */
+  --cmd-c3: #3b82f6;  /* electric blue */
+  --cmd-c4: #ec4899;  /* hot pink */
+  --cmd-c5: #8b5cf6;  /* violet */
+  --cmd-c6: #22d3ee;  /* aqua */
+  --cmd-c7: #d946ef;  /* fuchsia */
+  --cmd-c8: #6366f1;  /* indigo */
+  /* Subtle glow on the primary Command elements */
+  --cmd-glow: 0 0 24px rgba(168, 85, 247, .18);
+}
+
+/* Command-mode specific accents: gradient headers and glow on cards.
+   Applied only inside .cmd-dash so the rest of the app benefits from the
+   var overrides without extra visual weight. */
+body.layout-command .cmd-title {
+  background: linear-gradient(90deg, #a855f7, #06b6d4);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+body.layout-command .cmd-card:hover {
+  box-shadow: 0 8px 32px rgba(168, 85, 247, .18);
+}
+body.layout-command .cmd-kpi::before {
+  background: linear-gradient(90deg, #a855f7, #06b6d4, #ec4899);
+}
+
 .cmd-dash {
   padding: 22px 24px 40px;
   max-width: 1600px;
@@ -1695,7 +1749,7 @@ body.theme-modern-dark select option{
 // Bump this on every deploy so the user can see at a glance which build is
 // running in their browser. Surfaced in three places: the sidebar footer
 // (desktop), the mobile header badge, and the Settings → About section.
-const APP_VERSION = 'v102';
+const APP_VERSION = 'v103';
 const APP_BUILD_DATE = '2026-06-15';
 
 // ── EARLY-HOISTED MODULE STATE ──────────────────────────────────────────────
@@ -4205,9 +4259,15 @@ function setLayoutMode(mode) {
   localStorage.setItem('cv_layout_mode', mode);
   document.body.classList.toggle('layout-command', mode === 'command');
   document.body.classList.toggle('layout-classic', mode === 'classic');
-  // Re-render whatever view we're on so the new layout kicks in immediately
-  if (typeof ST !== 'undefined' && ST.view === 'dash') {
-    if (typeof renderDashRouted === 'function') renderDashRouted();
+  // v103 fix: immediately navigate to the dashboard so the user SEES the
+  // layout change happen. Previously we only re-rendered if already on
+  // dash — but the switch is initiated from Settings, so nothing visible
+  // changed and the user had no obvious next step. Nav'ing to dash makes
+  // the change tangible and gives the toast context.
+  if (typeof nav === 'function') {
+    nav('dash');
+  } else if (typeof ST !== 'undefined' && ST.view === 'dash' && typeof renderDashRouted === 'function') {
+    renderDashRouted();
   }
   if (typeof cvToast === 'function') cvToast('Layout: ' + LAYOUT_MODE_LABELS[mode], 'ok');
 }
@@ -4215,10 +4275,20 @@ function setLayoutMode(mode) {
 // Router — called instead of renderDash() directly. Picks the right renderer
 // for the current layout mode. Classic falls through to the untouched
 // renderDash(); Command routes to renderDashCommand().
+// v103: wrap the Command render in try/catch so a data-shape edge case
+// can't leave the user staring at a blank content pane with no way back.
+// On failure we fall back to Classic + show a warning toast; the user
+// still lands on a working dashboard.
 function renderDashRouted() {
   const mode = getLayoutMode();
   if (mode === 'command' && typeof renderDashCommand === 'function') {
-    renderDashCommand();
+    try {
+      renderDashCommand();
+    } catch (err) {
+      console.error('[layout] Command Center render failed:', err);
+      if (typeof cvToast === 'function') cvToast('Command Center render failed \u2014 falling back to Classic. See console.', 'error');
+      try { renderDash(); } catch (e2) { console.error('[layout] Classic fallback also failed:', e2); }
+    }
   } else {
     renderDash();
   }
