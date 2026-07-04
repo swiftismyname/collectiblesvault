@@ -478,13 +478,43 @@ body.layout-command .cmd-list-val {
 }
 
 /* Ensure app chrome (sidebar highlights, buttons, etc.) picks up the
-   purple/cyan palette. These override any theme-specific gold values. */
+   purple/cyan palette. These override any theme-specific gold values.
+
+   v106: nav item active state uses PURE WHITE text so it's readable
+   against the purple background (previously we used light purple text
+   which had poor contrast on top of the purple `--gold2` background).
+   Hover state also snaps to white for consistency. */
+body.layout-command .ni {
+  color: #cbd5e1;
+}
+body.layout-command .ni:hover {
+  background: linear-gradient(90deg, rgba(168, 85, 247, .12), rgba(6, 182, 212, .06));
+  color: #ffffff;
+  border-color: rgba(168, 85, 247, .25);
+}
+body.layout-command .ni.on {
+  background: linear-gradient(90deg, rgba(168, 85, 247, .30), rgba(6, 182, 212, .15));
+  color: #ffffff !important;
+  border-color: rgba(168, 85, 247, .55);
+  box-shadow: 0 0 12px rgba(168, 85, 247, .25), inset 0 0 12px rgba(6, 182, 212, .08);
+}
+body.layout-command .ni.on svg,
+body.layout-command .ni:hover svg { opacity: 1; color: #22d3ee; }
+/* Badges inside nav items — pick up palette */
+body.layout-command .nbadge {
+  background: rgba(168, 85, 247, .18) !important;
+  color: #c084fc !important;
+}
+body.layout-command .nbadge.red {
+  background: rgba(244, 114, 182, .18) !important;
+  color: #f472b6 !important;
+}
+/* Legacy sidebar-item selectors — keep for whatever uses them */
 body.layout-command .sidebar-item.active,
 body.layout-command .sidebar-item:hover {
-  color: #c084fc;
+  color: #ffffff;
   border-left-color: #a855f7;
 }
-
 .cmd-dash {
   padding: 22px 24px 40px;
   max-width: 1600px;
@@ -597,8 +627,45 @@ body.layout-command .sidebar-item:hover {
   margin-bottom: 18px;
 }
 @media (max-width: 900px) { .cmd-hero-row { grid-template-columns: 1fr; } }
-.cmd-hero-chart { display: flex; flex-direction: column; min-height: 240px; }
+.cmd-hero-chart { display: flex; flex-direction: column; min-height: 300px; }
 .cmd-hero-chart .cmd-spark { flex: 1; min-height: 140px; }
+.cmd-hero-chart .cmd-val-chart { flex: 1; width: 100%; height: 100%; min-height: 240px; display: block; }
+
+/* v106: period filter buttons in the value-history chart header */
+.cmd-period-row { display: flex; gap: 4px; align-items: center; }
+.cmd-period-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--dim);
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-family: var(--font-mono, monospace);
+  cursor: pointer;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  transition: all .15s ease;
+}
+.cmd-period-btn:hover { color: var(--text); border-color: var(--gold); }
+.cmd-period-btn-active {
+  background: rgba(168, 85, 247, .15);
+  border-color: var(--gold);
+  color: var(--gold);
+}
+body.layout-command .cmd-period-btn-active {
+  background: linear-gradient(90deg, rgba(168, 85, 247, .18), rgba(6, 182, 212, .10));
+  border-color: #22d3ee;
+  color: #22d3ee;
+  box-shadow: 0 0 10px rgba(34, 211, 238, .25);
+}
+
+/* v106: pins on the value chart — grow + glow on hover */
+.cmd-pin { transition: r .12s ease, filter .12s ease; cursor: pointer; }
+.cmd-pin-g:hover .cmd-pin {
+  r: 6;
+  filter: drop-shadow(0 0 8px rgba(34, 211, 238, .8));
+}
+
 
 /* Widget rows — 3 columns */
 .cmd-widget-row {
@@ -1901,7 +1968,7 @@ body.theme-modern-dark select option{
 // Bump this on every deploy so the user can see at a glance which build is
 // running in their browser. Surfaced in three places: the sidebar footer
 // (desktop), the mobile header badge, and the Settings → About section.
-const APP_VERSION = 'v105';
+const APP_VERSION = 'v106';
 const APP_BUILD_DATE = '2026-06-15';
 
 // ── EARLY-HOISTED MODULE STATE ──────────────────────────────────────────────
@@ -4583,6 +4650,239 @@ function _cmdSpark(points, color) {
     + '</svg>';
 }
 
+// ── Rich Portfolio Accumulation chart (v106) ──────────────────────────
+// Full-featured value-history chart matching what the classic renderDash
+// provides: pins on each snapshot, hover tooltip with date + value, and
+// period filter buttons (30d / 12mo / All) that reuse the SAME TREND_VIEW
+// state as the classic view — so switching layout modes keeps the same
+// filter. Data comes from VALUE_HISTORY (daily snapshots persisted to
+// localStorage + synced to Supabase), not from _createdAt reconstruction.
+//
+// Chart is native SVG (not Chart.js) to stay stylistically consistent
+// with the other Command Center widgets. Pins are <circle> elements with
+// <title> tooltips (native browser tooltip on hover). Larger pin on hover
+// via CSS. Chart re-renders on filter button click by calling this fn.
+function _cmdValueHistoryChart() {
+  const hist = (typeof VALUE_HISTORY !== 'undefined' && VALUE_HISTORY) ? VALUE_HISTORY : [];
+  if (hist.length === 0) {
+    return '<div class="cmd-card cmd-hero-chart">'
+      + '<div class="cmd-card-head"><div class="cmd-card-title">Portfolio Value \u2014 Accumulation</div></div>'
+      + '<div class="cmd-empty" style="padding:60px 20px">No historical data yet. Value snapshots record daily as you use the app.</div>'
+      + '</div>';
+  }
+
+  // Match the classic-view filter logic (subset that matters most). Uses
+  // the shared TREND_VIEW so classic + command stay in sync. Command
+  // mode default is 'daily' (30d) which matches the classic default.
+  const view = (typeof TREND_VIEW !== 'undefined') ? TREND_VIEW : 'daily';
+  const sorted = hist.slice().sort(function(a,b){ return String(a.date).localeCompare(String(b.date)); });
+  const now = new Date();
+  let data = sorted;
+  let labelFor;
+
+  if (view === 'daily') {
+    // Last 30 days — daily granularity
+    const cutoff = new Date(now.getTime() - 30 * 86400000).toISOString().split('T')[0];
+    data = sorted.filter(function(s){ return s.date >= cutoff; });
+    labelFor = function(s){
+      const d = new Date(s.date + 'T00:00:00');
+      return (d.getMonth()+1) + '/' + d.getDate();
+    };
+  } else if (view === 'monthly') {
+    // Last 12 months — last snapshot per month
+    const byMonth = {};
+    sorted.forEach(function(s){
+      const m = String(s.date).substring(0, 7);
+      if (!byMonth[m]) byMonth[m] = [];
+      byMonth[m].push(s);
+    });
+    const months = Object.keys(byMonth).sort().slice(-12);
+    data = months.map(function(m){ const arr = byMonth[m]; return arr[arr.length - 1]; });
+    const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    labelFor = function(s){
+      const [y, mo] = String(s.date).split('-');
+      return MONTHS[parseInt(mo, 10) - 1] + " '" + y.substring(2);
+    };
+  } else if (view === 'yearly') {
+    const byYear = {};
+    sorted.forEach(function(s){
+      const y = String(s.date).substring(0, 4);
+      if (!byYear[y]) byYear[y] = [];
+      byYear[y].push(s);
+    });
+    const years = Object.keys(byYear).sort();
+    data = years.map(function(y){ const arr = byYear[y]; return arr[arr.length - 1]; });
+    labelFor = function(s){ return String(s.date).substring(0, 4); };
+  } else {
+    // 'all' or fallback — aggregate to monthly if we have > 24 snaps
+    if (sorted.length > 24) {
+      const byMonth = {};
+      sorted.forEach(function(s){
+        const m = String(s.date).substring(0, 7);
+        if (!byMonth[m]) byMonth[m] = [];
+        byMonth[m].push(s);
+      });
+      const months = Object.keys(byMonth).sort();
+      data = months.map(function(m){ const arr = byMonth[m]; return arr[arr.length - 1]; });
+      const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      labelFor = function(s){
+        const [y, mo] = String(s.date).split('-');
+        return MONTHS[parseInt(mo, 10) - 1] + " '" + y.substring(2);
+      };
+    } else {
+      labelFor = function(s){ return String(s.date); };
+    }
+  }
+
+  // Filter buttons — click updates TREND_VIEW + re-renders JUST this widget
+  const periods = [
+    { key: 'daily',   label: '30D' },
+    { key: 'monthly', label: '12M' },
+    { key: 'yearly',  label: '1Y+' },
+    { key: 'all',     label: 'All' }
+  ];
+  const btns = periods.map(function(p){
+    const active = (view === p.key);
+    return '<button onclick="_cmdSetTrendView(\'' + p.key + '\')" class="cmd-period-btn' + (active ? ' cmd-period-btn-active' : '') + '">' + p.label + '</button>';
+  }).join('');
+
+  // Compute period change stats for header
+  const values = data.map(function(s){ return num2(s.value); });
+  const latest = values.length > 0 ? values[values.length - 1] : 0;
+  const earliest = values.length > 0 ? values[0] : 0;
+  const chg = latest - earliest;
+  const chgPct = earliest > 0 ? (chg / earliest * 100) : 0;
+  const chgColor = chg >= 0 ? '#22d3ee' : '#f472b6';
+
+  if (data.length === 0) {
+    return '<div class="cmd-card cmd-hero-chart">'
+      + '<div class="cmd-card-head">'
+      +   '<div><div class="cmd-card-title">Portfolio Value \u2014 Accumulation</div></div>'
+      +   '<div class="cmd-period-row">' + btns + '</div>'
+      + '</div>'
+      + '<div class="cmd-empty" style="padding:40px">No snapshots in this range.</div>'
+      + '</div>';
+  }
+
+  // Build SVG chart with pins
+  const svgW = 800;      // viewBox width (scales to container via CSS)
+  const svgH = 260;
+  const padL = 55, padR = 20, padT = 20, padB = 40;
+  const chartW = svgW - padL - padR;
+  const chartH = svgH - padT - padB;
+
+  const min = Math.min.apply(null, values);
+  const max = Math.max.apply(null, values);
+  const range = (max - min) || 1;
+  const yMin = min - range * 0.08;
+  const yMax = max + range * 0.08;
+  const yRange = (yMax - yMin) || 1;
+
+  const xFor = function(i){
+    if (data.length === 1) return padL + chartW / 2;
+    return padL + (i / (data.length - 1)) * chartW;
+  };
+  const yFor = function(v){ return padT + chartH - ((v - yMin) / yRange) * chartH; };
+
+  // Path for the line
+  let linePath = '';
+  data.forEach(function(s, i){
+    const x = xFor(i), y = yFor(num2(s.value));
+    linePath += (i === 0 ? 'M ' : ' L ') + x.toFixed(1) + ' ' + y.toFixed(1);
+  });
+  // Fill path (line + close to bottom)
+  const fillPath = linePath + ' L ' + xFor(data.length - 1).toFixed(1) + ' ' + (padT + chartH) + ' L ' + xFor(0).toFixed(1) + ' ' + (padT + chartH) + ' Z';
+
+  // Y-axis gridlines + labels (4 divisions)
+  let yGrid = '';
+  for (let i = 0; i <= 4; i++) {
+    const val = yMin + (yRange * i / 4);
+    const y = yFor(val);
+    yGrid += '<line x1="' + padL + '" x2="' + (padL + chartW) + '" y1="' + y.toFixed(1) + '" y2="' + y.toFixed(1) + '" stroke="rgba(168, 85, 247, .12)" stroke-dasharray="2 4"/>';
+    yGrid += '<text x="' + (padL - 8) + '" y="' + (y + 3).toFixed(1) + '" text-anchor="end" fill="#94a3b8" font-size="10" font-family="monospace">$' + (val >= 1000 ? (val/1000).toFixed(0) + 'k' : val.toFixed(0)) + '</text>';
+  }
+
+  // X-axis labels — every Nth pin gets a label
+  const labelStride = Math.max(1, Math.ceil(data.length / 8));
+  let xLabels = '';
+  data.forEach(function(s, i){
+    if (i % labelStride !== 0 && i !== data.length - 1) return;
+    const x = xFor(i);
+    xLabels += '<text x="' + x.toFixed(1) + '" y="' + (svgH - 12) + '" text-anchor="middle" fill="#94a3b8" font-size="10" font-family="Karla, sans-serif">' + e(labelFor(s)) + '</text>';
+  });
+
+  // Pins (circles) with <title> for hover tooltips
+  let pins = '';
+  data.forEach(function(s, i){
+    const x = xFor(i), y = yFor(num2(s.value));
+    const dateStr = e(labelFor(s));
+    const valStr = e(fmt$(num2(s.value)));
+    pins += '<g class="cmd-pin-g">'
+      + '<circle cx="' + x.toFixed(1) + '" cy="' + y.toFixed(1) + '" r="4" fill="#22d3ee" stroke="#0a0e1a" stroke-width="2" class="cmd-pin">'
+      +   '<title>' + dateStr + ' \u2014 ' + valStr + '</title>'
+      + '</circle>'
+      + '</g>';
+  });
+
+  const gradId = 'cmd-val-grad-' + Math.random().toString(36).slice(2, 8);
+
+  return '<div class="cmd-card cmd-hero-chart">'
+    + '<div class="cmd-card-head">'
+    +   '<div>'
+    +     '<div class="cmd-card-title">Portfolio Value \u2014 Accumulation</div>'
+    +     '<div class="cmd-card-sub">'
+    +       fmt$(latest) + ' \u00b7 '
+    +       '<span style="color:' + chgColor + '">' + (chg >= 0 ? '\u25b2 +' : '\u25bc ') + fmt$(Math.abs(chg)) + ' (' + (chg >= 0 ? '+' : '') + chgPct.toFixed(1) + '%)</span>'
+    +     '</div>'
+    +   '</div>'
+    +   '<div class="cmd-period-row">' + btns + '</div>'
+    + '</div>'
+    + '<svg viewBox="0 0 ' + svgW + ' ' + svgH + '" preserveAspectRatio="xMidYMid meet" class="cmd-val-chart">'
+    +   '<defs><linearGradient id="' + gradId + '" x1="0" x2="0" y1="0" y2="1">'
+    +     '<stop offset="0%" stop-color="#22d3ee" stop-opacity=".35"/>'
+    +     '<stop offset="100%" stop-color="#a855f7" stop-opacity="0"/>'
+    +   '</linearGradient></defs>'
+    +   yGrid
+    +   '<path d="' + fillPath + '" fill="url(#' + gradId + ')"/>'
+    +   '<path d="' + linePath + '" fill="none" stroke="#22d3ee" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" filter="drop-shadow(0 0 6px rgba(34, 211, 238, .6))"/>'
+    +   xLabels
+    +   pins
+    + '</svg>'
+    + '</div>';
+}
+
+// Helper number coerce for the widget — top-level so it can be called from
+// the setTrendView handler below without depending on renderDashCommand's
+// local `num`. Duplicated logic; kept small.
+function num2(v){
+  if (v == null) return 0;
+  const p = parseFloat(v);
+  return isNaN(p) ? 0 : p;
+}
+
+// Global handler wired to the period-filter buttons in the value chart.
+// Updates the shared TREND_VIEW state (which is what the classic view
+// uses too) and re-renders just the value chart card in place. Avoids a
+// full dashboard re-render so state stays intact.
+function _cmdSetTrendView(view) {
+  if (typeof TREND_VIEW !== 'undefined') TREND_VIEW = view;
+  // Also poke the classic-view state helpers if they exist so switching
+  // back to Classic later shows the same filter
+  if (typeof setTrendView === 'function') {
+    try { setTrendView(view); } catch(_) {}
+  }
+  const card = document.querySelector('.cmd-hero-chart');
+  if (card && card.parentNode) {
+    // Replace the card's HTML in place
+    const wrapper = document.createElement('div');
+    wrapper.innerHTML = _cmdValueHistoryChart();
+    const fresh = wrapper.firstChild;
+    card.parentNode.replaceChild(fresh, card);
+  } else if (typeof renderDashRouted === 'function') {
+    renderDashRouted();
+  }
+}
+
 // Radar / spider chart — 5–8 axes for category coverage
 function _cmdRadar(data) {
   const cx = 110, cy = 110, r = 82;
@@ -4704,28 +5004,10 @@ function renderDashCommand() {
 
     +   '<div class="cmd-hero-row">'
     +     safe('Portfolio Accumulation', function(){
-            const dated = ALL_ITEMS.filter(function(i){ return i.raw && i.raw._createdAt && num(i.value) > 0; });
-            let historyPoints;
-            if (dated.length < 3) {
-              historyPoints = [totVal * 0.8, totVal * 0.85, totVal * 0.9, totVal * 0.95, totVal];
-            } else {
-              dated.sort(function(a, b){ return String(a.raw._createdAt).localeCompare(String(b.raw._createdAt)); });
-              const buckets = 24;
-              const step = Math.max(1, Math.ceil(dated.length / buckets));
-              historyPoints = [];
-              let running = 0;
-              for (let i = 0; i < dated.length; i++) {
-                running += num(dated[i].value);
-                if (i % step === 0 || i === dated.length - 1) historyPoints.push(running);
-              }
-            }
-            return '<div class="cmd-card cmd-hero-chart">'
-              + '<div class="cmd-card-head">'
-              +   '<div class="cmd-card-title">Portfolio Value \u2014 Accumulation</div>'
-              +   '<div class="cmd-card-sub">' + fmt$(totVal) + '</div>'
-              + '</div>'
-              + _cmdSpark(historyPoints, 'var(--cmd-c1)')
-              + '</div>';
+            // v106: use VALUE_HISTORY (real daily snapshots) with pins and
+            // filter buttons — same data source and TREND_VIEW state as
+            // the classic view, so filter choices carry across layouts.
+            return _cmdValueHistoryChart();
           })
     +     safe('By Category', function(){
             const categoryData = [];
