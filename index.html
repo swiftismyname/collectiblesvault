@@ -462,6 +462,11 @@ body.layout-command .cmd-hbar-fill {
   box-shadow: 0 0 10px currentColor;
   filter: brightness(1.1);
 }
+/* Vertical bars: same neon treatment */
+body.layout-command .cmd-vbar-bar {
+  box-shadow: 0 0 12px currentColor;
+  filter: brightness(1.1);
+}
 
 /* List item hover: purple wash */
 body.layout-command .cmd-list-item:hover {
@@ -684,17 +689,56 @@ body.layout-command .sidebar-item:hover {
   font-size: 11px;
 }
 
-/* Vertical bar chart */
+/* Vertical bar chart — v105 HTML/CSS version. Replaces the SVG version
+   whose preserveAspectRatio="none" stretched labels into unreadable
+   overlapping soup. Flexbox handles arbitrary widths cleanly. */
+.cmd-vbar-wrap {
+  display: flex;
+  align-items: stretch;
+  justify-content: space-around;
+  gap: 6px;
+  padding: 4px 2px 0;
+}
+.cmd-vbar-col {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
 .cmd-vbar-val {
-  font-size: 9px;
-  fill: var(--text);
+  font-size: 10px;
+  color: var(--text);
   font-family: var(--font-mono, monospace);
+  line-height: 1;
+  min-height: 12px;
+}
+.cmd-vbar-track {
+  flex: 1;
+  width: 100%;
+  display: flex;
+  align-items: flex-end;
+  min-width: 0;
+}
+.cmd-vbar-bar {
+  width: 100%;
+  min-height: 3px;
+  border-radius: 3px 3px 0 0;
+  transition: height .4s ease-out;
 }
 .cmd-vbar-lbl {
   font-size: 9px;
-  fill: var(--dim);
+  color: var(--dim);
   text-transform: uppercase;
   letter-spacing: .04em;
+  text-align: center;
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.2;
+  min-height: 11px;
 }
 
 /* Radar */
@@ -1857,7 +1901,7 @@ body.theme-modern-dark select option{
 // Bump this on every deploy so the user can see at a glance which build is
 // running in their browser. Surfaced in three places: the sidebar footer
 // (desktop), the mobile header badge, and the Settings → About section.
-const APP_VERSION = 'v104';
+const APP_VERSION = 'v105';
 const APP_BUILD_DATE = '2026-06-15';
 
 // ── EARLY-HOISTED MODULE STATE ──────────────────────────────────────────────
@@ -4490,29 +4534,26 @@ function _cmdHBar(data, maxLabel) {
 }
 
 // Vertical bar chart — used for record-count by category
-// v104 fix: viewBox MUST be numeric coordinates, not "100%". Previous version
-// used percentages which produced an invalid viewBox that broke the entire
-// dashboard render silently in some browsers. All coords now in a normalized
-// 100-wide × height-tall coordinate space; SVG stretches to fit container.
+// v105: rewritten in HTML/CSS instead of SVG. The v104 SVG version used
+// preserveAspectRatio="none" which stretched text horizontally when the
+// container was wider than the viewBox, producing the overlapping-labels
+// distortion the user reported. HTML/CSS with flexbox handles arbitrary
+// widths gracefully — labels stay their intended size, bars grow/shrink,
+// ellipsis kicks in on overflow.
 function _cmdVBar(data, height) {
-  height = height || 140;
+  height = height || 160;
   if (!data || data.length === 0) return '<div class="cmd-empty">No data</div>';
   const max = data.reduce(function(m, d){ return Math.max(m, d.value); }, 0) || 1;
-  const vbWidth = 100;                          // viewBox width
-  const slot = vbWidth / data.length;           // horizontal slot per bar
-  const bars = data.map(function(d, i){
-    const h = (d.value / max) * (height - 32);
-    const y = height - h - 22;
-    const x = i * slot + slot * 0.15;
-    const bw = slot * 0.70;
+  const cols = data.map(function(d, i){
+    const pct = (d.value / max) * 100;
     const color = d.color || _CMD_COLORS[i % _CMD_COLORS.length];
-    return '<g>'
-      + '<rect x="' + x.toFixed(2) + '" y="' + y.toFixed(2) + '" width="' + bw.toFixed(2) + '" height="' + h.toFixed(2) + '" fill="' + color + '" rx="0.6"/>'
-      + '<text x="' + (x + bw / 2).toFixed(2) + '" y="' + (y - 2).toFixed(2) + '" text-anchor="middle" class="cmd-vbar-val">' + e(d.display || String(d.value)) + '</text>'
-      + '<text x="' + (x + bw / 2).toFixed(2) + '" y="' + (height - 6).toFixed(2) + '" text-anchor="middle" class="cmd-vbar-lbl">' + e(d.label) + '</text>'
-      + '</g>';
+    return '<div class="cmd-vbar-col">'
+      + '<div class="cmd-vbar-val">' + e(d.display || String(d.value)) + '</div>'
+      + '<div class="cmd-vbar-track"><div class="cmd-vbar-bar" style="height:' + pct.toFixed(2) + '%;background:' + color + ';color:' + color + '"></div></div>'
+      + '<div class="cmd-vbar-lbl" title="' + e(d.label) + '">' + e(d.label) + '</div>'
+      + '</div>';
   }).join('');
-  return '<svg viewBox="0 0 ' + vbWidth + ' ' + height + '" preserveAspectRatio="none" class="cmd-vbar" style="width:100%;height:' + height + 'px">' + bars + '</svg>';
+  return '<div class="cmd-vbar-wrap" style="height:' + height + 'px">' + cols + '</div>';
 }
 
 // Area sparkline — smooth-ish line with a gradient fill underneath
@@ -4600,6 +4641,17 @@ function _cmdRadar(data) {
 // took down the entire render and the try/catch in renderDashRouted fell
 // back to Classic, hiding the fact that Command Center was 90% working.
 function renderDashCommand() {
+  // v105: `n` is NOT a global function in the base app — it's used as a
+  // local variable inside various renderers (const n = parseFloat(v)).
+  // When my callbacks reference `n(...)` from closures, they hit a
+  // ReferenceError. Define a local `num` shim here that does the same job
+  // and use it throughout this function's callbacks instead.
+  const num = function(v) {
+    if (v == null) return 0;
+    const parsed = parseFloat(v);
+    return isNaN(parsed) ? 0 : parsed;
+  };
+
   const T = computeTotals();
   const totVal   = T.totVal, totCost = T.totCost, totCount = T.totCount;
   const gain     = totVal - totCost;
@@ -4652,7 +4704,7 @@ function renderDashCommand() {
 
     +   '<div class="cmd-hero-row">'
     +     safe('Portfolio Accumulation', function(){
-            const dated = ALL_ITEMS.filter(function(i){ return i.raw && i.raw._createdAt && n(i.value) > 0; });
+            const dated = ALL_ITEMS.filter(function(i){ return i.raw && i.raw._createdAt && num(i.value) > 0; });
             let historyPoints;
             if (dated.length < 3) {
               historyPoints = [totVal * 0.8, totVal * 0.85, totVal * 0.9, totVal * 0.95, totVal];
@@ -4663,7 +4715,7 @@ function renderDashCommand() {
               historyPoints = [];
               let running = 0;
               for (let i = 0; i < dated.length; i++) {
-                running += n(dated[i].value) || 0;
+                running += num(dated[i].value);
                 if (i % step === 0 || i === dated.length - 1) historyPoints.push(running);
               }
             }
@@ -4680,7 +4732,7 @@ function renderDashCommand() {
             SHEETS.forEach(function(s){
               if (s.key === 'other') return;
               const items = ALL_ITEMS.filter(function(i){ return i.sheet === s.key; });
-              const v = items.reduce(function(sum, it){ return sum + (n(it.value) || 0); }, 0);
+              const v = items.reduce(function(sum, it){ return sum + num(it.value); }, 0);
               if (v > 0) categoryData.push({ label: s.label, value: v, key: s.key });
             });
             categoryData.sort(function(a, b){ return b.value - a.value; });
@@ -4696,13 +4748,13 @@ function renderDashCommand() {
     +     safe('Records by Category', function(){
             const countByCategory = SHEETS.map(function(s){
               const c = ALL_ITEMS.filter(function(i){ return i.sheet === s.key; }).length;
-              return { label: (s.short || String(s.label || '').slice(0, 6)), value: c, key: s.key };
+              return { label: (s.short || String(s.label || '').slice(0, 8)), value: c, key: s.key };
             }).filter(function(d){ return d.value > 0; })
               .sort(function(a, b){ return b.value - a.value; })
               .slice(0, 8);
             return '<div class="cmd-card">'
               + '<div class="cmd-card-head"><div class="cmd-card-title">Records by Category</div></div>'
-              + _cmdVBar(countByCategory, 160)
+              + _cmdVBar(countByCategory, 180)
               + '</div>';
           })
     +     safe('Precious Metals', function(){
@@ -4722,7 +4774,7 @@ function renderDashCommand() {
     +     safe('Category Coverage', function(){
             const countByCategory = SHEETS.map(function(s){
               const c = ALL_ITEMS.filter(function(i){ return i.sheet === s.key; }).length;
-              return { label: (s.short || String(s.label || '').slice(0, 6)), value: c, key: s.key };
+              return { label: (s.short || String(s.label || '').slice(0, 8)), value: c, key: s.key };
             }).filter(function(d){ return d.value > 0; }).sort(function(a, b){ return b.value - a.value; });
             const radarData = countByCategory.slice(0, 6).map(function(d){ return { label: d.label, value: d.value }; });
             return '<div class="cmd-card">'
@@ -4735,7 +4787,7 @@ function renderDashCommand() {
     +   '<div class="cmd-widget-row cmd-widget-row-2">'
     +     safe('Top Holdings', function(){
             const topHoldings = ALL_ITEMS.slice()
-              .sort(function(a, b){ return (n(b.value) || 0) - (n(a.value) || 0); })
+              .sort(function(a, b){ return num(b.value) - num(a.value); })
               .slice(0, 6);
             const rows = topHoldings.map(function(item){
               const idx = ALL_ITEMS.indexOf(item);
@@ -4746,7 +4798,7 @@ function renderDashCommand() {
                 +   '<div class="cmd-list-title">' + e(String(desc).slice(0, 42)) + '</div>'
                 +   '<div class="cmd-list-sub">' + e(sheetLabel) + ' \u00b7 #' + e(item.id) + '</div>'
                 + '</div>'
-                + '<div class="cmd-list-val">' + fmt$(n(item.value) || 0) + '</div>'
+                + '<div class="cmd-list-val">' + fmt$(num(item.value)) + '</div>'
                 + '</div>';
             }).join('');
             return '<div class="cmd-card">'
@@ -4769,7 +4821,7 @@ function renderDashCommand() {
                 +   '<div class="cmd-list-title">' + e(String(desc).slice(0, 42)) + '</div>'
                 +   '<div class="cmd-list-sub">' + e(when) + '</div>'
                 + '</div>'
-                + '<div class="cmd-list-val">' + fmt$(n(item.value) || 0) + '</div>'
+                + '<div class="cmd-list-val">' + fmt$(num(item.value)) + '</div>'
                 + '</div>';
             }).join('') : '<div class="cmd-empty">No recent activity</div>';
             return '<div class="cmd-card">'
