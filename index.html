@@ -1995,7 +1995,7 @@ body.theme-modern-dark select option{
 // Bump this on every deploy so the user can see at a glance which build is
 // running in their browser. Surfaced in three places: the sidebar footer
 // (desktop), the mobile header badge, and the Settings → About section.
-const APP_VERSION = 'v107';
+const APP_VERSION = 'v108';
 const APP_BUILD_DATE = '2026-06-15';
 
 // ── EARLY-HOISTED MODULE STATE ──────────────────────────────────────────────
@@ -11919,17 +11919,40 @@ function renderSettings(){
       const out = syncBuildExport();
       return '<div class="stt">Sync Settings</div>'
         +'<div style="background:var(--bg3);border:1px solid var(--border);border-radius:7px;padding:18px;margin-bottom:24px">'
-        +'<div style="font-size:13px;color:var(--text);line-height:1.6;margin-bottom:14px">'
-        +'Transfer your configuration to another device (mobile ↔ desktop). Includes Supabase credentials, API keys, passcode, and preferences — your collection data syncs automatically through Supabase.'
-        +'</div>'
-        +'<div style="font-size:12px;color:var(--muted);line-height:1.7;margin-bottom:14px;padding:10px 12px;background:var(--bg4);border-radius:5px;border-left:3px solid var(--gold)">'
-        +'<strong style="color:var(--gold)">Security:</strong> The export contains your API keys. Transfer via a private channel — AirDrop, Signal, or direct device-to-device. Do not email or post publicly.'
+
+        // v108: prominent warning at the top explaining WHY backup matters.
+        // Every setting in the app lives in localStorage — clearing browsing
+        // data (Chrome/Safari "Clear browsing data", PWA "Clear storage",
+        // etc.) wipes all of it. Users repeatedly lose their Supabase URL,
+        // AI keys, and preferences without warning. The file download is
+        // the safest recovery vector: save it to Google Drive/OneDrive/email.
+        +'<div style="font-size:12px;color:var(--text);line-height:1.6;margin-bottom:14px;padding:12px 14px;background:rgba(220,80,80,.08);border-radius:5px;border-left:3px solid var(--red)">'
+        +'<div style="font-size:11px;font-weight:600;color:var(--red);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">\u26a0 Backup Recommended</div>'
+        +'App settings live in browser storage. If you clear browsing data or reinstall the PWA, <strong>every setting on this device is lost</strong> \u2014 Supabase URL, AI keys, theme, passcode. Your collection data itself is safe (it lives in Supabase), but you\'d have to reconfigure the app to reach it. Download a settings file below and save it somewhere safe (Google Drive, email to yourself, etc.).'
         +'</div>'
 
+        +'<div style="font-size:13px;color:var(--text);line-height:1.6;margin-bottom:14px">'
+        +'Transfer your configuration between devices (mobile \u2194 desktop) or back it up to protect against browser-storage loss. Includes Supabase credentials, API keys, passcode, and preferences \u2014 your collection data syncs automatically through Supabase.'
+        +'</div>'
+        +'<div style="font-size:12px;color:var(--muted);line-height:1.7;margin-bottom:14px;padding:10px 12px;background:var(--bg4);border-radius:5px;border-left:3px solid var(--gold)">'
+        +'<strong style="color:var(--gold)">Security:</strong> The export contains your API keys. Transfer via a private channel \u2014 AirDrop, Signal, Google Drive private folder, direct device-to-device. Do not email to strangers or post publicly.'
+        +'</div>'
+
+        // v108: PRIMARY row — file download / upload. Recommended path
+        // because it produces an actual file the user can save anywhere.
+        +'<div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--gold);margin-bottom:8px">Recommended \u2014 File Backup</div>'
         +'<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px">'
-        +'<button class="bp" onclick="syncShowSetupLink()">🔗 Setup Link / QR Code</button>'
-        +'<button class="bg" onclick="syncShowExport()">📤 Export JSON</button>'
-        +'<button class="bg" onclick="syncShowImport()">📥 Import JSON</button>'
+        +'<button class="bp" onclick="syncDownloadFile()">\u2b07\ufe0f Download Backup File</button>'
+        +'<button class="bp" onclick="document.getElementById(\'sync-upload-input\').click()">\u2b06\ufe0f Restore from File</button>'
+        +'<input type="file" id="sync-upload-input" accept=".json,application/json" style="display:none" onchange="syncUploadFile(event)">'
+        +'</div>'
+
+        // Secondary row — original in-browser flows for quick device transfers
+        +'<div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin-bottom:8px">Alternate \u2014 Direct Transfer</div>'
+        +'<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px">'
+        +'<button class="bg" onclick="syncShowSetupLink()">\ud83d\udd17 Setup Link / QR Code</button>'
+        +'<button class="bg" onclick="syncShowExport()">\ud83d\udcc4 Copy JSON</button>'
+        +'<button class="bg" onclick="syncShowImport()">\ud83d\udccb Paste JSON</button>'
         +'</div>'
 
         // Setup Link / QR panel (the easy path — hidden by default)
@@ -14508,6 +14531,86 @@ async function syncCopyExport() {
     ta.select(); ta.setSelectionRange(0, 999999);
     if (msg) { msg.textContent = 'Tap the box and copy manually.'; msg.style.color = 'var(--gold)'; }
   }
+}
+
+// ─── File Download / Upload (v108) ────────────────────────────────────
+// The other sync flows (paste JSON, setup link/QR) require the user to
+// hold state somewhere (a note app, another device). File download lets
+// them save an actual file to Downloads/Google Drive/OneDrive so it
+// survives clearing browsing data. This is the recommended path.
+
+/** Trigger a browser download of the current settings as a timestamped
+ *  JSON file. On mobile this goes to Downloads → user can then move to
+ *  Google Drive or email it to themselves. On desktop it goes to the
+ *  default Downloads folder. */
+function syncDownloadFile() {
+  const out = syncBuildExport();
+  const now = new Date();
+  const pad = function(n){ return String(n).padStart(2, '0'); };
+  const stamp = now.getFullYear() + '-' + pad(now.getMonth() + 1) + '-' + pad(now.getDate())
+              + '_' + pad(now.getHours()) + pad(now.getMinutes());
+  const filename = 'collectibles-vault-settings_' + stamp + '.json';
+  try {
+    const blob = new Blob([out.json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function(){
+      URL.revokeObjectURL(url);
+      if (a.parentNode) a.parentNode.removeChild(a);
+    }, 100);
+    if (typeof cvToast === 'function') cvToast('Downloaded ' + filename + ' (' + out.count + ' settings)', 'ok');
+  } catch (e) {
+    console.error('[sync] download failed:', e);
+    alert('Download failed: ' + e.message + '\n\nFalling back to Copy JSON \u2014 use that button and save the text manually.');
+    syncShowExport();
+  }
+}
+
+/** Handle a file picked via the hidden <input type="file">. Reads the file,
+ *  validates it's a Collectibles Vault settings export, and applies each
+ *  known key back to localStorage. Reloads on success. */
+function syncUploadFile(ev) {
+  const file = ev && ev.target && ev.target.files && ev.target.files[0];
+  // Reset the input so picking the same file twice in a row still fires
+  // onchange (browsers otherwise treat identical selections as no-op).
+  if (ev && ev.target) ev.target.value = '';
+  if (!file) return;
+  if (!/\.json$|application\/json/.test(file.name + ' ' + (file.type || ''))) {
+    alert('Please select a .json settings file (the one you downloaded from this app).');
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = function(){
+    let parsed;
+    try { parsed = JSON.parse(reader.result); }
+    catch (e) { alert('That file is not valid JSON.\n\n' + e.message); return; }
+    if (!parsed || parsed._type !== 'cv-settings') {
+      alert('That file does not look like a Collectibles Vault settings export.');
+      return;
+    }
+    const data = parsed.data || {};
+    const keys = Object.keys(data).filter(function(k){ return SYNC_KEYS.indexOf(k) >= 0; });
+    const exported = parsed._exported ? new Date(parsed._exported).toLocaleString() : 'unknown date';
+    if (!confirm('Restore ' + keys.length + ' setting' + (keys.length === 1 ? '' : 's') + ' from backup taken '
+                 + exported + '?\n\nThis will overwrite current settings on this device (Supabase URL, API keys, '
+                 + 'passcode, preferences). Your collection data in Supabase is not affected.')) return;
+    let count = 0;
+    keys.forEach(function(k){
+      if (typeof data[k] !== 'string') return;
+      localStorage.setItem(k, data[k]);
+      count++;
+    });
+    if (typeof cvToast === 'function') cvToast('\u2713 Restored ' + count + ' settings. Reloading\u2026', 'ok');
+    setTimeout(function(){ location.reload(); }, 1200);
+  };
+  reader.onerror = function(){
+    alert('Could not read the file: ' + (reader.error && reader.error.message || 'unknown error'));
+  };
+  reader.readAsText(file);
 }
 
 function syncApplyImport() {
