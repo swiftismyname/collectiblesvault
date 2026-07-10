@@ -1995,7 +1995,7 @@ body.theme-modern-dark select option{
 // Bump this on every deploy so the user can see at a glance which build is
 // running in their browser. Surfaced in three places: the sidebar footer
 // (desktop), the mobile header badge, and the Settings → About section.
-const APP_VERSION = 'v111';
+const APP_VERSION = 'v112';
 const APP_BUILD_DATE = '2026-06-15';
 
 // ── EARLY-HOISTED MODULE STATE ──────────────────────────────────────────────
@@ -7321,7 +7321,7 @@ function showPriceChartingModal(item) {
     + '</div>';
 
   modal.innerHTML = ''
-    + '<div class="ref-modal-panel" style="max-width:640px">'
+    + '<div class="ref-modal-panel" style="background:var(--bg2);border:1px solid var(--gold3);border-radius:10px;width:min(680px,95vw);max-height:90vh;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 16px 48px rgba(0,0,0,.7)">'
     +   '<div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--border)">'
     +     '<div>'
     +       '<h2 style="margin:0;font-family:var(--font-display);font-size:17px;color:#a78bfa">\ud83d\udcc8 PriceCharting Lookup</h2>'
@@ -7329,7 +7329,7 @@ function showPriceChartingModal(item) {
     +     '</div>'
     +     '<button onclick="document.getElementById(\'pc-modal\').remove()" style="background:transparent;border:1px solid var(--border);color:var(--muted);padding:6px 14px;border-radius:4px;cursor:pointer;font-size:12px">Close</button>'
     +   '</div>'
-    +   '<div style="padding:16px 20px;max-height:70vh;overflow-y:auto">'
+    +   '<div style="padding:16px 20px;overflow-y:auto;flex:1;min-height:0">'
     +     (hasToken ? '' : tokenSetupHtml)
     +     '<div style="display:flex;gap:8px;margin-bottom:12px">'
     +       '<input type="text" id="pc-search-input" value="' + e(defaultQuery) + '" placeholder="e.g. 1921 Morgan Dollar, charizard #4, Batman 423" '
@@ -8005,14 +8005,16 @@ function showApmexMatcher() {
         costHtml = '<span style="font-size:10px;color:var(--muted);white-space:nowrap">\u2014 \u2192 $' + g.perUnit.toFixed(2) + '</span>';
         preCheck = m.proposed && (m.tier === 'exact' || m.tier === 'strong');
       }
-      return '<label style="display:flex;align-items:center;gap:10px;padding:7px 10px;border:1px solid var(--border);border-radius:5px;margin-bottom:4px;cursor:' + (disabled ? 'default' : 'pointer') + ';background:var(--bg3)' + (disabled ? ';opacity:.65' : '') + '">'
-        + '<input type="checkbox" class="apmex-check" data-g="' + gi + '" data-m="' + mi + '"' + (preCheck ? ' checked' : '') + (disabled ? ' disabled' : '') + '>'
-        + '<div style="flex:1;min-width:0">'
-        +   '<div style="font-size:12px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">#' + e(cn(m.item.id)) + ' \u00b7 ' + e(String(m.item.desc || (m.item.raw && m.item.raw.description) || m.item.sheet).slice(0, 48)) + '</div>'
-        +   '<div style="font-size:10px;color:var(--dim)">' + e((SHEET_MAP && SHEET_MAP[m.item.sheet]) ? SHEET_MAP[m.item.sheet].label : m.item.sheet) + (m.item.raw && m.item.raw.grade ? ' \u00b7 ' + e(m.item.raw.grade) : '') + '</div>'
+      return '<label style="display:flex;align-items:center;gap:10px;padding:8px 12px;border:1px solid var(--border);border-radius:5px;margin-bottom:4px;cursor:' + (disabled ? 'default' : 'pointer') + ';background:var(--bg3)' + (disabled ? ';opacity:.65' : '') + '">'
+        + '<input type="checkbox" class="apmex-check" data-g="' + gi + '" data-m="' + mi + '"' + (preCheck ? ' checked' : '') + (disabled ? ' disabled' : '') + ' style="flex-shrink:0">'
+        + '<div style="flex:1;min-width:0;overflow:hidden">'
+        +   '<div style="font-size:12px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">#' + e(cn(m.item.id)) + ' \u00b7 ' + e(String(m.item.desc || (m.item.raw && m.item.raw.description) || m.item.sheet).slice(0, 70)) + '</div>'
+        +   '<div style="font-size:10px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + e((SHEET_MAP && SHEET_MAP[m.item.sheet]) ? SHEET_MAP[m.item.sheet].label : m.item.sheet) + (m.item.raw && m.item.raw.grade ? ' \u00b7 ' + e(m.item.raw.grade) : '') + '</div>'
         + '</div>'
-        + tierBadge(m.tier)
-        + costHtml
+        + '<div style="display:flex;align-items:center;gap:8px;flex-shrink:0;white-space:nowrap">'
+        +   tierBadge(m.tier)
+        +   costHtml
+        + '</div>'
         + '</label>';
     }).join('');
     return '<div style="border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-bottom:10px">'
@@ -8039,7 +8041,7 @@ function showApmexMatcher() {
     + '</div>';
 
   modal.innerHTML = ''
-    + '<div class="ref-modal-panel" style="max-width:720px">'
+    + '<div class="ref-modal-panel" style="background:var(--bg2);border:1px solid var(--gold3);border-radius:10px;width:min(960px,95vw);max-height:90vh;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 16px 48px rgba(0,0,0,.7)">'
     +   '<div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--border)">'
     +     '<div>'
     +       '<h2 style="margin:0;font-family:var(--font-display);font-size:17px;color:var(--gold)">\ud83e\uddfe APMEX Cost Matcher</h2>'
@@ -8050,7 +8052,7 @@ function showApmexMatcher() {
     +       '<button onclick="document.getElementById(\'apmex-modal\').remove()" style="background:transparent;border:1px solid var(--border);color:var(--muted);padding:6px 14px;border-radius:4px;cursor:pointer;font-size:12px">Close</button>'
     +     '</div>'
     +   '</div>'
-    +   '<div style="padding:14px 20px;max-height:62vh;overflow-y:auto">'
+    +   '<div style="padding:14px 20px;overflow-y:auto;flex:1;min-height:0">'
     +     summaryHtml
     +     '<div style="font-size:11px;color:var(--muted);line-height:1.6;margin-bottom:12px;padding:10px 12px;background:var(--bg4);border-radius:5px;border-left:3px solid var(--gold)">'
     +       'Each row shows what applying would do: <span style="color:var(--muted)">\u2014 \u2192 $X</span> sets an empty cost \u00b7 '
