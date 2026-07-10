@@ -1995,7 +1995,7 @@ body.theme-modern-dark select option{
 // Bump this on every deploy so the user can see at a glance which build is
 // running in their browser. Surfaced in three places: the sidebar footer
 // (desktop), the mobile header badge, and the Settings → About section.
-const APP_VERSION = 'v112';
+const APP_VERSION = 'v113';
 const APP_BUILD_DATE = '2026-06-15';
 
 // ── EARLY-HOISTED MODULE STATE ──────────────────────────────────────────────
@@ -7992,39 +7992,64 @@ function showApmexMatcher() {
     return '<span style="font-size:9px;background:' + c + '22;color:' + c + ';border:1px solid ' + c + '55;padding:1px 6px;border-radius:3px;text-transform:uppercase;letter-spacing:.05em">' + tier + '</span>';
   };
 
-  const groupsHtml = result.groups.map(function(g, gi){
-    const rows = g.matches.map(function(m, mi){
-      // Cost transition display: what applying would DO to this record
-      let costHtml, disabled = false, preCheck = false;
-      if (m.costStatus === 'same') {
-        costHtml = '<span style="font-size:10px;color:#22c55e;white-space:nowrap" title="Record cost already equals the APMEX per-unit price — nothing to change">\u2713 already $' + m.curCost.toFixed(2) + '</span>';
-        disabled = true;   // nothing to write — excluded from apply
-      } else if (m.costStatus === 'diff') {
-        costHtml = '<span style="font-size:10px;color:var(--red);white-space:nowrap" title="Record has a DIFFERENT cost — checking this would overwrite it">$' + m.curCost.toFixed(2) + ' \u2192 $' + g.perUnit.toFixed(2) + '</span>';
-      } else {
-        costHtml = '<span style="font-size:10px;color:var(--muted);white-space:nowrap">\u2014 \u2192 $' + g.perUnit.toFixed(2) + '</span>';
-        preCheck = m.proposed && (m.tier === 'exact' || m.tier === 'strong');
-      }
-      return '<label style="display:flex;align-items:center;gap:10px;padding:8px 12px;border:1px solid var(--border);border-radius:5px;margin-bottom:4px;cursor:' + (disabled ? 'default' : 'pointer') + ';background:var(--bg3)' + (disabled ? ';opacity:.65' : '') + '">'
-        + '<input type="checkbox" class="apmex-check" data-g="' + gi + '" data-m="' + mi + '"' + (preCheck ? ' checked' : '') + (disabled ? ' disabled' : '') + ' style="flex-shrink:0">'
-        + '<div style="flex:1;min-width:0;overflow:hidden">'
-        +   '<div style="font-size:12px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">#' + e(cn(m.item.id)) + ' \u00b7 ' + e(String(m.item.desc || (m.item.raw && m.item.raw.description) || m.item.sheet).slice(0, 70)) + '</div>'
-        +   '<div style="font-size:10px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + e((SHEET_MAP && SHEET_MAP[m.item.sheet]) ? SHEET_MAP[m.item.sheet].label : m.item.sheet) + (m.item.raw && m.item.raw.grade ? ' \u00b7 ' + e(m.item.raw.grade) : '') + '</div>'
-        + '</div>'
-        + '<div style="display:flex;align-items:center;gap:8px;flex-shrink:0;white-space:nowrap">'
-        +   tierBadge(m.tier)
-        +   costHtml
-        + '</div>'
-        + '</label>';
-    }).join('');
-    return '<div style="border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-bottom:10px">'
-      + '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;gap:10px">'
-      +   '<div style="font-size:12px;color:var(--gold);flex:1;min-width:0">' + e(g.name) + '</div>'
-      +   '<div style="font-size:11px;color:var(--text);font-family:DM Mono,monospace;white-space:nowrap">$' + g.perUnit.toFixed(2) + '/ea' + (g.qty > 1 ? ' \u00d7' + g.qty : '') + '</div>'
-      + '</div>'
-      + rows
-      + '</div>';
-  }).join('');
+  // v113: rendered as ONE fixed-layout table so every column aligns globally
+  // and nothing can overflow horizontally. Each APMEX line renders as a gold
+  // group-header row (name + per-unit price), followed by its candidate
+  // record rows. table-layout:fixed + per-cell ellipsis = always legible.
+  const _td = 'padding:7px 8px;border-bottom:1px solid var(--border);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle';
+  const groupsHtml =
+      '<table style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:12px">'
+    + '<colgroup>'
+    +   '<col style="width:32px">'   // checkbox
+    +   '<col style="width:72px">'   // record #
+    +   '<col>'                      // description (takes remaining space)
+    +   '<col style="width:130px">'  // category
+    +   '<col style="width:72px">'   // grade
+    +   '<col style="width:78px">'   // tier
+    +   '<col style="width:150px">'  // cost action
+    + '</colgroup>'
+    + '<thead><tr>'
+    +   '<th style="' + _td + ';font-size:9px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em;text-align:left"></th>'
+    +   '<th style="' + _td + ';font-size:9px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em;text-align:left">Rec #</th>'
+    +   '<th style="' + _td + ';font-size:9px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em;text-align:left">Your Record</th>'
+    +   '<th style="' + _td + ';font-size:9px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em;text-align:left">Category</th>'
+    +   '<th style="' + _td + ';font-size:9px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em;text-align:left">Grade</th>'
+    +   '<th style="' + _td + ';font-size:9px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em;text-align:left">Match</th>'
+    +   '<th style="' + _td + ';font-size:9px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em;text-align:right">Cost Action</th>'
+    + '</tr></thead><tbody>'
+    + result.groups.map(function(g, gi){
+        const headerRow = '<tr>'
+          + '<td colspan="5" style="padding:12px 8px 6px;border-bottom:1px solid var(--gold3);color:var(--gold);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + e(g.name) + '">' + e(g.name) + '</td>'
+          + '<td colspan="2" style="padding:12px 8px 6px;border-bottom:1px solid var(--gold3);color:var(--text);font-family:DM Mono,monospace;font-size:11px;text-align:right;white-space:nowrap">$' + g.perUnit.toFixed(2) + '/ea' + (g.qty > 1 ? ' \u00d7' + g.qty : '') + '</td>'
+          + '</tr>';
+        const rows = g.matches.map(function(m, mi){
+          let costHtml, disabled = false, preCheck = false;
+          if (m.costStatus === 'same') {
+            costHtml = '<span style="font-size:11px;color:#22c55e" title="Cost already equals APMEX \u2014 nothing to change">\u2713 already $' + m.curCost.toFixed(2) + '</span>';
+            disabled = true;
+          } else if (m.costStatus === 'diff') {
+            costHtml = '<span style="font-size:11px;color:var(--red)" title="Checking this OVERWRITES your existing cost">$' + m.curCost.toFixed(2) + ' \u2192 $' + g.perUnit.toFixed(2) + '</span>';
+          } else {
+            costHtml = '<span style="font-size:11px;color:var(--muted)">\u2014 \u2192 $' + g.perUnit.toFixed(2) + '</span>';
+            preCheck = m.proposed && (m.tier === 'exact' || m.tier === 'strong');
+          }
+          const desc = String(m.item.desc || (m.item.raw && m.item.raw.description) || m.item.sheet);
+          const sheetLabel = (SHEET_MAP && SHEET_MAP[m.item.sheet]) ? SHEET_MAP[m.item.sheet].label : m.item.sheet;
+          const rowToggle = disabled ? '' :
+            ' onclick="var c=this.querySelector(\'.apmex-check\');if(c&&event.target!==c){c.checked=!c.checked;c.dispatchEvent(new Event(\'change\'));}" onmouseover="this.style.background=\'var(--bg4)\'" onmouseout="this.style.background=\'transparent\'"';
+          return '<tr style="cursor:' + (disabled ? 'default' : 'pointer') + (disabled ? ';opacity:.55' : '') + '"' + rowToggle + '>'
+            + '<td style="' + _td + ';text-align:center"><input type="checkbox" class="apmex-check" data-g="' + gi + '" data-m="' + mi + '"' + (preCheck ? ' checked' : '') + (disabled ? ' disabled' : '') + '></td>'
+            + '<td style="' + _td + ';color:var(--dim);font-family:DM Mono,monospace;font-size:11px">' + e(cn(m.item.id)) + '</td>'
+            + '<td style="' + _td + ';color:var(--text)" title="' + e(desc) + '">' + e(desc) + '</td>'
+            + '<td style="' + _td + ';color:var(--dim);font-size:11px">' + e(sheetLabel) + '</td>'
+            + '<td style="' + _td + ';color:var(--dim);font-size:11px">' + e((m.item.raw && m.item.raw.grade) || '\u2014') + '</td>'
+            + '<td style="' + _td + '">' + tierBadge(m.tier) + '</td>'
+            + '<td style="' + _td + ';text-align:right">' + costHtml + '</td>'
+            + '</tr>';
+        }).join('');
+        return headerRow + rows;
+      }).join('')
+    + '</tbody></table>';
 
   const unmatchedHtml = result.unmatched.length === 0 ? '' :
       '<details style="margin-top:14px"><summary style="font-size:11px;color:var(--dim);cursor:pointer">' + result.unmatched.length + ' APMEX lines with no confident match (generic bullion, no year, or nothing in your records) \u2014 handle manually if needed</summary>'
