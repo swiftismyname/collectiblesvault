@@ -1995,7 +1995,7 @@ body.theme-modern-dark select option{
 // Bump this on every deploy so the user can see at a glance which build is
 // running in their browser. Surfaced in three places: the sidebar footer
 // (desktop), the mobile header badge, and the Settings → About section.
-const APP_VERSION = 'v108';
+const APP_VERSION = 'v111';
 const APP_BUILD_DATE = '2026-06-15';
 
 // ── EARLY-HOISTED MODULE STATE ──────────────────────────────────────────────
@@ -2108,6 +2108,7 @@ const SYNC_KEYS = [
   'cv_ai_fallback_provider',  // legacy single-fallback (v77+)
   'cv_ai_fallback_model',     // legacy single-fallback (v77+)
   'cv_ai_fallback_chain',     // v101 — JSON array, supersedes legacy keys if set
+  'cv_pricecharting_token',   // v109 — PriceCharting API token
   'cv_sheet_overrides'
 ];
 
@@ -6322,6 +6323,25 @@ function showDetail(item){
       ebayBtn.onclick = () => lookupEbay(item);
       actions.appendChild(ebayBtn);
     }
+    // PriceCharting button (v109) — market-price lookup across coins, currency,
+    // sports cards, comics, video games. Shown on every sheet since the app is
+    // expanding beyond coins; PriceCharting covers most collectible categories.
+    // Requires an API token (paid PriceCharting subscription) configured in
+    // Settings → PriceCharting. Without a token the button opens the modal with
+    // setup instructions instead of failing silently.
+    {
+      const pcBtn = document.createElement('button');
+      const _donePC = !!_tpgWasApplied(item,'pricecharting');
+      pcBtn.className = 'lookup-btn' + (_donePC ? ' tpg-done' : '');
+      pcBtn.id = 'pricecharting-btn-' + cn(item.id);
+      pcBtn.textContent = '📈 PriceCharting';
+      pcBtn.title = _donePC
+        ? 'PriceCharting applied — click to re-run and update'
+        : 'Look up market prices on PriceCharting (coins, cards, comics, games)';
+      pcBtn.style.cssText = 'background:rgba(139,92,246,.12);border-color:rgba(139,92,246,.35);color:#a78bfa';
+      pcBtn.onclick = () => lookupPriceCharting(item);
+      actions.appendChild(pcBtn);
+    }
     // Paper-money-only reference buttons — pure browse links, no data capture.
     // Shown for usNotes / confederate / obsolete / fractional / foreignNotes.
     const paperSheets = ['usNotes','confederate','obsolete','fractional','foreignNotes'];
@@ -6430,7 +6450,8 @@ const _TPG_KEY_MAP = {
   'ICG': 'icg',
   'Numista': 'numista',
   'Coin Reference': 'coinref',
-  'eBay': 'ebay'
+  'eBay': 'ebay',
+  'PriceCharting': 'pricecharting'
 };
 
 // Returns truthy (ISO timestamp string) if the given TPG lookup has been applied
@@ -7145,6 +7166,1007 @@ function _parsePCGSSerial(serial) {
 }
 
 /** Entry point triggered by the 🏆 button. */
+// #region [PRICECHARTING]
+// ═══════════════════════════════════════════════════════════════════════
+// PRICECHARTING API INTEGRATION (v109)
+// ═══════════════════════════════════════════════════════════════════════
+// Market-price lookups via pricecharting.com's Prices API. Coverage spans
+// coins, paper currency (via search), sports cards, comics, video games,
+// Funko, LEGO — a good complement to the coin-specific PCGS/NGC lookups
+// as the vault expands into other collectible categories.
+//
+// API facts (per https://www.pricecharting.com/api-documentation):
+//   • Auth: 40-char token as `t` query param. Requires PAID subscription.
+//   • CORS: liberal headers — direct browser calls work, no proxy needed.
+//   • GET /api/products?t=..&q=..   → up to 20 matches {id, product-name, console-name}
+//   • GET /api/product?t=..&id=..   → full price tiers for one product
+//   • All prices are INTEGER PENNIES ($17.32 → 1732).
+//   • Rate limit: 1 call/second. Enforced client-side below.
+//
+// Price-key → grade mapping FOR COINS (differs by category; see docs):
+//   loose-price        → Ungraded
+//   cib-price          → VF (20-35)
+//   new-price          → AU (50-58)
+//   graded-price       → MS62
+//   box-only-price     → MS64
+//   manual-only-price  → MS66
+// For cards: loose=Ungraded, cib=Grade 7-7.5, new=Grade 8-8.5, graded=Grade 9,
+//   box-only=Grade 9.5, manual-only=PSA 10, bgs-10=BGS 10, condition-17=CGC 10.
+// The modal shows the right labels based on the record's sheet.
+// ═══════════════════════════════════════════════════════════════════════
+
+function pcGetToken() { return localStorage.getItem('cv_pricecharting_token') || ''; }
+function pcSetToken(t) {
+  const v = String(t || '').trim();
+  if (v) localStorage.setItem('cv_pricecharting_token', v);
+  else localStorage.removeItem('cv_pricecharting_token');
+}
+
+// ── Rate limiter: 1 call/second per API rules ───────────────────────
+let _PC_LAST_CALL = 0;
+async function _pcThrottle() {
+  const now = Date.now();
+  const wait = Math.max(0, 1050 - (now - _PC_LAST_CALL));  // 1.05s cushion
+  if (wait > 0) await new Promise(function(r){ setTimeout(r, wait); });
+  _PC_LAST_CALL = Date.now();
+}
+
+async function _pcFetch(path, params) {
+  const token = pcGetToken();
+  if (!token) throw new Error('NO_TOKEN');
+  await _pcThrottle();
+  const qs = new URLSearchParams(Object.assign({ t: token }, params)).toString();
+  const url = 'https://www.pricecharting.com' + path + '?' + qs;
+  const resp = await fetch(url);
+  const data = await resp.json();
+  if (data.status !== 'success') {
+    throw new Error(data['error-message'] || ('PriceCharting error (HTTP ' + resp.status + ')'));
+  }
+  return data;
+}
+
+/** Search up to 20 products by free-text query. */
+async function pcSearchProducts(query) {
+  const data = await _pcFetch('/api/products', { q: query });
+  return data.products || [];
+}
+
+/** Full price detail for one product by PriceCharting ID. */
+async function pcGetProduct(id) {
+  return _pcFetch('/api/product', { id: String(id) });
+}
+
+// Convert integer pennies to display dollars. Null/undefined/0 → null.
+function _pcCents(v) {
+  const p = parseInt(v, 10);
+  if (isNaN(p) || p <= 0) return null;
+  return p / 100;
+}
+
+// Price-tier labels vary by product category. Coins get numismatic grades;
+// cards get card grades; everything else gets the video-game defaults.
+function _pcTierLabels(consoleName, sheet) {
+  const cn = String(consoleName || '').toLowerCase();
+  const coinSheets = ['gradedUS','rawUS','gradedSilver','rawSilver','gradedForeign','rawForeign','ancient'];
+  const isCoin = cn.indexOf('coin') >= 0 || cn.indexOf('penny') >= 0 || cn.indexOf('nickel') >= 0
+              || cn.indexOf('dime') >= 0 || cn.indexOf('quarter') >= 0 || cn.indexOf('dollar') >= 0
+              || cn.indexOf('eagle') >= 0 || coinSheets.indexOf(sheet) >= 0;
+  const isCard = cn.indexOf('card') >= 0;
+  const isComic = cn.indexOf('comic') >= 0;
+  if (isCoin) return {
+    'loose-price': 'Ungraded', 'cib-price': 'VF (20\u201335)', 'new-price': 'AU (50\u201358)',
+    'graded-price': 'MS62', 'box-only-price': 'MS64', 'manual-only-price': 'MS66'
+  };
+  if (isCard) return {
+    'loose-price': 'Ungraded', 'cib-price': 'Grade 7\u20137.5', 'new-price': 'Grade 8\u20138.5',
+    'graded-price': 'Grade 9', 'box-only-price': 'Grade 9.5', 'manual-only-price': 'PSA 10',
+    'bgs-10-price': 'BGS 10', 'condition-17-price': 'CGC 10', 'condition-18-price': 'SGC 10'
+  };
+  if (isComic) return {
+    'loose-price': 'Ungraded', 'cib-price': '4.0\u20134.5', 'new-price': '6.0\u20136.5',
+    'graded-price': '8.0\u20138.5', 'box-only-price': '9.2', 'manual-only-price': '9.8',
+    'condition-17-price': '9.4', 'bgs-10-price': '10.0'
+  };
+  return {
+    'loose-price': 'Loose', 'cib-price': 'Complete (CIB)', 'new-price': 'New / Sealed',
+    'graded-price': 'Graded', 'box-only-price': 'Box Only', 'manual-only-price': 'Manual Only'
+  };
+}
+
+/** Build a sensible default search query from the record's fields. */
+function _pcDefaultQuery(item) {
+  const raw = item.raw || {};
+  const bits = [];
+  const year = String(raw.series || raw.year || '').replace(/\.0$/, '').trim();
+  if (year && /^\d{4}$/.test(year)) bits.push(year);
+  const type = String(raw.type || '').trim();
+  if (type) bits.push(type);
+  if (!type) {
+    const desc = String(item.desc || raw.description || '').trim();
+    if (desc) bits.push(desc.slice(0, 60));
+  }
+  return bits.join(' ').trim() || String(item.desc || '').slice(0, 60);
+}
+
+function lookupPriceCharting(item) { showPriceChartingModal(item); }
+
+/** Main modal: token setup (if missing) OR search → results → price tiers → apply. */
+function showPriceChartingModal(item) {
+  const existing = document.getElementById('pc-modal');
+  if (existing) existing.remove();
+
+  const modal = document.createElement('div');
+  modal.id = 'pc-modal';
+  modal.className = 'ref-modal';
+  modal.onclick = function(ev){ if (ev.target === modal) modal.remove(); };
+  document.body.appendChild(modal);
+
+  const hasToken = !!pcGetToken();
+  const defaultQuery = _pcDefaultQuery(item);
+
+  // ── Token setup panel (shown when no token saved) ─────────────────
+  const tokenSetupHtml = ''
+    + '<div style="background:rgba(139,92,246,.08);border:1px solid rgba(139,92,246,.3);border-radius:6px;padding:14px;margin-bottom:14px">'
+    +   '<div style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:#a78bfa;margin-bottom:8px">API Token Required</div>'
+    +   '<div style="font-size:12px;color:var(--muted);line-height:1.6;margin-bottom:10px">'
+    +     'PriceCharting\u2019s API requires a <strong>paid subscription</strong> ($6/mo Legendary tier or higher). '
+    +     'Get your 40-character token: <a href="https://www.pricecharting.com/subscriptions" target="_blank" rel="noopener" style="color:#a78bfa">pricecharting.com/subscriptions</a> \u2192 "API/Download" button.'
+    +   '</div>'
+    +   '<div style="display:flex;gap:8px">'
+    +     '<input type="password" id="pc-token-input" placeholder="Paste your 40-character API token" '
+    +       'style="flex:1;padding:9px 12px;background:var(--bg4);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:12px;font-family:DM Mono,monospace">'
+    +     '<button class="bp" onclick="_pcSaveToken()" style="white-space:nowrap">Save Token</button>'
+    +   '</div>'
+    +   '<div id="pc-token-msg" style="font-size:11px;color:var(--dim);margin-top:6px;min-height:13px"></div>'
+    + '</div>';
+
+  modal.innerHTML = ''
+    + '<div class="ref-modal-panel" style="max-width:640px">'
+    +   '<div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--border)">'
+    +     '<div>'
+    +       '<h2 style="margin:0;font-family:var(--font-display);font-size:17px;color:#a78bfa">\ud83d\udcc8 PriceCharting Lookup</h2>'
+    +       '<div style="font-size:11px;color:var(--muted);margin-top:2px">Market prices for coins, cards, comics, games \u2014 record #' + e(cn(item.id)) + '</div>'
+    +     '</div>'
+    +     '<button onclick="document.getElementById(\'pc-modal\').remove()" style="background:transparent;border:1px solid var(--border);color:var(--muted);padding:6px 14px;border-radius:4px;cursor:pointer;font-size:12px">Close</button>'
+    +   '</div>'
+    +   '<div style="padding:16px 20px;max-height:70vh;overflow-y:auto">'
+    +     (hasToken ? '' : tokenSetupHtml)
+    +     '<div style="display:flex;gap:8px;margin-bottom:12px">'
+    +       '<input type="text" id="pc-search-input" value="' + e(defaultQuery) + '" placeholder="e.g. 1921 Morgan Dollar, charizard #4, Batman 423" '
+    +         'style="flex:1;padding:10px 12px;background:var(--bg3);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:13px" '
+    +         'onkeydown="if(event.key===\'Enter\')_pcRunSearch()">'
+    +       '<button class="bp" onclick="_pcRunSearch()" ' + (hasToken ? '' : 'disabled title="Save your API token first"') + '>Search</button>'
+    +     '</div>'
+    +     '<div id="pc-results" style="min-height:60px"></div>'
+    +   '</div>'
+    + '</div>';
+
+  // Stash the item so the apply handler can reach it
+  window._pcCurrentItem = item;
+
+  // Auto-run search if token exists and we have a plausible query
+  if (hasToken && defaultQuery) {
+    setTimeout(function(){ _pcRunSearch(); }, 50);
+  }
+}
+
+function _pcSaveToken() {
+  const input = document.getElementById('pc-token-input');
+  const msg = document.getElementById('pc-token-msg');
+  const val = (input && input.value || '').trim();
+  if (val.length !== 40) {
+    if (msg) { msg.textContent = 'Token should be exactly 40 characters (got ' + val.length + ').'; msg.style.color = 'var(--red)'; }
+    return;
+  }
+  pcSetToken(val);
+  if (msg) { msg.textContent = '\u2713 Token saved. Re-opening\u2026'; msg.style.color = 'var(--green)'; }
+  // Re-open the modal so the search UI unlocks
+  setTimeout(function(){
+    if (window._pcCurrentItem) showPriceChartingModal(window._pcCurrentItem);
+  }, 700);
+}
+
+async function _pcRunSearch() {
+  const input = document.getElementById('pc-search-input');
+  const box = document.getElementById('pc-results');
+  const q = (input && input.value || '').trim();
+  if (!q || !box) return;
+  box.innerHTML = '<div style="padding:20px;text-align:center;color:var(--dim);font-size:12px">Searching PriceCharting\u2026</div>';
+  try {
+    const products = await pcSearchProducts(q);
+    if (products.length === 0) {
+      box.innerHTML = '<div style="padding:20px;text-align:center;color:var(--dim);font-size:12px;font-style:italic">No matches. Try different keywords \u2014 e.g. add the year, denomination, or category.</div>';
+      return;
+    }
+    box.innerHTML = ''
+      + '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin-bottom:8px">' + products.length + ' match' + (products.length === 1 ? '' : 'es') + ' \u2014 tap one for prices</div>'
+      + products.map(function(p){
+          return '<div onclick="_pcLoadProduct(\'' + e(String(p.id)) + '\')" '
+            + 'style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border:1px solid var(--border);border-radius:6px;margin-bottom:6px;cursor:pointer;transition:border-color .12s" '
+            + 'onmouseover="this.style.borderColor=\'#a78bfa\'" onmouseout="this.style.borderColor=\'var(--border)\'">'
+            +   '<div>'
+            +     '<div style="font-size:13px;color:var(--text)">' + e(p['product-name'] || '?') + '</div>'
+            +     '<div style="font-size:11px;color:var(--dim)">' + e(p['console-name'] || '') + '</div>'
+            +   '</div>'
+            +   '<div style="font-size:11px;color:#a78bfa">prices \u2192</div>'
+            + '</div>';
+        }).join('');
+  } catch (err) {
+    if (err.message === 'NO_TOKEN') {
+      box.innerHTML = '<div style="padding:16px;color:var(--red);font-size:12px">No API token configured. Save your token above first.</div>';
+    } else {
+      box.innerHTML = '<div style="padding:16px;color:var(--red);font-size:12px">Search failed: ' + e(err.message) + '</div>';
+    }
+  }
+}
+
+async function _pcLoadProduct(id) {
+  const box = document.getElementById('pc-results');
+  if (!box) return;
+  box.innerHTML = '<div style="padding:20px;text-align:center;color:var(--dim);font-size:12px">Loading prices\u2026</div>';
+  try {
+    const p = await pcGetProduct(id);
+    const item = window._pcCurrentItem;
+    const labels = _pcTierLabels(p['console-name'], item && item.sheet);
+
+    // Collect available tiers in a stable display order
+    const tierOrder = ['loose-price','cib-price','new-price','graded-price','box-only-price','manual-only-price','bgs-10-price','condition-17-price','condition-18-price'];
+    const tiers = [];
+    tierOrder.forEach(function(k){
+      const dollars = _pcCents(p[k]);
+      if (dollars != null && labels[k]) tiers.push({ key: k, label: labels[k], value: dollars });
+    });
+
+    const meta = [];
+    if (p['release-date']) meta.push('Released ' + e(p['release-date']));
+    if (p['sales-volume']) meta.push(e(String(p['sales-volume'])) + ' sales/yr');
+    if (p['genre']) meta.push(e(p['genre']));
+
+    box.innerHTML = ''
+      + '<div style="background:var(--bg3);border:1px solid rgba(139,92,246,.3);border-radius:8px;padding:14px;margin-bottom:12px">'
+      +   '<div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:4px">'
+      +     '<div>'
+      +       '<div style="font-size:14px;color:var(--text);font-weight:600">' + e(p['product-name'] || '?') + '</div>'
+      +       '<div style="font-size:11px;color:var(--dim)">' + e(p['console-name'] || '') + (meta.length ? ' \u00b7 ' + meta.join(' \u00b7 ') : '') + '</div>'
+      +     '</div>'
+      +     '<a href="https://www.pricecharting.com/game/' + encodeURIComponent(String(p.id)) + '" target="_blank" rel="noopener" style="font-size:11px;color:#a78bfa;white-space:nowrap">open site \u2197</a>'
+      +   '</div>'
+      + '</div>'
+      + (tiers.length === 0
+          ? '<div style="padding:16px;color:var(--dim);font-size:12px;font-style:italic">No price data available for this product.</div>'
+          : '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin-bottom:8px">Price tiers \u2014 tap one to use as record value</div>'
+            + tiers.map(function(t){
+                return '<div onclick="_pcApplyPrice(\'' + t.key + '\', ' + t.value + ', \'' + e(String(p.id)) + '\', \'' + e(String(p['product-name'] || '').replace(/'/g, '')) + '\')" '
+                  + 'style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border:1px solid var(--border);border-radius:6px;margin-bottom:6px;cursor:pointer;transition:all .12s" '
+                  + 'onmouseover="this.style.borderColor=\'#a78bfa\';this.style.background=\'rgba(139,92,246,.06)\'" '
+                  + 'onmouseout="this.style.borderColor=\'var(--border)\';this.style.background=\'transparent\'">'
+                  +   '<div style="font-size:12px;color:var(--muted)">' + e(t.label) + '</div>'
+                  +   '<div style="font-size:14px;color:#a78bfa;font-family:DM Mono,monospace;font-weight:600">$' + t.value.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2}) + '</div>'
+                  + '</div>';
+              }).join('')
+            + '<div style="font-size:10px;color:var(--dim);margin-top:10px;font-style:italic;line-height:1.5">Tapping a tier writes it to the record\u2019s Value field and stamps the PriceCharting product ID + tier for provenance. Prices reflect recent completed sales on eBay and other marketplaces, updated daily by PriceCharting.</div>')
+      + '<div style="margin-top:10px"><button class="bg" onclick="_pcRunSearch()" style="font-size:11px">\u2190 Back to results</button></div>';
+  } catch (err) {
+    box.innerHTML = '<div style="padding:16px;color:var(--red);font-size:12px">Failed to load product: ' + e(err.message) + '</div>';
+  }
+}
+
+async function _pcApplyPrice(tierKey, dollars, productId, productName) {
+  const item = window._pcCurrentItem;
+  if (!item) return;
+  const labels = _pcTierLabels('', item.sheet);
+  const tierLabel = labels[tierKey] || tierKey;
+  if (!confirm('Set record value to $' + dollars.toLocaleString(undefined, {minimumFractionDigits:2}) + '?\n\nSource: PriceCharting \u2014 ' + productName + ' (' + tierLabel + ' tier)')) return;
+
+  const updates = {
+    value: dollars,
+    pricechartingId: String(productId),
+    pricechartingTier: tierLabel,
+    pricechartingDate: new Date().toISOString().split('T')[0]
+  };
+  const modal = document.getElementById('pc-modal');
+  if (modal) modal.remove();
+  await _tpgApply(item, updates, 'PriceCharting');
+}
+// #endregion [PRICECHARTING]
+
+// #region [APMEX-IMPORT]
+// ═══════════════════════════════════════════════════════════════════════
+// APMEX COST MATCHER (v110)
+// ═══════════════════════════════════════════════════════════════════════
+// One-time reconciliation tool. Dataset below is transcribed from the
+// user's "APMEX Holdings As Of 2025-02-06" PDF. Acquisition costs in that
+// export are trusted; item descriptions are NOT (user's own assessment).
+// So the matcher is deliberately conservative:
+//
+//   REQUIRED to propose a match: 4-digit year agreement + type-keyword
+//     agreement (Morgan, Silver Eagle, Kennedy, Roosevelt Dime, etc.)
+//   HARD DISQUALIFIER: both sides specify a mint mark and they differ
+//     (1885-O never matches 1885-S)
+//   CONFIDENCE TIERS:
+//     exact    — year + type + mint + grade all agree (pre-checked)
+//     strong   — year + type + (mint or grade) agree   (pre-checked)
+//     possible — year + type only                      (unchecked)
+//   NEVER auto-applied: user reviews every pair; Apply writes only the
+//     checked rows. Records that already have a cost are flagged and
+//     left unchecked so existing data is never silently overwritten.
+//
+// Cost written is PER-UNIT: acquisition total ÷ quantity (the 31-coin
+// Kennedy lot at $241.18 applies $7.78 per matching record, not $241.18).
+// Items without a year (generic bars/rounds) can't be matched confidently
+// and land in the "unmatched" list for manual handling.
+// ═══════════════════════════════════════════════════════════════════════
+
+// [name, qty, totalCost] — transcribed from the 12-page APMEX export.
+const APMEX_HOLDINGS = [
+  ['2024 Samoa 1/200 oz Gold Harry Potter',5,120.00],
+  ['1 Utah Goldback - Aurum Gold Foil Note (24k)',7,47.46],
+  ['1 gram Gold Bar - Secondary Market',2,160.00],
+  ['1 New Hampshire Goldback - Aurum Gold Foil Note (24k)',1,14.00],
+  ['10 Utah Goldback - Aurum Gold Foil Note (24k)',1,6.78],
+  ['1 Wyoming Goldback - Aurum Gold Foil Note (24k)',1,5.00],
+  ['2016 (P) American Silver Eagle MS-70 NGC (Liberty Bell Label)',1,62.00],
+  ['1964 Kennedy Half Dollar BU',31,241.18],
+  ['1968-D Kennedy Half Dollar MS-64 NGC (PL)',1,11.00],
+  ['1939-S Jefferson Nickel Rev of 40 MS-64 PCGS (FS, Toned)',1,80.00],
+  ['1 oz Silver Bar - Aztec',7,242.55],
+  ['2023 England 1 oz Silver 2 Pound Charles I PF-70 UCAM NGC (FR)',1,65.00],
+  ['1 oz Silver Round - Aztec',7,240.80],
+  ['1 oz Silver Round - Buffalo',7,244.37],
+  ['1 oz Silver Bar - Aztec',6,220.20],
+  ['2023-P Australia 5 oz Silver Gilded Koala Proof (High Relief)',1,38.00],
+  ['2014 Australia 1 oz Silver Wedge Tailed Eagle PR-70 HR DCAM PCGS',1,60.00],
+  ['2014 China 1 oz Silver Panda MS-70 PCGS (FirstStrike)',2,85.18],
+  ['1921 Morgan Silver Dollar BU',6,228.00],
+  ['2017 Niue Silver 2 oz Falcon of Tutankhamun',1,60.00],
+  ['1.56 oz .925 Sterling Silver American Revolution Bar',4,120.00],
+  ['1999 Great Britain 1 oz Silver Britannia BU',1,40.00],
+  ['2021 Silver Eagle (Type 1) MS-70 PCGS (Last Day of Production)',1,51.00],
+  ['2014 Niue 1 oz Silver $2 Hawksbill Turtle',4,120.00],
+  ['5 oz Silver Bar - Buffalo',1,163.41],
+  ['5 oz Silver Bar - Secondary Market',1,160.00],
+  ['1 oz Silver Round - Buffalo',5,159.25],
+  ['2024 Great Britain 1 oz Silver Britannia PF-70 NGC (King)',1,41.00],
+  ['1993 Canada 1 oz Silver Maple Leaf MS-69 PCGS',1,91.00],
+  ['1889-S Morgan Dollar AU',1,25.00],
+  ['2016-W Burnished Silver Eagle SP-70 PCGS (FirstStrike)',1,43.00],
+  ['2000 American Silver Eagle MS-69 NGC (Green Holder)',1,42.00],
+  ['2021 (P) American Silver Eagle MS-70 PCGS (FDI, Philadelphia)',1,54.67],
+  ['2014-D Kennedy H.D. SP-70 Sil. 50th Anni. High Relief',1,14.00],
+  ['2014-W Kennedy Rev. PF. PF-70 Sil. 50th Anni. High Relief',1,14.00],
+  ['1985 Mexico 1 oz Silver Libertad MS-66 PCGS',1,65.00],
+  ['2024 Great Britain 1 oz Silver Britannia BU (King Charles III)',3,90.00],
+  ['1 oz Silver Bar - Secondary Market',3,108.00],
+  ['2017-W Burnished Silver Eagle MS-70 NGC (Early Releases)',1,50.00],
+  ['2012-W Proof American Silver Eagle PF-70 NGC (ER)',1,49.95],
+  ['2021-S Proof American Silver Eagle (Type 2) PF-69 NGC',1,40.00],
+  ['2016-W Proof American Silver Eagle PR-69 PCGS',1,36.00],
+  ['1882-S Morgan Dollar MS-63 PCGS',1,82.00],
+  ['Spanish Empire Silver Pillar Type 1/2 Real El Cazador Genuine NGC',1,56.00],
+  ['Spanish Empire Silver Pillar Type 1/2 Real El Cazador Genuine NGC',1,65.00],
+  ['2016 (W) Silver Eagle MS-70 NGC (ER, Eagle Label, 30th Anniv)',1,44.00],
+  ['2021 American Silver Eagle (Type 2) MS-70 PCGS (FS, Damstra)',1,59.00],
+  ['2023 GB 1 oz Silver Britannia PCGS MS-69 FS (King Label)',1,43.88],
+  ['1 oz Silver Shot .999 Fine Silver',3,111.00],
+  ['2012 American Silver Eagle MS-70 PCGS',1,40.00],
+  ['2012 American Silver Eagle MS-70 NGC',1,50.00],
+  ['1885 Morgan Dollar MS-63 NGC',1,91.00],
+  ['2011 Australia 1 oz Silver Koala MS-70 NGC (First of 20,000)',1,40.00],
+  ['2018 American Silver Eagle MS-70 PCGS (FirstStrike)',1,43.00],
+  ['1990 American Silver Eagle MS-69 NGC',1,40.00],
+  ['1886-S Morgan Dollar Fine',1,30.00],
+  ['1881 Morgan Dollar BU',1,34.00],
+  ['2021 Cook Islands 1 oz Silver Bounty Coin',2,70.00],
+  ['2019 American Silver Eagle MS-70 PCGS (FS)',1,43.00],
+  ['1885 Morgan Dollar MS-63 PCGS',1,77.00],
+  ['2021 American Silver Eagle (Type 2) MS-70 NGC (FDI)',1,50.00],
+  ['1885-O Morgan Dollar MS-63 PCGS',1,79.00],
+  ['1897 Morgan Dollar BU',1,40.00],
+  ['2013-S Silver Proof Set',1,10.00],
+  ['1897-O Morgan Dollar XF',1,34.00],
+  ['2022 South Africa 1 oz Silver Krugerrand BU',2,74.00],
+  ['2005-W Proof American Silver Eagle PR-69 PCGS (FS)',1,60.00],
+  ['2 oz Scottsdale Silver Round - Stacker',1,84.00],
+  ['U.S. Mint Silver George Washington Presidential Medal',1,30.00],
+  ['1 oz Silver Round - Scottsdale (Omnia Type 2)',2,72.00],
+  ['1 oz Silver Bar - Secondary Market',2,80.00],
+  ['2001 American Silver Eagle MS-69 NGC',1,40.00],
+  ['2001 American Silver Eagle MS-69 NGC',1,37.00],
+  ['1974-S Silver Eisenhower Dollar PR-69 DCAM PCGS',1,20.00],
+  ['1 oz Silver Round - APMEX',2,73.46],
+  ['1992 American Silver Eagle MS-69 NGC',1,43.32],
+  ['1987 American Silver Eagle MS-69 NGC',1,47.00],
+  ['2016 (W) American Silver Eagle MS-70 PCGS',1,49.95],
+  ['U.S. Mint Silver Thomas Jefferson Presidential Medal',1,30.00],
+  ['1997-S Jackie Robinson $1 Silver Commem Proof (w/Box & COA)',1,40.00],
+  ['2011 American Silver Eagle MS-70 ICG (25th Anniv)',1,45.00],
+  ['1897-S Morgan Dollar AU',1,65.00],
+  ['1934 Peace Dollar VG/VF',1,34.00],
+  ['1900 Morgan Dollar BU',1,35.00],
+  ['20 gram Silver Bar - Secondary Market',2,33.00],
+  ['2006 American Silver Eagle MS-70 ICG (First Day of Issue)',1,56.00],
+  ['1883 Morgan Dollar BU',1,26.00],
+  ['2007-W Burnished American Silver Eagle MS-69 NGC',1,47.00],
+  ['2007-W Burnished American Silver Eagle (w/Box & COA)',1,42.50],
+  ['1896 Morgan Dollar BU',1,40.00],
+  ['1oz Asahi Silver Bar',2,60.00],
+  ['Pyromet Silver Card',2,64.00],
+  ['2020 American Silver Eagle MS-69 NGC (Early Releases)',1,56.00],
+  ['1898 Morgan Dollar BU',1,30.00],
+  ['1885 Morgan Dollar BU',1,35.00],
+  ['1989 Canada 1 oz Silver Maple Leaf BU',1,36.50],
+  ['1989 Canada 1 oz Silver Maple Leaf BU',1,37.00],
+  ['2009 American Silver Eagle MS-69 NGC (Early Release)',1,47.00],
+  ['1887 Morgan Dollar BU',1,35.00],
+  ['2006 American Silver Eagle MS-69 NGC (First Strike)',1,47.00],
+  ['1881 Morgan Dollar XF',1,30.00],
+  ['1889 Morgan Dollar BU',1,30.00],
+  ['1889 Morgan Dollar BU',1,35.00],
+  ['1889 Morgan Dollar BU',1,35.00],
+  ['1896 Morgan Dollar AU',1,40.00],
+  ['2023 Mexico 1 oz Silver Libertad MS-69 PCGS (FS, Green Label)',1,47.69],
+  ['2023 Mexico 1 oz Silver Libertad MS-69 PCGS (FS, Green Label)',1,52.75],
+  ['2023 Mexico 1 oz Silver Libertad MS-69 PCGS (FS, Green Label)',1,44.00],
+  ['1975 American Revolution Bicentennial Sterling Silver Medal',1,25.00],
+  ['2017 American Silver Eagle MS-69 PCGS (FirstStrike)',1,40.00],
+  ['1992 1 oz American Silver Eagle BU',1,35.00],
+  ['2023 American Silver Eagle MS-70 NGC',1,59.00],
+  ['1884 Morgan Dollar XF',1,36.00],
+  ['2008 American Silver Eagle MS-69 NGC',1,44.99],
+  ['2015 Isle of Man 1 oz Silver Angel BU',1,35.00],
+  ['1900 Morgan Dollar AU',1,26.00],
+  ['2009-P Abraham Lincoln $1 Silver Commem Proof (w/Box & COA)',1,30.00],
+  ['2006 American Silver Eagle MS-69 NGC',1,40.00],
+  ['2021 American Silver Eagle (Type 1) MS-69 PCGS',1,42.00],
+  ['2004 Canada 1 oz Silver Maple Leaf BU',1,31.05],
+  ['1 oz Silver Bullet - .45 Caliber ACP',1,35.00],
+  ['2003 1 oz American Silver Eagle BU',1,45.00],
+  ['1886 Morgan Dollar VG/VF',1,25.00],
+  ['1885-O Morgan Dollar VG/VF',1,30.00],
+  ['2014 (S) American Silver Eagle MS-69 PCGS',1,68.00],
+  ['2010 American Silver Eagle MS-69 NGC',1,44.99],
+  ['1899-O Morgan Dollar XF',1,25.00],
+  ['2021 American Silver Eagle (Type 2) MS-69 PCGS',1,36.00],
+  ['2024 American Silver Eagle MS-70 PCGS (FirstStrike)',1,56.00],
+  ['1879 Morgan Dollar XF',1,36.00],
+  ['1991 1 oz American Silver Eagle BU',1,85.00],
+  ['1885 Morgan Dollar VG/VF',1,12.00],
+  ['1 oz Hand Poured Silver Relic Bar - Anubis',1,40.00],
+  ['1886 Morgan Dollar XF',1,25.00],
+  ['2001 1 oz American Silver Eagle BU',1,36.00],
+  ['2001 1 oz American Silver Eagle BU',1,33.00],
+  ['1892-O Morgan Dollar Fine',1,25.00],
+  ['2024 Fiji 1 oz Silver Robocop Shaped Proof-Like Coin',1,49.00],
+  ['1 oz Hand Poured Silver - Celtic Skull',1,42.00],
+  ['1881-S Morgan Dollar VG/VF',1,30.00],
+  ['1879 Morgan Dollar VG/VF',1,25.00],
+  ['2022 Great Britain 1 oz Silver Britannia BU',1,35.00],
+  ['1882-S Morgan Dollar VG/VF',1,25.00],
+  ['1 oz Hand Poured Silver Cube - Cannabis',1,40.00],
+  ['1 oz Silver Bar - Geiger Edelmetalle (Original Square Series)',1,37.00],
+  ['2013 Canada 1 oz Silver Maple Leaf BU',1,35.00],
+  ['2018 Canada 1 oz Silver Maple Leaf BU',1,37.00],
+  ['2016 1 oz American Silver Eagle BU',1,33.00],
+  ['2016 1 oz American Silver Eagle BU',1,39.45],
+  ['2022 Canada 1 oz Silver Maple Leaf BU',1,38.36],
+  ['2003 Silver National Wildlife Medal Proof (Random, Capsule Only)',1,30.00],
+  ['1986 American Silver Eagle MS-69 ICG',1,59.00],
+  ['1 oz Silver Bar - APMEX Mini Brick',1,35.00],
+  ['2020 1 oz American Silver Eagle BU',1,25.00],
+  ['2011 1 oz American Silver Eagle BU',1,36.00],
+  ['2013 1 oz American Silver Eagle BU',1,39.10],
+  ['2014 1 oz American Silver Eagle BU',1,41.00],
+  ['2002 1 oz American Silver Eagle BU',1,39.00],
+  ['2014 1 oz American Silver Eagle BU',1,39.16],
+  ['2014 1 oz American Silver Eagle BU',1,40.00],
+  ['2015 Australia 1 oz Silver Funnel-Web Spider BU',1,35.00],
+  ['2015 1 oz American Silver Eagle BU',1,35.00],
+  ['2015 Austria 1 oz Silver Philharmonic BU',1,37.00],
+  ['2023 1 oz American Silver Eagle Coin BU',1,37.00],
+  ['2011 Canada 1 oz Silver Maple Leaf BU',1,40.00],
+  ['1 gram Silver Square - Geiger Edelmetalle (Encapsulated w/Assay)',4,80.00],
+  ['1890-O Morgan Dollar VG/VF',1,30.00],
+  ['1890-O Morgan Dollar VG/VF',1,25.00],
+  ['1890-O Morgan Dollar VG/VF',1,25.00],
+  ['2023 Austria 1 oz Silver Philharmonic BU',1,34.50],
+  ['1 oz Silver Round - U.S. Assay Office',1,30.00],
+  ['2024 Great Britain 1 oz Silver Britannia BU (King Charles III)',1,46.00],
+  ['1900-S Morgan Dollar Good',1,25.00],
+  ['2023 Great Britain 1 oz Silver Britannia BU (King Charles III)',1,12.00],
+  ['1 oz Canadian Silver Maple Leaf Coin BU (Random Year)',1,37.00],
+  ['1 oz Silver Bar - Aztec',1,37.50],
+  ['1879 Morgan Dollar Fine',1,25.00],
+  ['1 oz Silver Bar - Secondary Market',1,39.00],
+  ['1 oz Silver Bar - Secondary Market',1,35.00],
+  ['1 oz Silver Bar - Secondary Market',1,40.40],
+  ['1 oz Silver Bar - Secondary Market',1,36.00],
+  ['1 oz Silver Bar - Secondary Market',1,31.00],
+  ['South Africa 1 oz Silver Krugerrand (Random)',1,36.00],
+  ['1 oz Silver Bar - Secondary Market',1,40.00],
+  ['1 oz Silver Round - Walking Liberty',1,38.00],
+  ['1 oz Silver Round - Aztec',1,36.00],
+  ['1 oz Silver Round - Buffalo',1,30.00],
+  ['1 oz Silver Round - Buffalo',1,30.00],
+  ['1921 Morgan Silver Dollar BU',1,30.00],
+  ['1 oz Silver Round - Morgan Dollar Design',1,35.00],
+  ['1 oz Silver Round - Morgan Dollar Design',1,35.00],
+  ['1 oz Silver Round - Morgan Dollar Design',1,34.00],
+  ['1 gram Silver Bar - Secondary Market',10,24.00],
+  ['1983-S Olympic $1 Silver Commem BU (Capsule Only)',1,40.00],
+  ['1921 P, D, or S Mint Morgan Silver Dollar Coin AU (Random)',1,40.00],
+  ['2007-W Proof American Silver Eagle PR-69 DCAM PCGS (First Strike)',1,59.00],
+  ['1 oz silver bar - Secondary Market - F the Fed',1,36.00],
+  ['2013 Canada PR69DCAM First Strike Bald Eagle',1,36.00],
+  ['2018 Canada 1 oz Silver Maple Leaf 30th Anniversary MS-70 PCGS',1,40.00],
+  ['2025 Canada 1 oz silver NGC MS69 FYI',1,36.00],
+  ['2024 Britannia Mint Error NGC MS69 Obverse Struck Through Gaudioso',1,47.00],
+  ['2023 1 oz Silver King Arthur World Coin',1,40.00],
+  ['2023 South Africa Krugerrand NGC MS-70',1,44.00],
+  ['Egyptian Relic MPM Bar 1oz .999 Fine Silver Gods Anubis Thoth Ammit & Horus',1,39.00],
+  ['2022 1oz Silver 2 Pounds Elizabeth II',1,37.95],
+  ['1 oz Silver Indian Head Eagle Pattern',1,40.00],
+  ['Zombucks Kookaburied Currency of the Apocalypse',1,37.00],
+  ['1992 Barcelona Olympics 1 oz Silver Medallion Mopar Sponsor',1,36.00],
+  ['1 oz silver round - SilverTowne Prospector',1,35.00],
+  ['1 oz Hand Poured Silver Relic Bar - Wicked Sick Relics',1,33.00],
+  ['Th-Th-Thats All Folks! Proof Deep Cameo 1 oz Silver Round',1,35.00],
+  ['Cwazy Wabbit! Proof Deep Cameo 1 Oz Silver Round',1,35.00],
+  ['Bugs Bunny Proof Deep Cameo 1oz Silver Round',1,35.00],
+  ['1992 Alaska 1 Oz Silver Round',1,30.00],
+  ['2013 Canada 5 Dollar - Buffalo World Coin',1,37.50],
+  ['Babys First Christmas',1,30.00],
+  ['1964-D Roosevelt Dime BU',8,21.60],
+  ['1921 P,D, or S Mint Morgan Silver Dollars VG-XF (Random)',1,12.00],
+  ['11th century India Chalukya Empire Silver Drachm XF',1,16.00],
+  ['2020-P Basketball Hall of Fame $1 Silver PR-70 PCGS (FS, Kunz)',1,79.00],
+  ['1968-D Kennedy Half Dollar MS-65 NGC',1,17.50],
+  ['1/4 oz Silver Round - Secondary Market',2,23.04],
+  ['2008-S Bald Eagle $1 Silver Commem Proof Ultra Cameo PF69',1,17.50],
+  ['1971-S 40% Silver Eisenhower Dollar Proof (OGP)',1,25.00],
+  ['1993-S Silver Kennedy Half Dollar Gem Proof',1,14.00],
+  ['2016-S Silver Kennedy Half Dollar Gem Proof',1,5.00],
+  ['2024 Samoa 1/2 oz Silver 1 Tala Year of the Dragon BU',1,23.00],
+  ['10 g Silver Square - Geiger Edelmetalle (Original Square Series)',1,10.00],
+  ['1971 Canada Silver Dollar Specimen (British Columbia w/OGP)',1,15.00],
+  ['1/2 oz Silver Round - Buffalo',1,22.00],
+  ['1972-S 40% Silver Eisenhower Dollar Proof (Mint Sealed)',1,15.00],
+  ['1973-S 40% Silver Eisenhower Dollar BU (Blue Mint Envelope)',1,15.00],
+  ['1911 Barber Dime VF',1,3.00],
+  ['1906 Barber Dime VF',1,3.00],
+  ['1/4 oz Silver Round - Aztec Calendar',1,10.83],
+  ['2024 Armenia 1/4 oz Silver 100 Drams Noahs Ark',1,2.02],
+  ['1907 Barber Dime VF',1,3.00],
+  ['1945 Mercury Dime AU',2,4.00],
+  ['1969-S U.S. Proof Set',1,9.00],
+  ['1/10 oz Silver Round - Aztec Calendar',1,7.00],
+  ['2025 Great Britain 1/10 oz Silver Britannia BU',1,5.52],
+  ['1967 Kennedy Half Dollar BU',1,1.00],
+  ['1950-D Roosevelt Dime BU',1,2.70],
+  ['1941 Mercury Dime AU',1,3.00],
+  ['1941-S Mercury Dime XF',1,3.00],
+  ['1942 Mercury Dime XF',1,3.00],
+  ['1961 Roosevelt Dime BU',1,2.70],
+  ['1957-D Roosevelt Dime BU',1,2.70],
+  ['1954 Roosevelt Dime BU',1,2.70],
+  ['1947-D Roosevelt Dime AU',1,2.70],
+  ['1943 Mercury Dime Good/VF',1,2.00],
+  ['1963-D Roosevelt Dime BU',1,2.70],
+  ['1959 Roosevelt Dime BU',1,2.70],
+  ['1/10 GSM Eagle',1,7.95],
+  ['1 gram Platinum Bar - Secondary Market',4,150.84]
+];
+
+// Type keywords — a match REQUIRES both sides to hit the same keyword.
+// Order matters: more specific first (silver eagle before eagle-pattern
+// rounds; roosevelt/mercury/barber dimes before generic 'dime').
+const _APMEX_TYPE_PATTERNS = [
+  { re: /morgan/i,                      label: 'Morgan' },
+  { re: /peace\s+dollar/i,              label: 'Peace Dollar' },
+  { re: /silver\s+eagle/i,              label: 'Silver Eagle' },
+  { re: /kennedy/i,                     label: 'Kennedy' },
+  { re: /roosevelt/i,                   label: 'Roosevelt Dime' },
+  { re: /mercury/i,                     label: 'Mercury Dime' },
+  { re: /barber/i,                      label: 'Barber Dime' },
+  { re: /jefferson\s+nickel/i,          label: 'Jefferson Nickel' },
+  { re: /maple\s*leaf/i,                label: 'Maple Leaf' },
+  { re: /britannia/i,                   label: 'Britannia' },
+  { re: /libertad/i,                    label: 'Libertad' },
+  { re: /krugerrand/i,                  label: 'Krugerrand' },
+  { re: /philharmonic/i,                label: 'Philharmonic' },
+  { re: /eisenhower/i,                  label: 'Eisenhower' },
+  { re: /panda/i,                       label: 'Panda' },
+  { re: /koala/i,                       label: 'Koala' },
+  { re: /drachm/i,                      label: 'Drachm' },
+  { re: /goldback/i,                    label: 'Goldback' },
+  { re: /el\s+cazador|pillar/i,         label: 'El Cazador' },
+  { re: /jackie\s+robinson/i,           label: 'Jackie Robinson' },
+  { re: /proof\s+set/i,                 label: 'Proof Set' },
+  { re: /harry\s+potter/i,              label: 'Harry Potter' },
+  { re: /tutankhamun|falcon/i,          label: 'Falcon' },
+  { re: /hawksbill|turtle/i,            label: 'Hawksbill' },
+  { re: /wedge\s+tailed/i,              label: 'Wedge Tailed Eagle' },
+  { re: /charles\s+i\b/i,               label: 'Charles I' },
+  { re: /king\s+arthur/i,               label: 'King Arthur' },
+  { re: /bald\s+eagle/i,                label: 'Bald Eagle' },
+  { re: /year\s+of\s+the\s+dragon/i,    label: 'Dragon' },
+  { re: /noah/i,                        label: 'Noahs Ark' },
+  { re: /bounty/i,                      label: 'Bounty' },
+  { re: /angel/i,                       label: 'Angel' },
+  { re: /funnel[- ]web|spider/i,        label: 'Funnel-Web Spider' },
+  { re: /basketball\s+hall/i,           label: 'Basketball HOF' },
+  { re: /lincoln.*commem|abraham\s+lincoln/i, label: 'Lincoln Commem' },
+  { re: /olympic/i,                     label: 'Olympic' },
+  { re: /elizabeth\s+ii/i,              label: 'Elizabeth II' }
+];
+
+function _apmexParse(name) {
+  const yearM = name.match(/\b(18\d{2}|19\d{2}|20\d{2})\b/);
+  // Random-mint lots ("1921 P, D, or S") — treat mint as unspecified
+  const isRandomMint = /\bP,\s*D,?\s*or\s*S\b/i.test(name) || /\(random\)/i.test(name);
+  let mint = null;
+  if (!isRandomMint && yearM) {
+    const mintM = name.match(new RegExp(yearM[1] + "[\\s-]*\\(?([PDSOW])\\)?[\\s-]"));
+    if (mintM) mint = mintM[1].toUpperCase();
+  }
+  let grade = null;
+  const gm = name.match(/\b(MS|PR|PF|SP)[- ]?(\d{2})\b/i);
+  if (gm) grade = (gm[1] + gm[2]).toUpperCase();
+  else if (/\bBU\b/i.test(name)) grade = 'BU';
+  else if (/\bXF\b/i.test(name)) grade = 'XF';
+  else if (/\bAU\b(?!\w)/i.test(name)) grade = 'AU';
+  else if (/\bVG\/VF|VG-XF\b/i.test(name)) grade = 'VG';
+  else if (/\bfine\b/i.test(name) && !/\.999|fine\s+silver/i.test(name)) grade = 'F';
+  else if (/\bgood\b/i.test(name)) grade = 'G';
+  let type = null;
+  for (let i = 0; i < _APMEX_TYPE_PATTERNS.length; i++) {
+    if (_APMEX_TYPE_PATTERNS[i].re.test(name)) { type = _APMEX_TYPE_PATTERNS[i]; break; }
+  }
+  return { year: yearM ? yearM[1] : null, mint: mint, grade: grade, type: type };
+}
+
+function _apmexRecordHaystack(item) {
+  const r = item.raw || {};
+  return [r.type, r.series, r.year, r.grade, r.gradingAuth, r.mintMark, r.mint,
+          r.description, item.desc].filter(Boolean).join(' ');
+}
+
+function _apmexNormGrade(s) {
+  return String(s || '').toUpperCase().replace(/[-\s.]/g, '');
+}
+
+/** Run the whole match: returns {groups:[{apmex, perUnit, matches:[{item, tier}]}], unmatched:[apmex...]} */
+function _apmexRunMatch() {
+  const groups = [];
+  const unmatched = [];
+  const claimed = new Set();  // record keys already proposed for an earlier line
+
+  APMEX_HOLDINGS.forEach(function(row, rowIdx){
+    const name = row[0], qty = row[1] || 1, total = row[2] || 0;
+    const parsed = _apmexParse(name);
+    const perUnit = Math.round((total / qty) * 100) / 100;
+
+    // Can't match confidently without BOTH a year and a recognized type
+    if (!parsed.year || !parsed.type) {
+      unmatched.push({ name: name, qty: qty, total: total, reason: !parsed.year ? 'no year' : 'no recognized type' });
+      return;
+    }
+
+    const matches = [];
+    for (let i = 0; i < ALL_ITEMS.length; i++) {
+      const item = ALL_ITEMS[i];
+      const key = item.sheet + '|' + cn(item.id);
+      const hay = _apmexRecordHaystack(item);
+
+      // Year must appear in the record
+      if (hay.indexOf(parsed.year) < 0) continue;
+      // Type keyword must match the record too
+      if (!parsed.type.re.test(hay)) continue;
+
+      // Mint: hard disqualify on explicit mismatch. If only ONE side
+      // specifies a mint (APMEX says "1885" but the record is "1885-O",
+      // or vice versa), that's ambiguous — an 1885 and an 1885-O are
+      // different coins. Cap those at 'possible' so they're never
+      // pre-checked; the user verifies by hand.
+      let mintMatched = false;
+      let mintAmbiguous = false;
+      const recMintM = hay.match(new RegExp(parsed.year + "[\\s-]*\\(?([PDSOW])\\)?[\\s-]"));
+      const recMint = recMintM ? recMintM[1].toUpperCase() : null;
+      if (parsed.mint && recMint) {
+        if (parsed.mint !== recMint) continue;   // 1885-O ≠ 1885-S: skip
+        mintMatched = true;
+      } else if (parsed.mint || recMint) {
+        mintAmbiguous = true;                    // one side silent on mint
+      }
+
+      // Grade comparison
+      let gradeMatched = false;
+      if (parsed.grade) {
+        const recGrade = _apmexNormGrade((item.raw && item.raw.grade) || '');
+        const apGrade = _apmexNormGrade(parsed.grade);
+        if (recGrade && (recGrade === apGrade || recGrade.indexOf(apGrade) >= 0 || apGrade.indexOf(recGrade) >= 0)) {
+          gradeMatched = true;
+        }
+      }
+
+      let tier;
+      if (mintAmbiguous) tier = 'possible';           // manual verify required
+      else if (mintMatched && gradeMatched) tier = 'exact';
+      else if (mintMatched || gradeMatched) tier = 'strong';
+      else tier = 'possible';
+
+      // Cost state (v110.1): the user hand-entered accurate costs on some
+      // records already. If the record's existing cost equals the APMEX
+      // per-unit (within 2¢ for rounding), it's ALREADY RECONCILED —
+      // surface it as done, nothing to write. If it differs, that's a
+      // conflict needing human judgment; show both numbers side by side.
+      const existingCost = (item.raw && parseFloat(item.raw.cost)) || 0;
+      let costState;
+      if (existingCost <= 0) costState = 'empty';
+      else if (Math.abs(existingCost - perUnit) < 0.02) costState = 'same';
+      else costState = 'differs';
+
+      matches.push({ item: item, key: key, tier: tier,
+                     alreadyClaimed: claimed.has(key),
+                     hasCost: existingCost > 0,
+                     existingCost: existingCost,
+                     costState: costState });
+    }
+
+    // Sort matches: records whose cost ALREADY equals this line's per-unit
+    // claim first (they're the proven prior reconciliation — claiming them
+    // stops a duplicate APMEX line from re-grabbing them), then exact →
+    // strong → possible, cost-free before conflicted.
+    matches.sort(function(a, b){
+      const costRank = { same: 0, empty: 1, differs: 2 };
+      const tierRank = { exact: 0, strong: 1, possible: 2 };
+      if (costRank[a.costState] !== costRank[b.costState]) return costRank[a.costState] - costRank[b.costState];
+      if (tierRank[a.tier] !== tierRank[b.tier]) return tierRank[a.tier] - tierRank[b.tier];
+      return 0;
+    });
+
+    // Claim up to qty of the best matches so later duplicate APMEX lines
+    // (three separate "1889 Morgan BU" rows) don't all point at the same record
+    let claimedCount = 0;
+    matches.forEach(function(m){
+      if (claimedCount < qty && !m.alreadyClaimed) {
+        claimed.add(m.key);
+        m.proposed = true;
+        claimedCount++;
+      }
+    });
+
+    if (matches.length === 0) {
+      unmatched.push({ name: name, qty: qty, total: total, reason: 'no record matched year+type' });
+    } else {
+      groups.push({ name: name, qty: qty, total: total, perUnit: perUnit, parsed: parsed, matches: matches, idx: rowIdx });
+    }
+  });
+
+  return { groups: groups, unmatched: unmatched };
+}
+
+function showApmexMatcher() {
+  const existing = document.getElementById('apmex-modal');
+  if (existing) existing.remove();
+
+  const result = _apmexRunMatch();
+
+  // v110b audit pass: classify every proposed pair by what applying would
+  // actually DO to the record. 'same' = record cost already equals the
+  // APMEX per-unit price (within half a cent) — already correct, nothing
+  // to write, excluded from apply entirely. 'diff' = record has a
+  // DIFFERENT cost — applying would CHANGE data, so show before→after
+  // and never pre-check. 'new' = record has no cost — the normal case.
+  result.groups.forEach(function(g){
+    g.matches.forEach(function(m){
+      const cur = parseFloat(m.item.raw && m.item.raw.cost);
+      m.curCost = (!isNaN(cur) && cur > 0) ? cur : null;
+      if (m.curCost == null) m.costStatus = 'new';
+      else if (Math.abs(m.curCost - g.perUnit) < 0.005) m.costStatus = 'same';
+      else m.costStatus = 'diff';
+    });
+  });
+
+  window._apmexResult = result;
+
+  // Audit summary counts
+  let nNew = 0, nSame = 0, nDiff = 0, nPossible = 0;
+  result.groups.forEach(function(g){
+    g.matches.forEach(function(m){
+      if (m.costStatus === 'same') nSame++;
+      else if (m.costStatus === 'diff') nDiff++;
+      else if (m.tier === 'possible') nPossible++;
+      else nNew++;
+    });
+  });
+
+  const modal = document.createElement('div');
+  modal.id = 'apmex-modal';
+  modal.className = 'ref-modal';
+  modal.onclick = function(ev){ if (ev.target === modal) modal.remove(); };
+  document.body.appendChild(modal);
+
+  const tierBadge = function(tier) {
+    const colors = { exact: '#22c55e', strong: '#c9a84c', possible: '#6a8aab' };
+    const c = colors[tier] || '#6a8aab';
+    return '<span style="font-size:9px;background:' + c + '22;color:' + c + ';border:1px solid ' + c + '55;padding:1px 6px;border-radius:3px;text-transform:uppercase;letter-spacing:.05em">' + tier + '</span>';
+  };
+
+  const groupsHtml = result.groups.map(function(g, gi){
+    const rows = g.matches.map(function(m, mi){
+      // Cost transition display: what applying would DO to this record
+      let costHtml, disabled = false, preCheck = false;
+      if (m.costStatus === 'same') {
+        costHtml = '<span style="font-size:10px;color:#22c55e;white-space:nowrap" title="Record cost already equals the APMEX per-unit price — nothing to change">\u2713 already $' + m.curCost.toFixed(2) + '</span>';
+        disabled = true;   // nothing to write — excluded from apply
+      } else if (m.costStatus === 'diff') {
+        costHtml = '<span style="font-size:10px;color:var(--red);white-space:nowrap" title="Record has a DIFFERENT cost — checking this would overwrite it">$' + m.curCost.toFixed(2) + ' \u2192 $' + g.perUnit.toFixed(2) + '</span>';
+      } else {
+        costHtml = '<span style="font-size:10px;color:var(--muted);white-space:nowrap">\u2014 \u2192 $' + g.perUnit.toFixed(2) + '</span>';
+        preCheck = m.proposed && (m.tier === 'exact' || m.tier === 'strong');
+      }
+      return '<label style="display:flex;align-items:center;gap:10px;padding:7px 10px;border:1px solid var(--border);border-radius:5px;margin-bottom:4px;cursor:' + (disabled ? 'default' : 'pointer') + ';background:var(--bg3)' + (disabled ? ';opacity:.65' : '') + '">'
+        + '<input type="checkbox" class="apmex-check" data-g="' + gi + '" data-m="' + mi + '"' + (preCheck ? ' checked' : '') + (disabled ? ' disabled' : '') + '>'
+        + '<div style="flex:1;min-width:0">'
+        +   '<div style="font-size:12px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">#' + e(cn(m.item.id)) + ' \u00b7 ' + e(String(m.item.desc || (m.item.raw && m.item.raw.description) || m.item.sheet).slice(0, 48)) + '</div>'
+        +   '<div style="font-size:10px;color:var(--dim)">' + e((SHEET_MAP && SHEET_MAP[m.item.sheet]) ? SHEET_MAP[m.item.sheet].label : m.item.sheet) + (m.item.raw && m.item.raw.grade ? ' \u00b7 ' + e(m.item.raw.grade) : '') + '</div>'
+        + '</div>'
+        + tierBadge(m.tier)
+        + costHtml
+        + '</label>';
+    }).join('');
+    return '<div style="border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-bottom:10px">'
+      + '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;gap:10px">'
+      +   '<div style="font-size:12px;color:var(--gold);flex:1;min-width:0">' + e(g.name) + '</div>'
+      +   '<div style="font-size:11px;color:var(--text);font-family:DM Mono,monospace;white-space:nowrap">$' + g.perUnit.toFixed(2) + '/ea' + (g.qty > 1 ? ' \u00d7' + g.qty : '') + '</div>'
+      + '</div>'
+      + rows
+      + '</div>';
+  }).join('');
+
+  const unmatchedHtml = result.unmatched.length === 0 ? '' :
+      '<details style="margin-top:14px"><summary style="font-size:11px;color:var(--dim);cursor:pointer">' + result.unmatched.length + ' APMEX lines with no confident match (generic bullion, no year, or nothing in your records) \u2014 handle manually if needed</summary>'
+    + '<div style="margin-top:8px;font-size:11px;color:var(--muted);line-height:1.8">'
+    + result.unmatched.map(function(u){ return '\u2022 ' + e(u.name) + ' <span style="color:var(--dim)">($' + u.total.toFixed(2) + (u.qty > 1 ? ' \u00f7 ' + u.qty : '') + ' \u2014 ' + e(u.reason) + ')</span>'; }).join('<br>')
+    + '</div></details>';
+
+  // Audit summary bar — the at-a-glance answer to "what does this affect?"
+  const summaryHtml = '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px">'
+    + '<div style="flex:1;min-width:110px;background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:8px 12px;text-align:center"><div style="font-size:18px;color:var(--text);font-family:DM Mono,monospace">' + nNew + '</div><div style="font-size:9px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em">would set (no cost yet)</div></div>'
+    + '<div style="flex:1;min-width:110px;background:rgba(34,197,94,.06);border:1px solid rgba(34,197,94,.3);border-radius:6px;padding:8px 12px;text-align:center"><div style="font-size:18px;color:#22c55e;font-family:DM Mono,monospace">' + nSame + '</div><div style="font-size:9px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em">already correct (skipped)</div></div>'
+    + '<div style="flex:1;min-width:110px;background:rgba(220,80,80,.06);border:1px solid rgba(220,80,80,.3);border-radius:6px;padding:8px 12px;text-align:center"><div style="font-size:18px;color:var(--red);font-family:DM Mono,monospace">' + nDiff + '</div><div style="font-size:9px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em">would change existing</div></div>'
+    + '<div style="flex:1;min-width:110px;background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:8px 12px;text-align:center"><div style="font-size:18px;color:#6a8aab;font-family:DM Mono,monospace">' + nPossible + '</div><div style="font-size:9px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em">possible \u2014 verify by hand</div></div>'
+    + '</div>';
+
+  modal.innerHTML = ''
+    + '<div class="ref-modal-panel" style="max-width:720px">'
+    +   '<div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--border)">'
+    +     '<div>'
+    +       '<h2 style="margin:0;font-family:var(--font-display);font-size:17px;color:var(--gold)">\ud83e\uddfe APMEX Cost Matcher</h2>'
+    +       '<div style="font-size:11px;color:var(--muted);margin-top:2px">' + result.groups.length + ' APMEX lines matched \u00b7 audit below, adjust checkboxes, then apply</div>'
+    +     '</div>'
+    +     '<div style="display:flex;gap:8px">'
+    +       '<button class="bg" onclick="_apmexExportAudit()" style="font-size:11px" title="Download the full audit as CSV \u2014 every proposed pair with before/after costs">\u2b07 Audit CSV</button>'
+    +       '<button onclick="document.getElementById(\'apmex-modal\').remove()" style="background:transparent;border:1px solid var(--border);color:var(--muted);padding:6px 14px;border-radius:4px;cursor:pointer;font-size:12px">Close</button>'
+    +     '</div>'
+    +   '</div>'
+    +   '<div style="padding:14px 20px;max-height:62vh;overflow-y:auto">'
+    +     summaryHtml
+    +     '<div style="font-size:11px;color:var(--muted);line-height:1.6;margin-bottom:12px;padding:10px 12px;background:var(--bg4);border-radius:5px;border-left:3px solid var(--gold)">'
+    +       'Each row shows what applying would do: <span style="color:var(--muted)">\u2014 \u2192 $X</span> sets an empty cost \u00b7 '
+    +       '<span style="color:#22c55e">\u2713 already $X</span> means the record matches the APMEX price and is <strong>skipped automatically</strong> (checkbox disabled, nothing written) \u00b7 '
+    +       '<span style="color:var(--red)">$A \u2192 $B</span> would overwrite a different existing cost \u2014 never pre-checked. '
+    +       '<span style="color:#22c55e">exact</span> / <span style="color:var(--gold)">strong</span> tiers pre-check; <span style="color:#6a8aab">possible</span> always needs your judgment.'
+    +     '</div>'
+    +     groupsHtml
+    +     unmatchedHtml
+    +   '</div>'
+    +   '<div style="padding:12px 20px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">'
+    +     '<div id="apmex-count" style="font-size:11px;color:var(--dim)"></div>'
+    +     '<button class="bp" onclick="_apmexApplyChecked()">Apply Checked Costs</button>'
+    +   '</div>'
+    + '</div>';
+
+  // Live counter of checked rows
+  const updateCount = function(){
+    const n = modal.querySelectorAll('.apmex-check:checked:not(:disabled)').length;
+    const el = document.getElementById('apmex-count');
+    if (el) el.textContent = n + ' record' + (n === 1 ? '' : 's') + ' selected \u00b7 ' + nSame + ' already correct will be skipped';
+  };
+  modal.querySelectorAll('.apmex-check').forEach(function(cb){ cb.addEventListener('change', updateCount); });
+  updateCount();
+}
+
+/** Download the full audit as CSV: every proposed pair with tier, current
+ *  cost, proposed cost, and the action the tool would take. Lets the user
+ *  review the whole reconciliation offline before touching anything. */
+function _apmexExportAudit() {
+  const result = window._apmexResult;
+  if (!result) return;
+  const esc = function(s){ s = String(s == null ? '' : s); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+  const lines = ['APMEX Line,Qty,Per-Unit Cost,Record #,Sheet,Record Description,Record Grade,Match Tier,Current Cost,Proposed Cost,Action'];
+  result.groups.forEach(function(g){
+    g.matches.forEach(function(m){
+      const action = m.costStatus === 'same' ? 'SKIP - already correct'
+                   : m.costStatus === 'diff' ? 'REVIEW - would change $' + m.curCost.toFixed(2) + ' to $' + g.perUnit.toFixed(2)
+                   : (m.tier === 'possible' ? 'REVIEW - possible match only' : 'SET - no cost currently');
+      lines.push([
+        esc(g.name), g.qty, g.perUnit.toFixed(2),
+        esc(cn(m.item.id)),
+        esc((SHEET_MAP && SHEET_MAP[m.item.sheet]) ? SHEET_MAP[m.item.sheet].label : m.item.sheet),
+        esc(String(m.item.desc || (m.item.raw && m.item.raw.description) || '').slice(0, 80)),
+        esc((m.item.raw && m.item.raw.grade) || ''),
+        m.tier,
+        m.curCost != null ? m.curCost.toFixed(2) : '',
+        g.perUnit.toFixed(2),
+        esc(action)
+      ].join(','));
+    });
+  });
+  result.unmatched.forEach(function(u){
+    lines.push([esc(u.name), u.qty, (u.total / u.qty).toFixed(2), '', '', '', '', 'unmatched', '', '', esc('NO MATCH - ' + u.reason)].join(','));
+  });
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'apmex-cost-audit_' + new Date().toISOString().split('T')[0] + '.csv';
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(function(){ URL.revokeObjectURL(url); if (a.parentNode) a.parentNode.removeChild(a); }, 100);
+  if (typeof cvToast === 'function') cvToast('Audit CSV downloaded \u2014 ' + (lines.length - 1) + ' rows', 'ok');
+}
+
+async function _apmexApplyChecked() {
+  const modal = document.getElementById('apmex-modal');
+  const result = window._apmexResult;
+  if (!modal || !result) return;
+  const checked = Array.prototype.slice.call(modal.querySelectorAll('.apmex-check:checked'));
+  if (checked.length === 0) { alert('No rows checked.'); return; }
+  if (!confirm('Write APMEX acquisition costs to ' + checked.length + ' record' + (checked.length === 1 ? '' : 's') + '?\n\nEach record gets the per-unit cost from its matched APMEX line, plus a provenance note. This overwrites any existing cost on checked records.')) return;
+
+  const btn = modal.querySelector('button.bp');
+  if (btn) { btn.disabled = true; btn.textContent = 'Applying\u2026'; }
+
+  let ok = 0, fail = 0, skippedSame = 0;
+  for (let i = 0; i < checked.length; i++) {
+    const cb = checked[i];
+    const g = result.groups[parseInt(cb.dataset.g, 10)];
+    const m = g && g.matches[parseInt(cb.dataset.m, 10)];
+    if (!g || !m) { fail++; continue; }
+    // Defensive: never write to a record whose cost already equals the
+    // APMEX per-unit price (the checkbox is disabled in the UI, but a
+    // stale DOM state or programmatic check shouldn't cause a pointless
+    // write + sync round-trip either).
+    if (m.costStatus === 'same') { skippedSame++; continue; }
+    try {
+      await _tpgApply(m.item, {
+        cost: g.perUnit,
+        apmexSource: g.name,
+        apmexImportDate: new Date().toISOString().split('T')[0]
+      }, 'APMEX');
+      ok++;
+    } catch (err) {
+      console.error('[apmex] apply failed for', m.key, err);
+      fail++;
+    }
+  }
+
+  modal.remove();
+  if (typeof cvToast === 'function') {
+    cvToast('\u2713 Applied APMEX cost to ' + ok + ' record' + (ok === 1 ? '' : 's')
+      + (skippedSame ? ' \u00b7 ' + skippedSame + ' already correct (untouched)' : '')
+      + (fail ? ' (' + fail + ' failed \u2014 see console)' : ''), fail ? 'error' : 'ok');
+  }
+  // Refresh whatever view is showing so updated costs render
+  if (typeof ST !== 'undefined') {
+    if (ST.view === 'inv' && typeof renderInv === 'function') renderInv();
+    else if (ST.view === 'health' && typeof renderHealth === 'function') renderHealth();
+    else if (ST.view === 'dash' && typeof renderDashRouted === 'function') renderDashRouted();
+  }
+}
+// #endregion [APMEX-IMPORT]
+
 async function lookupPCGS(item) {
   const raw = item.raw;
   const btn = document.getElementById('pcgs-btn-' + cn(item.id));
@@ -10149,6 +11171,22 @@ function _healthChecks() {
     count: null,
     action: function(){
       if (typeof showFancySerialChecker === 'function') showFancySerialChecker('');
+    },
+    countable: false
+  });
+
+  // 10. APMEX Cost Matcher (v110) — reconcile acquisition costs from the
+  // Feb-2025 APMEX holdings export against live records. Match engine is
+  // conservative: year + type keyword required; mint-mark mismatch is a
+  // hard disqualifier; user reviews and approves every write.
+  checks.push({
+    id: 'apmex-cost',
+    label: 'APMEX Cost Matcher',
+    desc: 'Match purchase prices from your Feb-2025 APMEX holdings export to records by year, type, mint, and grade. Review each match before anything is written.',
+    icon: '\ud83e\uddfe',
+    count: null,
+    action: function(){
+      if (typeof showApmexMatcher === 'function') showApmexMatcher();
     },
     countable: false
   });
