@@ -1995,7 +1995,7 @@ body.theme-modern-dark select option{
 // Bump this on every deploy so the user can see at a glance which build is
 // running in their browser. Surfaced in three places: the sidebar footer
 // (desktop), the mobile header badge, and the Settings → About section.
-const APP_VERSION = 'v114';
+const APP_VERSION = 'v115';
 const APP_BUILD_DATE = '2026-06-15';
 
 // ── EARLY-HOISTED MODULE STATE ──────────────────────────────────────────────
@@ -8395,9 +8395,23 @@ function _evSetCached(item, entry) {
   _evSaveCache(EV_SCAN_CACHE);
 }
 
-function _evEligibleRecords() {
+// v115: professionally-graded records are EXCLUDED from batch scans by
+// default. PCGS/NGC/ICG/PMG/ANACS etc. attribute errors and die varieties
+// during grading — a slabbed coin with an unattributed major error is
+// rare enough that re-screening every slab wastes API quota. "Self" and
+// "AI" grading authorities do NOT count (isOfficialGrader handles the
+// distinction — same helper that drives the inventory "self" badge).
+// The batch picker exposes a toggle to include graded records anyway.
+function _evIsProfessionallyGraded(item) {
+  const auth = item.raw && (item.raw.gradingAuth || item.raw.gradingauth || item.raw.grading_auth);
+  return typeof isOfficialGrader === 'function' ? isOfficialGrader(auth) : false;
+}
+
+function _evEligibleRecords(includeGraded) {
   return ALL_ITEMS.filter(function(item){
-    return EV_ELIGIBLE_SHEETS.has(item.sheet) && _hasImages(item);
+    if (!EV_ELIGIBLE_SHEETS.has(item.sheet) || !_hasImages(item)) return false;
+    if (!includeGraded && _evIsProfessionallyGraded(item)) return false;
+    return true;
   });
 }
 
@@ -8490,9 +8504,19 @@ const _EV_DISCLAIMER = 'AI vision can miss real errors and can also imagine ones
 // ── Single-record mode ─────────────────────────────────────────────────
 function _evRenderSingle(panel, item) {
   const desc = item.desc || (item.raw && item.raw.description) || item.sheet;
+  // v115: informational note when the user explicitly scans a slab. The
+  // explicit click IS the override (batch mode excludes these by default),
+  // so we scan anyway — but remind them the grading service already did
+  // this attribution professionally.
+  const _gradedNote = _evIsProfessionallyGraded(item)
+    ? '<div style="font-size:11px;color:var(--muted);line-height:1.6;margin-bottom:14px;padding:10px 12px;background:rgba(106,138,171,.1);border-radius:5px;border-left:3px solid #6a8aab">'
+      + '\u2139 This record is professionally graded (' + e(String(item.raw.gradingAuth || '')) + '). Grading services attribute errors and die varieties on the slab label at grading time \u2014 an unattributed find here is unlikely, but scanning anyway since you asked.'
+      + '</div>'
+    : '';
   panel.innerHTML = _evHeader('Scanning record #' + cn(item.id), String(desc).slice(0, 70))
     + '<div id="ev-single-body" style="padding:16px 20px;overflow-y:auto;flex:1;min-height:0">'
     +   '<div style="font-size:11px;color:var(--muted);line-height:1.6;margin-bottom:14px;padding:10px 12px;background:var(--bg4);border-radius:5px;border-left:3px solid var(--gold)">' + e(_EV_DISCLAIMER) + '</div>'
+    +   _gradedNote
     +   '<div id="ev-single-status" style="padding:30px;text-align:center;color:var(--dim);font-size:12px">Starting scan\u2026</div>'
     + '</div>';
 
@@ -8573,19 +8597,24 @@ function _evWireSingleActions(item, result) {
 }
 
 // ── Batch picker mode ──────────────────────────────────────────────────
-function _evRenderPicker(panel) {
-  const eligible = _evEligibleRecords();
+// v115: re-renders itself when the include-graded toggle changes so the
+// stat tiles and start-button count always reflect the current scope.
+function _evRenderPicker(panel, includeGraded) {
+  includeGraded = !!includeGraded;
+  const eligible = _evEligibleRecords(includeGraded);
+  const gradedExcluded = includeGraded ? 0 : (_evEligibleRecords(true).length - eligible.length);
   const scanned = eligible.filter(function(it){ return !!_evGetCached(it); });
   const unscanned = eligible.filter(function(it){ return !_evGetCached(it); });
   const flagged = eligible.filter(function(it){ return !!_evGetFlag(it); });
 
-  panel.innerHTML = _evHeader('Batch Scanner', eligible.length + ' records have photos and are eligible to scan')
+  panel.innerHTML = _evHeader('Batch Scanner', eligible.length + ' record' + (eligible.length===1?'':'s') + ' in scope'
+      + (gradedExcluded > 0 ? ' \u00b7 ' + gradedExcluded + ' professionally-graded excluded' : ''))
     + '<div style="padding:16px 20px;overflow-y:auto;flex:1;min-height:0">'
     +   '<div style="font-size:11px;color:var(--muted);line-height:1.6;margin-bottom:14px;padding:10px 12px;background:var(--bg4);border-radius:5px;border-left:3px solid var(--gold)">' + e(_EV_DISCLAIMER) + '</div>'
-    +   '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px">'
+    +   '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px">'
     +     '<div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:14px;text-align:center">'
     +       '<div style="font-size:22px;font-weight:600;color:var(--text)">' + eligible.length + '</div>'
-    +       '<div style="font-size:9px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);margin-top:4px">Eligible (have photos)</div>'
+    +       '<div style="font-size:9px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);margin-top:4px">In Scope</div>'
     +     '</div>'
     +     '<div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:14px;text-align:center">'
     +       '<div style="font-size:22px;font-weight:600;color:var(--muted)">' + unscanned.length + '</div>'
@@ -8600,10 +8629,19 @@ function _evRenderPicker(panel) {
     +       '<div style="font-size:9px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);margin-top:4px">Flagged for Review</div>'
     +     '</div>'
     +   '</div>'
+    // v115: graded-record scope toggle. Default OFF — slabs from PCGS/NGC/
+    // ICG/PMG etc. had error/variety attribution done professionally at
+    // grading time, so re-screening them is usually redundant. Self-graded
+    // and AI-graded records are always in scope (isOfficialGrader treats
+    // those as unofficial — same helper behind the inventory "self" badge).
+    +   '<label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);margin-bottom:8px;cursor:pointer;padding:9px 12px;background:var(--bg4);border-radius:5px;border:1px solid var(--border)">'
+    +     '<input type="checkbox" id="ev-include-graded"' + (includeGraded ? ' checked' : '') + ' onchange="_evRenderPicker(document.querySelector(\'#ev-modal .ref-modal-panel\'), this.checked)">'
+    +     '<span>Include professionally-graded records <span style="color:var(--dim)">(PCGS, NGC, ICG, PMG, ANACS\u2026 \u2014 the grading service already attributed errors/varieties on the slab' + (gradedExcluded > 0 ? '; ' + gradedExcluded + ' currently excluded' : '') + ')</span></span>'
+    +   '</label>'
     +   (flagged.length > 0 ? _evFlaggedListHtml(flagged) : '')
     +   '<div id="ev-batch-controls">'
     +     '<label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);margin-bottom:12px;cursor:pointer">'
-    +       '<input type="checkbox" id="ev-rescan-all"> Re-scan everything (including ' + scanned.length + ' already-scanned records) \u2014 uses more API quota'
+    +       '<input type="checkbox" id="ev-rescan-all"> Re-scan everything in scope (including ' + scanned.length + ' already-scanned records) \u2014 uses more API quota'
     +     '</label>'
     +     '<button class="bp" id="ev-start-batch-btn" onclick="_evStartBatch()"' + (eligible.length === 0 ? ' disabled' : '') + '>'
     +       (unscanned.length > 0 ? 'Scan ' + unscanned.length + ' Unscanned Record' + (unscanned.length === 1 ? '' : 's') : 'Nothing New to Scan')
@@ -8637,7 +8675,11 @@ let EV_BATCH_CANCEL = false;
 
 async function _evStartBatch() {
   const rescanAll = !!(document.getElementById('ev-rescan-all') || {}).checked;
-  const eligible = _evEligibleRecords();
+  // v115: scope follows the include-graded toggle. Default (unchecked)
+  // excludes PCGS/NGC/ICG/PMG-graded records — the grading service already
+  // did error/variety attribution on those.
+  const includeGraded = !!(document.getElementById('ev-include-graded') || {}).checked;
+  const eligible = _evEligibleRecords(includeGraded);
   const queue = rescanAll ? eligible : eligible.filter(function(it){ return !_evGetCached(it); });
 
   if (queue.length === 0) { if (typeof cvToast === 'function') cvToast('Nothing to scan.', 'info'); return; }
@@ -11806,16 +11848,18 @@ function _healthChecks() {
   // problem to fix.
   (function() {
     if (typeof _evEligibleRecords !== 'function') return;
-    let eligibleCount = 0, flaggedCount = 0;
+    let eligibleCount = 0, flaggedCount = 0, gradedExcluded = 0;
     try {
-      const eligible = _evEligibleRecords();
+      const eligible = _evEligibleRecords(false);            // default scope: graded excluded
       eligibleCount = eligible.length;
+      gradedExcluded = _evEligibleRecords(true).length - eligibleCount;
       flaggedCount = eligible.filter(function(it){ return !!_evGetFlag(it); }).length;
     } catch (e) { /* ALL_ITEMS not ready yet — card still renders, just shows 0s */ }
     checks.push({
       id: 'error-variety-scan',
       label: 'Error & Die Variety Scanner',
-      desc: eligibleCount + ' record' + (eligibleCount===1?'':'s') + ' with photos eligible to scan'
+      desc: eligibleCount + ' record' + (eligibleCount===1?'':'s') + ' with photos in default scope'
+            + (gradedExcluded > 0 ? ' (' + gradedExcluded + ' professionally-graded excluded \u2014 toggle available)' : '')
             + (flaggedCount > 0 ? ' \u2014 ' + flaggedCount + ' currently flagged for review' : '')
             + '. AI-assisted screening for doubled dies, off-center strikes, VAM varieties, and more \u2014 always unverified, never auto-applied.',
       icon: '\ud83d\udd0e',
