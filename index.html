@@ -1995,7 +1995,7 @@ body.theme-modern-dark select option{
 // Bump this on every deploy so the user can see at a glance which build is
 // running in their browser. Surfaced in three places: the sidebar footer
 // (desktop), the mobile header badge, and the Settings → About section.
-const APP_VERSION = 'v113';
+const APP_VERSION = 'v114';
 const APP_BUILD_DATE = '2026-06-15';
 
 // ── EARLY-HOISTED MODULE STATE ──────────────────────────────────────────────
@@ -5673,8 +5673,15 @@ function renderInv(){
         const _fancyMarkerHtml = _fancy
           ? `<span class="row-fancy-marker" title="Fancy serial: ${e(_fancy.names.join(' • '))}" style="color:${FANCY_RARITY[_fancy.tier].color}">✨</span>`
           : '';
+        // v114: inline error/variety marker, same pattern as the fancy-serial
+        // marker above. Only shows for records with an explicitly-approved
+        // flag (see _evGetFlag), never for a raw unreviewed scan result.
+        const _evFlagRow = typeof _evGetFlag === 'function' ? _evGetFlag(item) : null;
+        const _evMarkerHtml = _evFlagRow
+          ? `<span class="row-fancy-marker" title="Possible error/variety: ${e(_evFlagRow.findings.map(f=>f.type).join(' • '))} (unverified)" style="color:var(--gold)">🚩</span>`
+          : '';
         return `<tr class="${isEl?'sel':''}" onclick="showDetail(ALL_ITEMS[${ALL_ITEMS.indexOf(item)}])" style="cursor:pointer">
-          <td style="font-size:11px;color:var(--dim);white-space:nowrap">${cn(item.id)}${_hasImg?`<span class="row-img-marker" title="Has images attached"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg></span>`:''}${_fancyMarkerHtml}</td>
+          <td style="font-size:11px;color:var(--dim);white-space:nowrap">${cn(item.id)}${_hasImg?`<span class="row-img-marker" title="Has images attached"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg></span>`:''}${_fancyMarkerHtml}${_evMarkerHtml}</td>
           <td>
             <span class="pill" style="background:${gc}18;color:${gc};border-color:${gc}38;font-size:10px;margin-right:6px">${sm.label}</span>
             <span title="${e(item.desc)}">${e(item.desc).substring(0,50)}${item.desc.length>50?'…':''}</span>
@@ -6078,6 +6085,32 @@ function showDetail(item){
   // every matched pattern, individual tier colors, and typical premium
   // ranges. Both reference the same _checkFancySerial result so they can
   // never disagree.
+  // v114: error/die-variety flag banner. Only appears once a scan finding
+  // has been explicitly approved via the scanner modal (see _evGetFlag) —
+  // a raw scan result that the user hasn't flagged never shows here, since
+  // showing every AI guess unprompted would be noisy and could read as
+  // more authoritative than intended. Clicking re-opens the scanner for
+  // full detail / re-scan.
+  let errorVarietyBanner = '';
+  if (typeof EV_ELIGIBLE_SHEETS !== 'undefined' && EV_ELIGIBLE_SHEETS.has(item.sheet)) {
+    const _evFlag = typeof _evGetFlag === 'function' ? _evGetFlag(item) : null;
+    if (_evFlag && _evFlag.findings.length > 0) {
+      const _evTop = _evFlag.findings[0];
+      const _evMore = _evFlag.findings.length > 1 ? ' +' + (_evFlag.findings.length - 1) + ' more' : '';
+      errorVarietyBanner = '<div onclick="showErrorVarietyScanner(ALL_ITEMS[' + ALL_ITEMS.indexOf(item) + '])" '
+        + 'style="margin:0 0 14px 0;padding:10px 14px;background:rgba(217,140,43,.12);border:1px solid rgba(217,140,43,.4);border-left:3px solid var(--gold);border-radius:6px;cursor:pointer;transition:background .15s ease" '
+        + 'onmouseover="this.style.background=\'rgba(217,140,43,.2)\'" '
+        + 'onmouseout="this.style.background=\'rgba(217,140,43,.12)\'" '
+        + 'title="AI-suggested possible error/variety \u2014 unverified. Click for full detail.">'
+        +   '<div style="display:flex;align-items:center;gap:10px;justify-content:space-between">'
+        +     '<div style="font-size:12px;font-weight:600;color:var(--gold)">\ud83d\udea9 Possible Error/Variety \u2014 ' + e(_evTop.type) + e(_evMore) + '</div>'
+        +     '<div style="font-size:10px;color:var(--dim)">unverified \u2192</div>'
+        +   '</div>'
+        +   '<div style="font-size:11px;color:var(--muted);margin-top:3px">AI-suggested, needs manual verification before relying on it</div>'
+        + '</div>';
+    }
+  }
+
   let fancyBanner = '';
   let fancySection = '';
   if (FANCY_SERIAL_SHEETS.has(item.sheet)) {
@@ -6152,6 +6185,7 @@ function showDetail(item){
   }
 
   document.getElementById('dp-body').innerHTML = `
+    ${errorVarietyBanner}
     ${fancyBanner}
     <div class="dp-section">Summary</div>
     <div class="dp-row"><span class="dp-label">Record #</span><span class="dp-value">${e(item.id)}</span></div>
@@ -6342,6 +6376,24 @@ function showDetail(item){
       pcBtn.onclick = () => lookupPriceCharting(item);
       actions.appendChild(pcBtn);
     }
+    // Error & Die Variety Scanner button (v114) — only shown when the record
+    // is an eligible sheet (coins/currency, not bullion bars/rounds) AND has
+    // at least one photo, since the scan needs images to work with.
+    if (typeof EV_ELIGIBLE_SHEETS !== 'undefined' && EV_ELIGIBLE_SHEETS.has(item.sheet) && typeof _hasImages === 'function' && _hasImages(item)) {
+      const evBtn = document.createElement('button');
+      const _flaggedEV = typeof _evGetFlag === 'function' ? !!_evGetFlag(item) : false;
+      evBtn.className = 'lookup-btn' + (_flaggedEV ? ' tpg-done' : '');
+      evBtn.id = 'errorscan-btn-' + cn(item.id);
+      evBtn.textContent = _flaggedEV ? '\ud83d\udea9 Error Scan' : '\ud83d\udd0e Error Scan';
+      evBtn.title = _flaggedEV
+        ? 'This record is flagged with possible findings \u2014 click to review'
+        : 'Screen this record\u2019s photos for minting errors or die varieties (AI-assisted, unverified)';
+      evBtn.style.cssText = _flaggedEV
+        ? 'background:rgba(217,140,43,.15);border-color:rgba(217,140,43,.45);color:var(--gold)'
+        : 'background:rgba(106,138,171,.12);border-color:rgba(106,138,171,.35);color:#8ba3bd';
+      evBtn.onclick = () => showErrorVarietyScanner(item);
+      actions.appendChild(evBtn);
+    }
     // Paper-money-only reference buttons — pure browse links, no data capture.
     // Shown for usNotes / confederate / obsolete / fractional / foreignNotes.
     const paperSheets = ['usNotes','confederate','obsolete','fractional','foreignNotes'];
@@ -6451,7 +6503,8 @@ const _TPG_KEY_MAP = {
   'Numista': 'numista',
   'Coin Reference': 'coinref',
   'eBay': 'ebay',
-  'PriceCharting': 'pricecharting'
+  'PriceCharting': 'pricecharting',
+  'Error Scan': 'errorscan'
 };
 
 // Returns truthy (ISO timestamp string) if the given TPG lookup has been applied
@@ -8188,11 +8241,538 @@ async function _apmexApplyChecked() {
   // Refresh whatever view is showing so updated costs render
   if (typeof ST !== 'undefined') {
     if (ST.view === 'inv' && typeof renderInv === 'function') renderInv();
-    else if (ST.view === 'health' && typeof renderHealth === 'function') renderHealth();
+    else if (ST.view === 'health' && typeof renderDataHealth === 'function') renderDataHealth();
     else if (ST.view === 'dash' && typeof renderDashRouted === 'function') renderDashRouted();
   }
 }
 // #endregion [APMEX-IMPORT]
+
+// #region [ERROR-VARIETY-SCAN]
+// ═══════════════════════════════════════════════════════════════════════
+// ERROR & DIE VARIETY SCANNER (v114)
+// ═══════════════════════════════════════════════════════════════════════
+// Uses the existing AI vision fallback chain (Gemini → Groq → OpenRouter →
+// Anthropic) to screen a record's photos for known minting-error and
+// die-variety signatures. This is a SCREENING tool, not authentication —
+// die-variety attribution is genuinely hard even for experienced collectors
+// with a loupe and reference books, so results are always framed as
+// "worth a closer look," never as confirmed findings, and NOTHING is
+// written to a record's core fields (grade/variety/value) automatically.
+// Findings only ever land in a dedicated _errorVarietyFlag object that the
+// user explicitly approves per-record in the review table.
+//
+// Two entry points:
+//   1. Detail panel "🔎 Error Scan" button (single record, only shown when
+//      the record has at least one photo)
+//   2. Data Health → "Error & Die Variety Scanner" card (batch mode —
+//      picker screen showing eligible/scanned/flagged counts, then a
+//      sequential batch run with progress + cancel)
+//
+// Scan results are cached client-side (ERROR_SCAN_CACHE, localStorage) so
+// re-opening the tool doesn't re-burn API quota re-scanning records that
+// already came back clean. The cache is a UI convenience only — it is NOT
+// synced to Supabase/Sheets and carries no collection data. Only entries
+// the user explicitly approves get written to the actual record via the
+// standard _tpgApply path (so they sync, get a modified timestamp, etc.)
+// ═══════════════════════════════════════════════════════════════════════
+
+// Sheets currency-error vocabulary applies to vs. coin-error vocabulary.
+// mintSets/bullion sheets are excluded — melt-value bars/rounds don't have
+// "die varieties" in the collector sense.
+const EV_COIN_SHEETS     = new Set(['gradedSilver','rawSilver','gradedUS','rawUS','gradedForeign','rawForeign','ancient','mintSets']);
+const EV_CURRENCY_SHEETS = new Set(['usNotes','confederate','obsolete','foreignNotes','fractional']);
+const EV_ELIGIBLE_SHEETS = new Set([...EV_COIN_SHEETS, ...EV_CURRENCY_SHEETS]);
+
+// The error-scan prompt. Two vocabularies (coin / currency) folded into one
+// prompt since the model can see which kind of item is in the photo and
+// self-select the relevant section — this avoids needing a second AI round
+// trip just to classify coin-vs-currency before running the real scan.
+const _EV_PROMPT = `You are screening photos of a collectible for possible MINTING ERRORS or DIE VARIETIES. This is a SCREENING pass, not authentication — be conservative and only flag something if there is a genuinely visible, specific indicator. Most coins and notes are normal and should come back with no findings.
+
+If this is a COIN, look for:
+- Doubled Die Obverse/Reverse (DDO/DDR) — doubling visible in date, lettering, or design elements (NOT to be confused with machine doubling, which is shelf-like and shallow — true doubled dies show separated, rounded doubling)
+- Off-center strike — estimate the percentage off-center if visible
+- Clipped planchet (straight or curved clip)
+- Die crack or cud (raised line or blob from a broken die)
+- Lamination error (peeling/flaking planchet surface)
+- Repunched mint mark (RPM) — mint mark shows doubling/shifting
+- Overdate (one date's digits show underneath another, e.g. 1918/17-D)
+- Wrong planchet / mule (design struck on the wrong metal or wrong die pairing)
+- Broadstrike (struck without the retaining collar, coin wider than normal)
+- Brockage (mirror-image design from a stuck coin)
+- Rotated die (reverse design rotated relative to obverse — only flag if clearly visible from the photo angle)
+- Known VAM variety indicators for Morgan/Peace dollars (doubling on date/mintmark, die scratches in specific documented patterns) — only cite a specific VAM number if you are genuinely confident, otherwise describe the physical indicator and say "possible VAM variety, needs VAM reference book confirmation"
+- Well-documented key varieties if visually consistent: 1955/1955-D/1972/1983/1995 Lincoln cent DDO, 1937-D 3-legged Buffalo nickel, 1918/17-D Buffalo nickel, 1942/1 Mercury dime overdate, 1900-O/CC Morgan dollar overmintmark
+
+If this is PAPER CURRENCY, look for:
+- Overprint/seal misalignment (Treasury seal or serial numbers shifted from normal position)
+- Cutting error (off-center cut, visible edge of adjacent note)
+- Fold-over error (part of the design missing/blank from a printing-stage fold)
+- Mismatched serial numbers (the two serial numbers on the same note read differently)
+- Missing or doubled overprint
+- Ink smear or heavy print doubling
+- Third printing/overprint errors specific to the note type
+
+Respond ONLY with JSON, no markdown fences, no extra text, in this exact shape:
+{
+  "hasFinding": true or false,
+  "findings": [
+    {
+      "type": "short name, e.g. 'Doubled Die Obverse' or 'Off-Center Strike'",
+      "location": "where on the coin/note this is visible, e.g. 'date and LIBERTY on obverse'",
+      "confidence": "high" or "medium" or "low",
+      "description": "1-2 sentence plain-language description of what you see and why it looks like this error/variety",
+      "wellKnownVariety": "specific catalog name/VAM number ONLY if you are genuinely confident, otherwise null",
+      "verifyWith": "which reference to check to confirm, e.g. 'VAM reference book', 'PCGS CoinFacts VarietyPlus', 'error-ref.com'"
+    }
+  ],
+  "imageQualityNote": "note here if photos are too blurry/low-resolution/poorly lit to assess confidently, otherwise null"
+}
+If hasFinding is false, return an empty findings array. Do not invent findings to seem useful — a normal coin/note with nothing unusual is the most common and correct answer.`;
+
+// ── Image URL → resized base64 data URL ──────────────────────────────
+// Stored record images are Supabase Storage URLs (public bucket), not
+// base64. The AI analyzer functions expect base64 data URLs (same shape
+// as AI_FRONT_IMG/AI_BACK_IMG from the live camera-capture flow), so this
+// fetches + resizes + re-encodes. Resize keeps batch-mode payload size
+// sane across potentially hundreds of records.
+function _evUrlToDataUrl(url, maxSize) {
+  maxSize = maxSize || 1200;
+  return new Promise(function(resolve, reject) {
+    fetch(url)
+      .then(function(r){
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.blob();
+      })
+      .then(function(blob){
+        const img = new Image();
+        const objUrl = URL.createObjectURL(blob);
+        img.onload = function(){
+          const scale = Math.min(maxSize / img.width, maxSize / img.height, 1);
+          const w = Math.round(img.width * scale);
+          const h = Math.round(img.height * scale);
+          const canvas = document.createElement('canvas');
+          canvas.width = w; canvas.height = h;
+          canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+          URL.revokeObjectURL(objUrl);
+          resolve(canvas.toDataURL('image/jpeg', 0.85));
+        };
+        img.onerror = function(){ URL.revokeObjectURL(objUrl); reject(new Error('Could not decode image')); };
+        img.src = objUrl;
+      })
+      .catch(reject);
+  });
+}
+
+function _evGetImageUrls(item) {
+  const r = item.raw || {};
+  return {
+    front: r.imageFrontUrl || r.imagefronturl || r.image_front_url || null,
+    back:  r.imageBackUrl  || r.imagebackurl  || r.image_back_url  || null
+  };
+}
+
+// ── Local scan-status cache (localStorage, NOT synced) ────────────────
+// Tracks "have we screened this record" so batch mode can skip
+// already-clean records by default. Keyed by sheet|id. Value: {scannedAt,
+// hasFinding} — the full finding detail for FLAGGED records lives on the
+// record itself (_errorVarietyFlag) once the user approves it; this cache
+// only needs enough to render the picker-screen stats and skip logic.
+function _evLoadCache() {
+  try {
+    const raw = localStorage.getItem('cv_error_scan_cache');
+    return raw ? JSON.parse(raw) : {};
+  } catch (e) { return {}; }
+}
+function _evSaveCache(cache) {
+  try { localStorage.setItem('cv_error_scan_cache', JSON.stringify(cache)); } catch (e) { /* quota or disabled — non-fatal, just skip persistence */ }
+}
+let EV_SCAN_CACHE = _evLoadCache();
+function _evCacheKey(item) { return item.sheet + '|' + cn(item.id); }
+function _evGetCached(item) { return EV_SCAN_CACHE[_evCacheKey(item)] || null; }
+function _evSetCached(item, entry) {
+  EV_SCAN_CACHE[_evCacheKey(item)] = entry;
+  _evSaveCache(EV_SCAN_CACHE);
+}
+
+function _evEligibleRecords() {
+  return ALL_ITEMS.filter(function(item){
+    return EV_ELIGIBLE_SHEETS.has(item.sheet) && _hasImages(item);
+  });
+}
+
+// ── Core single-record scan ────────────────────────────────────────────
+// Temporarily swaps AI_CAPTURE_MODE to 'error-scan' so aiBuildPrompt()
+// returns _EV_PROMPT instead of the general-identification prompt, then
+// restores whatever mode was active before (defensive — the modal-driven
+// flows in this app are effectively single-threaded/sequential, but this
+// costs nothing and protects against any future concurrent-call surprise).
+async function _evScanRecord(item, onStatus) {
+  const urls = _evGetImageUrls(item);
+  if (!urls.front && !urls.back) throw new Error('No images on this record.');
+
+  if (typeof onStatus === 'function') onStatus('Loading photos\u2026');
+  const [frontData, backData] = await Promise.all([
+    urls.front ? _evUrlToDataUrl(urls.front).catch(function(){ return null; }) : Promise.resolve(null),
+    urls.back  ? _evUrlToDataUrl(urls.back).catch(function(){ return null; })  : Promise.resolve(null)
+  ]);
+  if (!frontData && !backData) throw new Error('Could not load images (network or CORS issue).');
+
+  const prevMode = AI_CAPTURE_MODE;
+  AI_CAPTURE_MODE = 'error-scan';
+  try {
+    const result = await aiAnalyzeWithFallback(frontData, backData, onStatus);
+    // aiAnalyzeWithFallback runs the result through _aiNormalizeResult, which
+    // is shaped for the identification flow (expects category/grade/etc
+    // fields). Our JSON has a different shape, so we bypass that by reading
+    // straight from the raw parsed object the dispatch functions return.
+    // _aiNormalizeResult is lenient (just fills in defaults for missing
+    // fields) so result still carries our hasFinding/findings/imageQualityNote
+    // properties intact — verified below with safe fallbacks either way.
+    return {
+      hasFinding: !!result.hasFinding,
+      findings: Array.isArray(result.findings) ? result.findings : [],
+      imageQualityNote: result.imageQualityNote || null,
+      provider: result._aiProvider || aiCurrentProvider(),
+      scannedAt: new Date().toISOString()
+    };
+  } finally {
+    AI_CAPTURE_MODE = prevMode;
+  }
+}
+
+// ── Inventory marker + detail banner support ──────────────────────────
+// Mirrors the fancy-serial marker pattern (v96) — small icon on inventory
+// rows, colored banner on the detail panel — but sourced from the record's
+// _errorVarietyFlag field (only present once a finding has been
+// user-approved), not from a cache.
+function _evGetFlag(item) {
+  const r = item.raw || {};
+  return (r._errorVarietyFlag && Array.isArray(r._errorVarietyFlag.findings) && r._errorVarietyFlag.findings.length > 0)
+    ? r._errorVarietyFlag : null;
+}
+
+// ── Modal: single-record OR batch picker ───────────────────────────────
+function showErrorVarietyScanner(item) {
+  const existing = document.getElementById('ev-modal');
+  if (existing) existing.remove();
+
+  const modal = document.createElement('div');
+  modal.id = 'ev-modal';
+  modal.className = 'ref-modal';
+  modal.onclick = function(ev){ if (ev.target === modal) modal.remove(); };
+  document.body.appendChild(modal);
+
+  const panel = document.createElement('div');
+  panel.className = 'ref-modal-panel';
+  panel.style.cssText = 'background:var(--bg2);border:1px solid var(--gold3);border-radius:10px;width:min(880px,95vw);max-height:90vh;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 16px 48px rgba(0,0,0,.7)';
+  modal.appendChild(panel);
+
+  if (item) {
+    _evRenderSingle(panel, item);
+  } else {
+    _evRenderPicker(panel);
+  }
+}
+
+function _evHeader(title, sub) {
+  return '<div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--border)">'
+    + '<div>'
+    +   '<h2 style="margin:0;font-family:var(--font-display);font-size:17px;color:var(--gold)">\ud83d\udd0e Error &amp; Die Variety Scanner</h2>'
+    +   '<div style="font-size:11px;color:var(--muted);margin-top:2px">' + e(sub || '') + '</div>'
+    + '</div>'
+    + '<button onclick="document.getElementById(\'ev-modal\').remove()" style="background:transparent;border:1px solid var(--border);color:var(--muted);padding:6px 14px;border-radius:4px;cursor:pointer;font-size:12px">Close</button>'
+    + '</div>';
+}
+
+const _EV_DISCLAIMER = 'AI vision can miss real errors and can also imagine ones that aren\u2019t there \u2014 doubled-die attribution genuinely requires a loupe and reference book even for experienced collectors. Treat every finding below as "worth a second look," never as confirmed. Nothing is written to Grade, Variety, or Value automatically.';
+
+// ── Single-record mode ─────────────────────────────────────────────────
+function _evRenderSingle(panel, item) {
+  const desc = item.desc || (item.raw && item.raw.description) || item.sheet;
+  panel.innerHTML = _evHeader('Scanning record #' + cn(item.id), String(desc).slice(0, 70))
+    + '<div id="ev-single-body" style="padding:16px 20px;overflow-y:auto;flex:1;min-height:0">'
+    +   '<div style="font-size:11px;color:var(--muted);line-height:1.6;margin-bottom:14px;padding:10px 12px;background:var(--bg4);border-radius:5px;border-left:3px solid var(--gold)">' + e(_EV_DISCLAIMER) + '</div>'
+    +   '<div id="ev-single-status" style="padding:30px;text-align:center;color:var(--dim);font-size:12px">Starting scan\u2026</div>'
+    + '</div>';
+
+  _evScanRecord(item, function(status){
+    const el = document.getElementById('ev-single-status');
+    if (el) el.textContent = status;
+  }).then(function(result){
+    _evSetCached(item, { scannedAt: result.scannedAt, hasFinding: result.hasFinding });
+    const body = document.getElementById('ev-single-body');
+    if (!body) return;
+    body.innerHTML = '<div style="font-size:11px;color:var(--muted);line-height:1.6;margin-bottom:14px;padding:10px 12px;background:var(--bg4);border-radius:5px;border-left:3px solid var(--gold)">' + e(_EV_DISCLAIMER) + '</div>'
+      + _evRenderFindingsBlock(item, result)
+      + '<div id="ev-single-actions" style="margin-top:14px;display:flex;gap:8px;justify-content:flex-end"></div>';
+    _evWireSingleActions(item, result);
+  }).catch(function(err){
+    const el = document.getElementById('ev-single-status');
+    if (el) { el.innerHTML = '<span style="color:var(--red)">Scan failed: ' + e(err.message) + '</span>'; }
+  });
+}
+
+function _evRenderFindingsBlock(item, result) {
+  if (!result.hasFinding || result.findings.length === 0) {
+    return '<div style="padding:24px;text-align:center;background:var(--bg3);border-radius:8px;border:1px solid rgba(34,197,94,.3)">'
+      + '<div style="font-size:24px;margin-bottom:8px">\u2713</div>'
+      + '<div style="font-size:13px;color:#22c55e;font-weight:600">No errors or varieties detected</div>'
+      + '<div style="font-size:11px;color:var(--dim);margin-top:4px">Photos looked like a normal strike/print to the AI.</div>'
+      + (result.imageQualityNote ? '<div style="font-size:11px;color:var(--gold);margin-top:8px;font-style:italic">' + e(result.imageQualityNote) + '</div>' : '')
+      + '</div>';
+  }
+  const rows = result.findings.map(function(f){
+    const confColors = { high: '#22c55e', medium: '#c9a84c', low: '#6a8aab' };
+    const cc = confColors[f.confidence] || '#6a8aab';
+    return '<div style="border:1px solid ' + cc + '55;border-left:3px solid ' + cc + ';border-radius:6px;padding:12px 14px;margin-bottom:8px;background:var(--bg3)">'
+      + '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:4px">'
+      +   '<div style="font-size:13px;font-weight:600;color:var(--text)">' + e(f.type || 'Possible finding') + (f.wellKnownVariety ? ' \u2014 ' + e(f.wellKnownVariety) : '') + '</div>'
+      +   '<div style="font-size:9px;text-transform:uppercase;letter-spacing:.06em;color:' + cc + ';white-space:nowrap">' + e(f.confidence || 'low') + ' confidence</div>'
+      + '</div>'
+      + (f.location ? '<div style="font-size:11px;color:var(--muted);margin-bottom:4px">Location: ' + e(f.location) + '</div>' : '')
+      + '<div style="font-size:12px;color:var(--text);line-height:1.5">' + e(f.description || '') + '</div>'
+      + (f.verifyWith ? '<div style="font-size:10px;color:var(--dim);margin-top:6px;font-style:italic">Verify with: ' + e(f.verifyWith) + '</div>' : '')
+      + '</div>';
+  }).join('');
+  return '<div style="font-size:11px;color:var(--gold);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">' + result.findings.length + ' possible finding' + (result.findings.length === 1 ? '' : 's') + '</div>'
+    + rows
+    + (result.imageQualityNote ? '<div style="font-size:11px;color:var(--gold);margin-top:6px;font-style:italic">\u26a0 ' + e(result.imageQualityNote) + '</div>' : '');
+}
+
+function _evWireSingleActions(item, result) {
+  const actionsEl = document.getElementById('ev-single-actions');
+  if (!actionsEl) return;
+  if (result.hasFinding && result.findings.length > 0) {
+    const flagBtn = document.createElement('button');
+    flagBtn.className = 'bp';
+    flagBtn.textContent = 'Flag This Record';
+    flagBtn.title = 'Save these findings to the record for later reference \u2014 does not change Grade/Variety/Value';
+    flagBtn.onclick = async function(){
+      flagBtn.disabled = true; flagBtn.textContent = 'Saving\u2026';
+      await _tpgApply(item, {
+        _errorVarietyFlag: {
+          findings: result.findings,
+          imageQualityNote: result.imageQualityNote,
+          scannedAt: result.scannedAt,
+          provider: result.provider,
+          note: 'AI-suggested \u2014 verify before relying on this attribution'
+        }
+      }, 'Error Scan');
+      if (typeof cvToast === 'function') cvToast('\u2713 Flagged record #' + cn(item.id) + ' for review', 'ok');
+      const modal = document.getElementById('ev-modal');
+      if (modal) modal.remove();
+    };
+    actionsEl.appendChild(flagBtn);
+  }
+  const rescanBtn = document.createElement('button');
+  rescanBtn.className = 'bg';
+  rescanBtn.textContent = 'Re-scan';
+  rescanBtn.onclick = function(){ _evRenderSingle(document.querySelector('#ev-modal .ref-modal-panel'), item); };
+  actionsEl.appendChild(rescanBtn);
+}
+
+// ── Batch picker mode ──────────────────────────────────────────────────
+function _evRenderPicker(panel) {
+  const eligible = _evEligibleRecords();
+  const scanned = eligible.filter(function(it){ return !!_evGetCached(it); });
+  const unscanned = eligible.filter(function(it){ return !_evGetCached(it); });
+  const flagged = eligible.filter(function(it){ return !!_evGetFlag(it); });
+
+  panel.innerHTML = _evHeader('Batch Scanner', eligible.length + ' records have photos and are eligible to scan')
+    + '<div style="padding:16px 20px;overflow-y:auto;flex:1;min-height:0">'
+    +   '<div style="font-size:11px;color:var(--muted);line-height:1.6;margin-bottom:14px;padding:10px 12px;background:var(--bg4);border-radius:5px;border-left:3px solid var(--gold)">' + e(_EV_DISCLAIMER) + '</div>'
+    +   '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px">'
+    +     '<div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:14px;text-align:center">'
+    +       '<div style="font-size:22px;font-weight:600;color:var(--text)">' + eligible.length + '</div>'
+    +       '<div style="font-size:9px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);margin-top:4px">Eligible (have photos)</div>'
+    +     '</div>'
+    +     '<div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:14px;text-align:center">'
+    +       '<div style="font-size:22px;font-weight:600;color:var(--muted)">' + unscanned.length + '</div>'
+    +       '<div style="font-size:9px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);margin-top:4px">Not Yet Scanned</div>'
+    +     '</div>'
+    +     '<div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:14px;text-align:center">'
+    +       '<div style="font-size:22px;font-weight:600;color:#6a8aab">' + scanned.length + '</div>'
+    +       '<div style="font-size:9px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);margin-top:4px">Previously Scanned</div>'
+    +     '</div>'
+    +     '<div style="background:var(--bg3);border:1px solid ' + (flagged.length ? 'rgba(217,140,43,.4)' : 'var(--border)') + ';border-radius:8px;padding:14px;text-align:center">'
+    +       '<div style="font-size:22px;font-weight:600;color:' + (flagged.length ? 'var(--gold)' : 'var(--muted)') + '">' + flagged.length + '</div>'
+    +       '<div style="font-size:9px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);margin-top:4px">Flagged for Review</div>'
+    +     '</div>'
+    +   '</div>'
+    +   (flagged.length > 0 ? _evFlaggedListHtml(flagged) : '')
+    +   '<div id="ev-batch-controls">'
+    +     '<label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);margin-bottom:12px;cursor:pointer">'
+    +       '<input type="checkbox" id="ev-rescan-all"> Re-scan everything (including ' + scanned.length + ' already-scanned records) \u2014 uses more API quota'
+    +     '</label>'
+    +     '<button class="bp" id="ev-start-batch-btn" onclick="_evStartBatch()"' + (eligible.length === 0 ? ' disabled' : '') + '>'
+    +       (unscanned.length > 0 ? 'Scan ' + unscanned.length + ' Unscanned Record' + (unscanned.length === 1 ? '' : 's') : 'Nothing New to Scan')
+    +     '</button>'
+    +   '</div>'
+    +   '<div id="ev-batch-progress" style="display:none;margin-top:16px"></div>'
+    +   '<div id="ev-batch-results" style="margin-top:16px"></div>'
+    + '</div>';
+}
+
+function _evFlaggedListHtml(flagged) {
+  const rows = flagged.map(function(it){
+    const flag = _evGetFlag(it);
+    const desc = it.desc || (it.raw && it.raw.description) || it.sheet;
+    const topFinding = flag.findings[0];
+    return '<div onclick="document.getElementById(\'ev-modal\').remove();showErrorVarietyScanner(ALL_ITEMS[' + ALL_ITEMS.indexOf(it) + '])" style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border:1px solid rgba(217,140,43,.35);border-radius:6px;margin-bottom:5px;cursor:pointer;background:var(--bg3)">'
+      + '<div style="min-width:0;overflow:hidden">'
+      +   '<div style="font-size:12px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">#' + e(cn(it.id)) + ' \u00b7 ' + e(String(desc).slice(0,50)) + '</div>'
+      +   '<div style="font-size:10px;color:var(--gold);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + e(topFinding ? topFinding.type : '') + (flag.findings.length > 1 ? ' +' + (flag.findings.length - 1) + ' more' : '') + '</div>'
+      + '</div>'
+      + '<div style="font-size:10px;color:var(--dim);white-space:nowrap">review \u2192</div>'
+      + '</div>';
+  }).join('');
+  return '<details style="margin-bottom:16px">'
+    + '<summary style="font-size:11px;color:var(--gold);cursor:pointer;margin-bottom:8px">\ud83d\udea9 ' + flagged.length + ' flagged record' + (flagged.length===1?'':'s') + ' \u2014 click to review</summary>'
+    + '<div style="margin-top:8px">' + rows + '</div>'
+    + '</details>';
+}
+
+let EV_BATCH_CANCEL = false;
+
+async function _evStartBatch() {
+  const rescanAll = !!(document.getElementById('ev-rescan-all') || {}).checked;
+  const eligible = _evEligibleRecords();
+  const queue = rescanAll ? eligible : eligible.filter(function(it){ return !_evGetCached(it); });
+
+  if (queue.length === 0) { if (typeof cvToast === 'function') cvToast('Nothing to scan.', 'info'); return; }
+
+  const estSeconds = queue.length * 2.2; // ~2.2s/record incl. throttle + network
+  const estMin = Math.ceil(estSeconds / 60);
+  if (!confirm('Scan ' + queue.length + ' record' + (queue.length===1?'':'s') + '?\n\nThis makes ' + queue.length + ' AI vision API call' + (queue.length===1?'':'s') + ' against your configured provider(s) \u2014 roughly ' + estMin + ' minute' + (estMin===1?'':'s') + '. You can cancel partway through; anything already scanned stays saved.')) return;
+
+  EV_BATCH_CANCEL = false;
+  const controls = document.getElementById('ev-batch-controls');
+  const progressEl = document.getElementById('ev-batch-progress');
+  const resultsEl = document.getElementById('ev-batch-results');
+  if (controls) controls.style.display = 'none';
+  if (resultsEl) resultsEl.innerHTML = '';
+  if (progressEl) {
+    progressEl.style.display = 'block';
+    progressEl.innerHTML = '<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:6px">'
+      + '<span id="ev-progress-text">Starting\u2026</span>'
+      + '<button class="bg" onclick="EV_BATCH_CANCEL=true" style="font-size:10px;padding:3px 10px">Cancel</button>'
+      + '</div>'
+      + '<div style="height:6px;background:var(--bg3);border-radius:3px;overflow:hidden"><div id="ev-progress-bar" style="height:100%;width:0%;background:var(--gold);transition:width .2s ease"></div></div>';
+  }
+
+  const flaggedThisRun = [];
+  let done = 0, errors = 0;
+
+  for (let i = 0; i < queue.length; i++) {
+    if (EV_BATCH_CANCEL) break;
+    const item = queue[i];
+    const desc = String(item.desc || (item.raw && item.raw.description) || item.sheet).slice(0, 40);
+    const textEl = document.getElementById('ev-progress-text');
+    const barEl = document.getElementById('ev-progress-bar');
+    if (textEl) textEl.textContent = 'Scanning ' + (i+1) + ' of ' + queue.length + ' \u2014 #' + cn(item.id) + ' ' + desc + ' (' + flaggedThisRun.length + ' flagged so far)';
+    if (barEl) barEl.style.width = Math.round(((i) / queue.length) * 100) + '%';
+
+    try {
+      const result = await _evScanRecord(item);
+      _evSetCached(item, { scannedAt: result.scannedAt, hasFinding: result.hasFinding });
+      if (result.hasFinding && result.findings.length > 0) {
+        flaggedThisRun.push({ item: item, result: result });
+      }
+      done++;
+    } catch (err) {
+      console.warn('[error-scan] batch item failed:', item.sheet, item.id, err.message);
+      errors++;
+    }
+
+    // Gentle inter-record delay — protects free-tier per-minute quotas
+    // (Gemini free tier, Groq, OpenRouter all have per-minute caps well
+    // under what an unthrottled loop would hit across hundreds of records).
+    if (i < queue.length - 1 && !EV_BATCH_CANCEL) {
+      await new Promise(function(r){ setTimeout(r, 900); });
+    }
+  }
+
+  if (progressEl) {
+    const barEl = document.getElementById('ev-progress-bar');
+    if (barEl) barEl.style.width = '100%';
+    const textEl = document.getElementById('ev-progress-text');
+    if (textEl) textEl.textContent = (EV_BATCH_CANCEL ? 'Cancelled \u2014 ' : 'Done \u2014 ') + done + ' scanned' + (errors ? ', ' + errors + ' failed' : '') + ', ' + flaggedThisRun.length + ' flagged';
+  }
+
+  if (resultsEl) {
+    resultsEl.innerHTML = flaggedThisRun.length === 0
+      ? '<div style="padding:20px;text-align:center;color:#22c55e;font-size:12px">\u2713 No errors or varieties found in this batch.</div>'
+      : _evBatchReviewTable(flaggedThisRun);
+  }
+  window._evBatchFindings = flaggedThisRun;
+}
+
+// Reuses the fixed-table pattern from the APMEX Cost Matcher (v113) so the
+// review list stays legible regardless of description length.
+function _evBatchReviewTable(flaggedThisRun) {
+  const _td = 'padding:7px 8px;border-bottom:1px solid var(--border);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle';
+  const rows = flaggedThisRun.map(function(f, i){
+    const item = f.item, result = f.result;
+    const desc = String(item.desc || (item.raw && item.raw.description) || item.sheet);
+    const sheetLabel = (SHEET_MAP && SHEET_MAP[item.sheet]) ? SHEET_MAP[item.sheet].label : item.sheet;
+    const top = result.findings[0];
+    const confColors = { high: '#22c55e', medium: '#c9a84c', low: '#6a8aab' };
+    const cc = confColors[top.confidence] || '#6a8aab';
+    return '<tr>'
+      + '<td style="' + _td + ';text-align:center"><input type="checkbox" class="ev-batch-check" data-i="' + i + '" checked></td>'
+      + '<td style="' + _td + ';color:var(--dim);font-family:DM Mono,monospace;font-size:11px">' + e(cn(item.id)) + '</td>'
+      + '<td style="' + _td + ';color:var(--text)" title="' + e(desc) + '">' + e(desc) + '</td>'
+      + '<td style="' + _td + ';color:var(--dim);font-size:11px">' + e(sheetLabel) + '</td>'
+      + '<td style="' + _td + ';color:' + cc + ';font-size:11px">' + e(top.type) + (result.findings.length > 1 ? ' +' + (result.findings.length-1) : '') + '</td>'
+      + '<td style="' + _td + ';font-size:9px;text-transform:uppercase;color:' + cc + '">' + e(top.confidence) + '</td>'
+      + '</tr>';
+  }).join('');
+  return '<div style="font-size:11px;color:var(--gold);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">' + flaggedThisRun.length + ' record' + (flaggedThisRun.length===1?'':'s') + ' with possible findings \u2014 review, uncheck any false positives, then flag</div>'
+    + '<table style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:12px">'
+    + '<colgroup><col style="width:32px"><col style="width:64px"><col><col style="width:130px"><col style="width:160px"><col style="width:70px"></colgroup>'
+    + '<thead><tr>'
+    +   '<th style="' + _td + ';font-size:9px;color:var(--dim);text-transform:uppercase"></th>'
+    +   '<th style="' + _td + ';font-size:9px;color:var(--dim);text-transform:uppercase;text-align:left">Rec #</th>'
+    +   '<th style="' + _td + ';font-size:9px;color:var(--dim);text-transform:uppercase;text-align:left">Record</th>'
+    +   '<th style="' + _td + ';font-size:9px;color:var(--dim);text-transform:uppercase;text-align:left">Category</th>'
+    +   '<th style="' + _td + ';font-size:9px;color:var(--dim);text-transform:uppercase;text-align:left">Top Finding</th>'
+    +   '<th style="' + _td + ';font-size:9px;color:var(--dim);text-transform:uppercase;text-align:left">Confidence</th>'
+    + '</tr></thead><tbody>' + rows + '</tbody></table>'
+    + '<div style="display:flex;justify-content:flex-end;margin-top:12px">'
+    +   '<button class="bp" onclick="_evApplyBatchFlags()">Flag Checked Records</button>'
+    + '</div>';
+}
+
+async function _evApplyBatchFlags() {
+  const checked = Array.prototype.slice.call(document.querySelectorAll('.ev-batch-check:checked'));
+  const flaggedThisRun = window._evBatchFindings || [];
+  if (checked.length === 0) { alert('No rows checked.'); return; }
+  let ok = 0;
+  for (let i = 0; i < checked.length; i++) {
+    const idx = parseInt(checked[i].dataset.i, 10);
+    const f = flaggedThisRun[idx];
+    if (!f) continue;
+    try {
+      await _tpgApply(f.item, {
+        _errorVarietyFlag: {
+          findings: f.result.findings,
+          imageQualityNote: f.result.imageQualityNote,
+          scannedAt: f.result.scannedAt,
+          provider: f.result.provider,
+          note: 'AI-suggested \u2014 verify before relying on this attribution'
+        }
+      }, 'Error Scan');
+      ok++;
+    } catch (err) { console.error('[error-scan] flag apply failed:', err); }
+  }
+  const modal = document.getElementById('ev-modal');
+  if (modal) modal.remove();
+  if (typeof cvToast === 'function') cvToast('\u2713 Flagged ' + ok + ' record' + (ok===1?'':'s') + ' for review', 'ok');
+  if (typeof ST !== 'undefined' && ST.view === 'health' && typeof renderDataHealth === 'function') renderDataHealth();
+  if (typeof ST !== 'undefined' && ST.view === 'inv' && typeof renderInv === 'function') renderInv();
+}
+// #endregion [ERROR-VARIETY-SCAN]
 
 async function lookupPCGS(item) {
   const raw = item.raw;
@@ -11217,6 +11797,35 @@ function _healthChecks() {
     },
     countable: false
   });
+
+  // 11. Error & Die Variety Scanner (v114) — AI-vision screening of record
+  // photos for minting errors and die varieties. Informational/screening
+  // tool: shows eligible/flagged counts but is intentionally NOT countable
+  // for the sidebar badge — a flag here means "worth a second look," not
+  // "something wrong with your data," so it shouldn't read as a data-health
+  // problem to fix.
+  (function() {
+    if (typeof _evEligibleRecords !== 'function') return;
+    let eligibleCount = 0, flaggedCount = 0;
+    try {
+      const eligible = _evEligibleRecords();
+      eligibleCount = eligible.length;
+      flaggedCount = eligible.filter(function(it){ return !!_evGetFlag(it); }).length;
+    } catch (e) { /* ALL_ITEMS not ready yet — card still renders, just shows 0s */ }
+    checks.push({
+      id: 'error-variety-scan',
+      label: 'Error & Die Variety Scanner',
+      desc: eligibleCount + ' record' + (eligibleCount===1?'':'s') + ' with photos eligible to scan'
+            + (flaggedCount > 0 ? ' \u2014 ' + flaggedCount + ' currently flagged for review' : '')
+            + '. AI-assisted screening for doubled dies, off-center strikes, VAM varieties, and more \u2014 always unverified, never auto-applied.',
+      icon: '\ud83d\udd0e',
+      count: null,
+      action: function(){
+        if (typeof showErrorVarietyScanner === 'function') showErrorVarietyScanner(null);
+      },
+      countable: false
+    });
+  })();
 
   return checks;
 }
@@ -14553,7 +15162,13 @@ Rules:
 
 // Prepend a mode-specific instruction so the AI focuses on the right details
 // for coins vs. paper currency. The user picks the mode in the scan modal.
+//
+// v114: third mode 'error-scan' for the Error & Die Variety Scanner. Returns
+// a COMPLETELY different prompt (doesn't append the general-identification
+// AI_PROMPT) since error/variety detection asks the model to look for
+// specific defect/variety signatures rather than identify what the coin is.
 function aiBuildPrompt() {
+  if (AI_CAPTURE_MODE === 'error-scan') return _EV_PROMPT;
   const coinPrefix =
     'CONTEXT: The user has indicated this is a COIN. Focus on coin-specific details:\n' +
     '- Mint mark (S, D, P, CC, O, etc.) and designer initials\n' +
