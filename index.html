@@ -1995,7 +1995,7 @@ body.theme-modern-dark select option{
 // Bump this on every deploy so the user can see at a glance which build is
 // running in their browser. Surfaced in three places: the sidebar footer
 // (desktop), the mobile header badge, and the Settings → About section.
-const APP_VERSION = 'v115';
+const APP_VERSION = 'v119';
 const APP_BUILD_DATE = '2026-06-15';
 
 // ── EARLY-HOISTED MODULE STATE ──────────────────────────────────────────────
@@ -8305,13 +8305,29 @@ If this is a COIN, look for:
 - Well-documented key varieties if visually consistent: 1955/1955-D/1972/1983/1995 Lincoln cent DDO, 1937-D 3-legged Buffalo nickel, 1918/17-D Buffalo nickel, 1942/1 Mercury dime overdate, 1900-O/CC Morgan dollar overmintmark
 
 If this is PAPER CURRENCY, look for:
+
+PRINTING ERRORS:
 - Overprint/seal misalignment (Treasury seal or serial numbers shifted from normal position)
-- Cutting error (off-center cut, visible edge of adjacent note)
+- Inverted overprint (seal/serials upside-down relative to the face) or inverted back (entire back design upside-down relative to the face — compare orientation across both photos when both sides are present)
+- Missing printing stage (missing seal/serials, or missing portions of the face or back design)
+- Doubled overprint
+- Offset ink transfer (a ghosted mirror-image of one side's design transferred onto the other side)
+- Gutter fold (blank unprinted streak running through the design from a fold during printing)
+- Obstructed printing (blank patch where debris blocked the plate)
+- Cutting error (off-center cut, visible edge of an adjacent note)
 - Fold-over error (part of the design missing/blank from a printing-stage fold)
-- Mismatched serial numbers (the two serial numbers on the same note read differently)
-- Missing or doubled overprint
+- Mismatched serial numbers — read BOTH serial numbers digit by digit and compare; a single differing digit is a major error
+- Double denomination (face and back show different denominations — extremely rare, check both sides carefully)
 - Ink smear or heavy print doubling
-- Third printing/overprint errors specific to the note type
+- MULE NOTE (mismatched face/back plate pairing): examine the small BACK PLATE NUMBER (bottom-right area of the back design) and the FACE PLATE NUMBER. On US small-size notes, plate numbers changed between MICRO size (~0.6mm) and MACRO size (~1mm) across series transitions (notably the 1934/1935 era) — a note whose back plate number size does not match what its series/signature combination should carry is a mule. If the plate numbers are legible, report their apparent size class (micro vs macro) and whether it is consistent with the series on the face. If the plate numbers are NOT legible at this photo resolution, do NOT guess — instead note in imageQualityNote that a close-up photo of the back plate number is needed for a mule check.
+
+COLLECTOR VARIETIES (not errors, but flag if visible — use confidence "low" or "medium" and treat as informational):
+- Star/replacement note: a star symbol at the start or end of the serial number
+- Fancy serial number visible in the photo: solid, ladder, radar/palindrome, repeater, binary, or very low number (under 100)
+- SIGNATURE COMBINATION: read the series year and the two signatures (Treasurer of the United States + Secretary of the Treasury on US notes) and report the pairing by name if recognizable. If the pairing is a documented short-tenure or scarce combination for that series, say so; if unsure, report the pairing and recommend checking signature-combination rarity in a Friedberg or Standard Guide reference. Do not invent names — if the signatures are illegible, say so.
+- Web-fed press note ($1 FRN, Series 1988A/1993/1995 only): plate-number layout differs from normal sheet-fed notes — no face-check letter/quadrant digit beside the lower-right face plate number, and the back plate number relocated toward the upper-right of the back. If the layout looks nonstandard for a modern $1 FRN, flag as a possible web note for reference check.
+- Report the Federal Reserve district (seal letter/number) and the serial block letters (prefix + suffix) so scarce district/block combinations can be checked against a reference
+- For Confederate, obsolete, or fractional notes: report visible plate letters and variety indicators; crude lithography, engraving inconsistencies, or paper anomalies may indicate a contemporary counterfeit (many are collectible in their own right) — flag for Criswell (Confederate) or Haxby (obsolete) reference check
 
 Respond ONLY with JSON, no markdown fences, no extra text, in this exact shape:
 {
@@ -8323,7 +8339,7 @@ Respond ONLY with JSON, no markdown fences, no extra text, in this exact shape:
       "confidence": "high" or "medium" or "low",
       "description": "1-2 sentence plain-language description of what you see and why it looks like this error/variety",
       "wellKnownVariety": "specific catalog name/VAM number ONLY if you are genuinely confident, otherwise null",
-      "verifyWith": "which reference to check to confirm, e.g. 'VAM reference book', 'PCGS CoinFacts VarietyPlus', 'error-ref.com'"
+      "verifyWith": "which reference to check to confirm, e.g. 'VAM reference book', 'PCGS CoinFacts VarietyPlus', 'error-ref.com' for coins; 'Friedberg guide', 'Standard Guide to U.S. Paper Money errors', 'Criswell (Confederate)', 'Haxby (obsolete)' for currency"
     }
   ],
   "imageQualityNote": "note here if photos are too blurry/low-resolution/poorly lit to assess confidently, otherwise null"
@@ -8407,10 +8423,29 @@ function _evIsProfessionallyGraded(item) {
   return typeof isOfficialGrader === 'function' ? isOfficialGrader(auth) : false;
 }
 
-function _evEligibleRecords(includeGraded) {
+// v117: bullion detection narrowed to RAW PRECIOUS METAL only — privately
+// minted pieces with no legal-tender status and no numismatic value: bars,
+// rounds, ingots, shot, cubes, squares, bullets, grain, nuggets, and
+// hand-poured pieces. Legal-tender bullion COINS (Silver/Gold Eagles,
+// Maple Leafs, Krugerrands, Britannias, Philharmonics, Libertads, Pandas,
+// Gold Buffalos\u2026) are actual government coinage struck from dies with
+// documented varieties (2008-W ASE Reverse of 2007, etc.) — those STAY in
+// scan scope per the user's direction.
+// Word-boundary notes: \bbar\b does not match "Barber Dime"; \bround\b
+// does not match "Pound". "1 oz Silver Round - Buffalo" is caught by
+// "round"; American Gold Buffalo coins are not caught (correct).
+const _EV_BULLION_GENERIC = /\b(bar|bars|round|rounds|ingot|shot|cube|square|bullet|grain|nugget|hand[\s-]?poured)\b/i;
+function _evIsBullion(item) {
+  const r = item.raw || {};
+  const hay = [r.type, r.description, item.desc, r.series].filter(Boolean).join(' ');
+  return _EV_BULLION_GENERIC.test(hay);
+}
+
+function _evEligibleRecords(includeGraded, includeBullion) {
   return ALL_ITEMS.filter(function(item){
     if (!EV_ELIGIBLE_SHEETS.has(item.sheet) || !_hasImages(item)) return false;
     if (!includeGraded && _evIsProfessionallyGraded(item)) return false;
+    if (!includeBullion && _evIsBullion(item)) return false;
     return true;
   });
 }
@@ -8426,9 +8461,15 @@ async function _evScanRecord(item, onStatus) {
   if (!urls.front && !urls.back) throw new Error('No images on this record.');
 
   if (typeof onStatus === 'function') onStatus('Loading photos\u2026');
+  // v118: currency notes get a higher resize cap (1800px vs the coin
+  // default 1200px). Mule detection hinges on reading the back plate
+  // number — a sub-millimeter detail that becomes an illegible smudge at
+  // 1200px full-note width. 1800px keeps payloads reasonable while giving
+  // the model a real chance at plate-number legibility on decent photos.
+  const _maxPx = (typeof EV_CURRENCY_SHEETS !== 'undefined' && EV_CURRENCY_SHEETS.has(item.sheet)) ? 1800 : 1200;
   const [frontData, backData] = await Promise.all([
-    urls.front ? _evUrlToDataUrl(urls.front).catch(function(){ return null; }) : Promise.resolve(null),
-    urls.back  ? _evUrlToDataUrl(urls.back).catch(function(){ return null; })  : Promise.resolve(null)
+    urls.front ? _evUrlToDataUrl(urls.front, _maxPx).catch(function(){ return null; }) : Promise.resolve(null),
+    urls.back  ? _evUrlToDataUrl(urls.back, _maxPx).catch(function(){ return null; })  : Promise.resolve(null)
   ]);
   if (!frontData && !backData) throw new Error('Could not load images (network or CORS issue).');
 
@@ -8485,7 +8526,7 @@ function showErrorVarietyScanner(item) {
   if (item) {
     _evRenderSingle(panel, item);
   } else {
-    _evRenderPicker(panel);
+    _evRenderPicker(panel, false, false);   // defaults: graded + bullion excluded
   }
 }
 
@@ -8513,10 +8554,18 @@ function _evRenderSingle(panel, item) {
       + '\u2139 This record is professionally graded (' + e(String(item.raw.gradingAuth || '')) + '). Grading services attribute errors and die varieties on the slab label at grading time \u2014 an unattributed find here is unlikely, but scanning anyway since you asked.'
       + '</div>'
     : '';
+  // v116: same treatment for bullion — explicit click scans anyway, with
+  // context on why batch mode skips these by default.
+  const _bullionNote = (typeof _evIsBullion === 'function' && _evIsBullion(item))
+    ? '<div style="font-size:11px;color:var(--muted);line-height:1.6;margin-bottom:14px;padding:10px 12px;background:rgba(106,138,171,.1);border-radius:5px;border-left:3px solid #6a8aab">'
+      + '\u2139 This looks like raw bullion (bar, round, or hand-poured piece). These have no legal-tender or numismatic value, so error/variety collecting doesn\u2019t exist for them \u2014 which is why batch scans skip raw bullion by default. Scanning anyway since you asked.'
+      + '</div>'
+    : '';
   panel.innerHTML = _evHeader('Scanning record #' + cn(item.id), String(desc).slice(0, 70))
     + '<div id="ev-single-body" style="padding:16px 20px;overflow-y:auto;flex:1;min-height:0">'
     +   '<div style="font-size:11px;color:var(--muted);line-height:1.6;margin-bottom:14px;padding:10px 12px;background:var(--bg4);border-radius:5px;border-left:3px solid var(--gold)">' + e(_EV_DISCLAIMER) + '</div>'
     +   _gradedNote
+    +   _bullionNote
     +   '<div id="ev-single-status" style="padding:30px;text-align:center;color:var(--dim);font-size:12px">Starting scan\u2026</div>'
     + '</div>';
 
@@ -8599,16 +8648,24 @@ function _evWireSingleActions(item, result) {
 // ── Batch picker mode ──────────────────────────────────────────────────
 // v115: re-renders itself when the include-graded toggle changes so the
 // stat tiles and start-button count always reflect the current scope.
-function _evRenderPicker(panel, includeGraded) {
+function _evRenderPicker(panel, includeGraded, includeBullion) {
   includeGraded = !!includeGraded;
-  const eligible = _evEligibleRecords(includeGraded);
-  const gradedExcluded = includeGraded ? 0 : (_evEligibleRecords(true).length - eligible.length);
+  includeBullion = !!includeBullion;
+  const eligible = _evEligibleRecords(includeGraded, includeBullion);
+  const fullCount = _evEligibleRecords(true, true).length;
+  const gradedExcluded = includeGraded ? 0 : (_evEligibleRecords(true, includeBullion).length - eligible.length);
+  const bullionExcluded = includeBullion ? 0 : (_evEligibleRecords(includeGraded, true).length - eligible.length);
   const scanned = eligible.filter(function(it){ return !!_evGetCached(it); });
   const unscanned = eligible.filter(function(it){ return !_evGetCached(it); });
   const flagged = eligible.filter(function(it){ return !!_evGetFlag(it); });
+  // Both toggles re-render through this shared handler so each one reads
+  // the OTHER's current checkbox state instead of resetting it.
+  const _reRender = 'var p=document.querySelector(\'#ev-modal .ref-modal-panel\');'
+    + 'var g=document.getElementById(\'ev-include-graded\');'
+    + 'var b=document.getElementById(\'ev-include-bullion\');'
+    + '_evRenderPicker(p, g&&g.checked, b&&b.checked)';
 
-  panel.innerHTML = _evHeader('Batch Scanner', eligible.length + ' record' + (eligible.length===1?'':'s') + ' in scope'
-      + (gradedExcluded > 0 ? ' \u00b7 ' + gradedExcluded + ' professionally-graded excluded' : ''))
+  panel.innerHTML = _evHeader('Batch Scanner', eligible.length + ' record' + (eligible.length===1?'':'s') + ' in scope of ' + fullCount + ' with photos')
     + '<div style="padding:16px 20px;overflow-y:auto;flex:1;min-height:0">'
     +   '<div style="font-size:11px;color:var(--muted);line-height:1.6;margin-bottom:14px;padding:10px 12px;background:var(--bg4);border-radius:5px;border-left:3px solid var(--gold)">' + e(_EV_DISCLAIMER) + '</div>'
     +   '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px">'
@@ -8629,14 +8686,18 @@ function _evRenderPicker(panel, includeGraded) {
     +       '<div style="font-size:9px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);margin-top:4px">Flagged for Review</div>'
     +     '</div>'
     +   '</div>'
-    // v115: graded-record scope toggle. Default OFF — slabs from PCGS/NGC/
-    // ICG/PMG etc. had error/variety attribution done professionally at
-    // grading time, so re-screening them is usually redundant. Self-graded
-    // and AI-graded records are always in scope (isOfficialGrader treats
-    // those as unofficial — same helper behind the inventory "self" badge).
     +   '<label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);margin-bottom:8px;cursor:pointer;padding:9px 12px;background:var(--bg4);border-radius:5px;border:1px solid var(--border)">'
-    +     '<input type="checkbox" id="ev-include-graded"' + (includeGraded ? ' checked' : '') + ' onchange="_evRenderPicker(document.querySelector(\'#ev-modal .ref-modal-panel\'), this.checked)">'
+    +     '<input type="checkbox" id="ev-include-graded"' + (includeGraded ? ' checked' : '') + ' onchange="' + _reRender + '">'
     +     '<span>Include professionally-graded records <span style="color:var(--dim)">(PCGS, NGC, ICG, PMG, ANACS\u2026 \u2014 the grading service already attributed errors/varieties on the slab' + (gradedExcluded > 0 ? '; ' + gradedExcluded + ' currently excluded' : '') + ')</span></span>'
+    +   '</label>'
+    // v116: bullion scope toggle. Default OFF — bars, rounds, hand-poured
+    // pieces, and modern bullion programs (Eagles, Maples, Britannias\u2026)
+    // are mass-produced with modern QC; error/variety hunting there wastes
+    // quota. Rare exceptions (e.g. 2008-W ASE Reverse of 2007) exist —
+    // flip the toggle if hunting those specifically.
+    +   '<label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);margin-bottom:8px;cursor:pointer;padding:9px 12px;background:var(--bg4);border-radius:5px;border:1px solid var(--border)">'
+    +     '<input type="checkbox" id="ev-include-bullion"' + (includeBullion ? ' checked' : '') + ' onchange="' + _reRender + '">'
+    +     '<span>Include raw bullion <span style="color:var(--dim)">(bars, rounds, hand-poured, shot \u2014 no legal-tender or numismatic value, so errors aren\u2019t collected; bullion COINS like Eagles and Maple Leafs are always in scope' + (bullionExcluded > 0 ? '; ' + bullionExcluded + ' currently excluded' : '') + ')</span></span>'
     +   '</label>'
     +   (flagged.length > 0 ? _evFlaggedListHtml(flagged) : '')
     +   '<div id="ev-batch-controls">'
@@ -8675,11 +8736,12 @@ let EV_BATCH_CANCEL = false;
 
 async function _evStartBatch() {
   const rescanAll = !!(document.getElementById('ev-rescan-all') || {}).checked;
-  // v115: scope follows the include-graded toggle. Default (unchecked)
-  // excludes PCGS/NGC/ICG/PMG-graded records — the grading service already
-  // did error/variety attribution on those.
-  const includeGraded = !!(document.getElementById('ev-include-graded') || {}).checked;
-  const eligible = _evEligibleRecords(includeGraded);
+  // v116: scope follows BOTH toggles. Defaults exclude professionally-
+  // graded records (slab already attributed) and bullion (mass-produced,
+  // errors essentially never found).
+  const includeGraded  = !!(document.getElementById('ev-include-graded')  || {}).checked;
+  const includeBullion = !!(document.getElementById('ev-include-bullion') || {}).checked;
+  const eligible = _evEligibleRecords(includeGraded, includeBullion);
   const queue = rescanAll ? eligible : eligible.filter(function(it){ return !_evGetCached(it); });
 
   if (queue.length === 0) { if (typeof cvToast === 'function') cvToast('Nothing to scan.', 'info'); return; }
@@ -11850,16 +11912,16 @@ function _healthChecks() {
     if (typeof _evEligibleRecords !== 'function') return;
     let eligibleCount = 0, flaggedCount = 0, gradedExcluded = 0;
     try {
-      const eligible = _evEligibleRecords(false);            // default scope: graded excluded
+      const eligible = _evEligibleRecords(false, false);     // default scope: graded + bullion excluded
       eligibleCount = eligible.length;
-      gradedExcluded = _evEligibleRecords(true).length - eligibleCount;
+      gradedExcluded = _evEligibleRecords(true, true).length - eligibleCount;
       flaggedCount = eligible.filter(function(it){ return !!_evGetFlag(it); }).length;
     } catch (e) { /* ALL_ITEMS not ready yet — card still renders, just shows 0s */ }
     checks.push({
       id: 'error-variety-scan',
       label: 'Error & Die Variety Scanner',
       desc: eligibleCount + ' record' + (eligibleCount===1?'':'s') + ' with photos in default scope'
-            + (gradedExcluded > 0 ? ' (' + gradedExcluded + ' professionally-graded excluded \u2014 toggle available)' : '')
+            + (gradedExcluded > 0 ? ' (' + gradedExcluded + ' graded/raw-bullion excluded \u2014 toggles available)' : '')
             + (flaggedCount > 0 ? ' \u2014 ' + flaggedCount + ' currently flagged for review' : '')
             + '. AI-assisted screening for doubled dies, off-center strikes, VAM varieties, and more \u2014 always unverified, never auto-applied.',
       icon: '\ud83d\udd0e',
