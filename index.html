@@ -1995,7 +1995,7 @@ body.theme-modern-dark select option{
 // Bump this on every deploy so the user can see at a glance which build is
 // running in their browser. Surfaced in three places: the sidebar footer
 // (desktop), the mobile header badge, and the Settings → About section.
-const APP_VERSION = 'v119';
+const APP_VERSION = 'v121';
 const APP_BUILD_DATE = '2026-06-15';
 
 // ── EARLY-HOISTED MODULE STATE ──────────────────────────────────────────────
@@ -7523,6 +7523,288 @@ async function _pcApplyPrice(tierKey, dollars, productId, productName) {
 }
 // #endregion [PRICECHARTING]
 
+// #region [VALUE-EXPLORER]
+// ═══════════════════════════════════════════════════════════════════════
+// COIN VALUE EXPLORER (v120)
+// ═══════════════════════════════════════════════════════════════════════
+// Data Health tool: type a coin, get its estimated market value across
+// grade tiers as a line chart, plus a representative example image.
+//
+//   • Pricing: the existing [PRICECHARTING] client is reused as-is
+//     (token, 1.05s throttle, pcSearchProducts/pcGetProduct, tier labels).
+//     Coins yield up to six points: Ungraded → VF → AU → MS62 → MS64 →
+//     MS66 — exactly the value-vs-grade curve. Cards/comics get their own
+//     tier labels automatically via _pcTierLabels.
+//   • Example image: Wikipedia's API (search → pageimages), CORS-open via
+//     origin=*. It's the article's lead image — an ILLUSTRATION of the
+//     coin TYPE, not the user's coin and not the looked-up grade. Fails
+//     soft: a missing image never blocks the value lookup.
+// ═══════════════════════════════════════════════════════════════════════
+
+// Wikipedia lead-image fetch → {url, title, pageUrl} | null
+async function _cveWikiImage(query) {
+  try {
+    const sr = await fetch('https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch='
+      + encodeURIComponent(query) + '&srlimit=1&format=json&origin=*');
+    const sj = await sr.json();
+    const hit = sj && sj.query && sj.query.search && sj.query.search[0];
+    if (!hit) return null;
+    const pr = await fetch('https://en.wikipedia.org/w/api.php?action=query&titles='
+      + encodeURIComponent(hit.title) + '&prop=pageimages&pithumbsize=480&format=json&origin=*');
+    const pj = await pr.json();
+    const pages = (pj && pj.query && pj.query.pages) || {};
+    const first = pages[Object.keys(pages)[0]];
+    if (first && first.thumbnail && first.thumbnail.source) {
+      return { url: first.thumbnail.source, title: hit.title,
+               pageUrl: 'https://en.wikipedia.org/wiki/' + encodeURIComponent(hit.title.replace(/ /g, '_')) };
+    }
+    return null;
+  } catch (err) { return null; }
+}
+
+// Strip grading noise so the Wikipedia search targets the coin TYPE
+function _cveCleanName(name) {
+  return String(name || '')
+    .replace(/\([^)]*\)/g, ' ')
+    .replace(/\b(MS|PR|PF|SP)[- ]?\d{2}\b/gi, ' ')
+    .replace(/\b(PCGS|NGC|ICG|ANACS|CAC|BU|UNC|DCAM|UCAM|Proof|FirstStrike|First Strike|Early Releases?|ER|FDI|FS)\b/gi, ' ')
+    .replace(/\s+/g, ' ').trim();
+}
+
+// Value-vs-grade line chart. Numeric viewBox + meet (v104/v105 lessons:
+// no percentage viewBoxes, no preserveAspectRatio="none" with text).
+// Zero-baseline Y so the steepness of the grade curve reads honestly.
+function _cveGradeChart(tiers) {
+  if (!tiers || tiers.length < 2) {
+    return '<div style="padding:30px;text-align:center;color:var(--dim);font-size:12px;font-style:italic">Not enough grade-tier price data for a chart \u2014 available tiers are listed below.</div>';
+  }
+  const w = 660, h = 250, padL = 58, padR = 22, padT = 26, padB = 40;
+  const cw = w - padL - padR, ch = h - padT - padB;
+  const max = tiers.reduce(function(m, t){ return Math.max(m, t.value); }, 0) || 1;
+  const yMax = max * 1.12;
+  const xFor = function(i){ return padL + (i / (tiers.length - 1)) * cw; };
+  const yFor = function(v){ return padT + ch - (v / yMax) * ch; };
+  const fmt = function(v){
+    if (v >= 1000) return '$' + (v / 1000).toFixed(1) + 'k';
+    if (v >= 100) return '$' + v.toFixed(0);
+    return '$' + v.toFixed(2);
+  };
+  let line = '';
+  tiers.forEach(function(t, i){ line += (i === 0 ? 'M ' : ' L ') + xFor(i).toFixed(1) + ' ' + yFor(t.value).toFixed(1); });
+  const fill = line + ' L ' + xFor(tiers.length - 1).toFixed(1) + ' ' + (padT + ch) + ' L ' + xFor(0).toFixed(1) + ' ' + (padT + ch) + ' Z';
+  let grid = '';
+  for (let i = 0; i <= 4; i++) {
+    const val = yMax * i / 4, y = yFor(val);
+    grid += '<line x1="' + padL + '" x2="' + (padL + cw) + '" y1="' + y.toFixed(1) + '" y2="' + y.toFixed(1) + '" stroke="var(--border)" stroke-opacity=".55" stroke-dasharray="2 4"/>';
+    grid += '<text x="' + (padL - 8) + '" y="' + (y + 3).toFixed(1) + '" text-anchor="end" fill="var(--dim)" font-size="10" font-family="monospace">' + fmt(val) + '</text>';
+  }
+  let dots = '', labels = '', xlabels = '';
+  const gradId = 'cve-grad-' + Math.random().toString(36).slice(2, 8);
+  tiers.forEach(function(t, i){
+    const x = xFor(i), y = yFor(t.value);
+    dots += '<circle cx="' + x.toFixed(1) + '" cy="' + y.toFixed(1) + '" r="4.5" fill="var(--gold)" stroke="var(--bg2)" stroke-width="2"><title>' + e(t.label) + ' \u2014 ' + fmt(t.value) + '</title></circle>';
+    labels += '<text x="' + x.toFixed(1) + '" y="' + (y - 10).toFixed(1) + '" text-anchor="middle" fill="var(--text)" font-size="11" font-family="monospace">' + fmt(t.value) + '</text>';
+    xlabels += '<text x="' + x.toFixed(1) + '" y="' + (h - 10) + '" text-anchor="middle" fill="var(--dim)" font-size="10">' + e(t.label) + '</text>';
+  });
+  return '<svg viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="xMidYMid meet" style="width:100%;height:auto;display:block">'
+    + '<defs><linearGradient id="' + gradId + '" x1="0" x2="0" y1="0" y2="1">'
+    + '<stop offset="0%" stop-color="var(--gold)" stop-opacity=".28"/>'
+    + '<stop offset="100%" stop-color="var(--gold)" stop-opacity="0"/>'
+    + '</linearGradient></defs>'
+    + grid
+    + '<path d="' + fill + '" fill="url(#' + gradId + ')"/>'
+    + '<path d="' + line + '" fill="none" stroke="var(--gold)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>'
+    + dots + labels + xlabels
+    + '</svg>';
+}
+
+function showCoinValueExplorer() {
+  const existing = document.getElementById('cve-modal');
+  if (existing) existing.remove();
+
+  const modal = document.createElement('div');
+  modal.id = 'cve-modal';
+  modal.className = 'ref-modal';
+  modal.onclick = function(ev){ if (ev.target === modal) modal.remove(); };
+  document.body.appendChild(modal);
+
+  const hasToken = !!pcGetToken();
+
+  const tokenSetupHtml = hasToken ? '' : ''
+    + '<div style="background:rgba(139,92,246,.08);border:1px solid rgba(139,92,246,.3);border-radius:6px;padding:14px;margin-bottom:14px">'
+    +   '<div style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:#a78bfa;margin-bottom:8px">PriceCharting API Token Required</div>'
+    +   '<div style="font-size:12px;color:var(--muted);line-height:1.6;margin-bottom:10px">'
+    +     'Value data comes from PriceCharting, which requires a <strong>paid subscription</strong> (~$6/mo). '
+    +     'Get your 40-character token: <a href="https://www.pricecharting.com/subscriptions" target="_blank" rel="noopener" style="color:#a78bfa">pricecharting.com/subscriptions</a> \u2192 "API/Download".'
+    +   '</div>'
+    +   '<div style="display:flex;gap:8px">'
+    +     '<input type="password" id="cve-token-input" placeholder="Paste your 40-character API token" '
+    +       'style="flex:1;padding:9px 12px;background:var(--bg4);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:12px;font-family:DM Mono,monospace">'
+    +     '<button class="bp" onclick="_cveSaveToken()" style="white-space:nowrap">Save Token</button>'
+    +   '</div>'
+    +   '<div id="cve-token-msg" style="font-size:11px;color:var(--dim);margin-top:6px;min-height:13px"></div>'
+    + '</div>';
+
+  modal.innerHTML = ''
+    + '<div class="ref-modal-panel" style="background:var(--bg2);border:1px solid var(--gold3);border-radius:10px;width:min(880px,95vw);max-height:90vh;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 16px 48px rgba(0,0,0,.7)">'
+    +   '<div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--border)">'
+    +     '<div>'
+    +       '<h2 style="margin:0;font-family:var(--font-display);font-size:17px;color:var(--gold)">\ud83d\udcca Coin Value Explorer</h2>'
+    +       '<div style="font-size:11px;color:var(--muted);margin-top:2px">Estimated market value by grade \u2014 with an example image and value-vs-grade chart</div>'
+    +     '</div>'
+    +     '<button onclick="document.getElementById(\'cve-modal\').remove()" style="background:transparent;border:1px solid var(--border);color:var(--muted);padding:6px 14px;border-radius:4px;cursor:pointer;font-size:12px">Close</button>'
+    +   '</div>'
+    +   '<div style="padding:16px 20px;overflow-y:auto;flex:1;min-height:0">'
+    +     tokenSetupHtml
+    +     '<div style="display:flex;gap:8px;margin-bottom:12px">'
+    +       '<input type="text" id="cve-search-input" placeholder="e.g. 1921 Morgan Dollar, 1916-D Mercury Dime, 1955 Lincoln Cent" '
+    +         'style="flex:1;padding:10px 12px;background:var(--bg3);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:13px" '
+    +         'onkeydown="if(event.key===\'Enter\')_cveRunSearch()">'
+    +       '<button class="bp" onclick="_cveRunSearch()" ' + (hasToken ? '' : 'disabled title="Save your API token first"') + '>Search</button>'
+    +     '</div>'
+    +     '<div id="cve-results" style="min-height:60px"></div>'
+    +   '</div>'
+    + '</div>';
+
+  setTimeout(function(){
+    const inp = document.getElementById('cve-search-input');
+    if (inp && hasToken) inp.focus();
+  }, 60);
+}
+
+function _cveSaveToken() {
+  const input = document.getElementById('cve-token-input');
+  const msg = document.getElementById('cve-token-msg');
+  const val = (input && input.value || '').trim();
+  if (val.length !== 40) {
+    if (msg) { msg.textContent = 'Token should be exactly 40 characters (got ' + val.length + ').'; msg.style.color = 'var(--red)'; }
+    return;
+  }
+  pcSetToken(val);
+  if (msg) { msg.textContent = '\u2713 Token saved. Re-opening\u2026'; msg.style.color = 'var(--green)'; }
+  setTimeout(function(){ showCoinValueExplorer(); }, 700);
+}
+
+async function _cveRunSearch() {
+  const input = document.getElementById('cve-search-input');
+  const box = document.getElementById('cve-results');
+  const q = (input && input.value || '').trim();
+  if (!q || !box) return;
+  box.innerHTML = '<div style="padding:20px;text-align:center;color:var(--dim);font-size:12px">Searching PriceCharting\u2026</div>';
+  try {
+    const products = await pcSearchProducts(q);
+    if (products.length === 0) {
+      box.innerHTML = '<div style="padding:20px;text-align:center;color:var(--dim);font-size:12px;font-style:italic">No matches. Try adding the year and denomination \u2014 e.g. "1921 Morgan Dollar".</div>';
+      return;
+    }
+    box.innerHTML = ''
+      + '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin-bottom:8px">' + products.length + ' match' + (products.length === 1 ? '' : 'es') + ' \u2014 tap one</div>'
+      + products.map(function(p){
+          const safeName = String(p['product-name'] || '').replace(/'/g, '');
+          return '<div onclick="_cveLoadProduct(\'' + e(String(p.id)) + '\', \'' + e(safeName) + '\')" '
+            + 'style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border:1px solid var(--border);border-radius:6px;margin-bottom:6px;cursor:pointer;transition:border-color .12s" '
+            + 'onmouseover="this.style.borderColor=\'var(--gold)\'" onmouseout="this.style.borderColor=\'var(--border)\'">'
+            +   '<div>'
+            +     '<div style="font-size:13px;color:var(--text)">' + e(p['product-name'] || '?') + '</div>'
+            +     '<div style="font-size:11px;color:var(--dim)">' + e(p['console-name'] || '') + '</div>'
+            +   '</div>'
+            +   '<div style="font-size:11px;color:var(--gold)">values \u2192</div>'
+            + '</div>';
+        }).join('');
+  } catch (err) {
+    if (err.message === 'NO_TOKEN') {
+      box.innerHTML = '<div style="padding:16px;color:var(--red);font-size:12px">No API token configured. Save your token above first.</div>';
+    } else {
+      box.innerHTML = '<div style="padding:16px;color:var(--red);font-size:12px">Search failed: ' + e(err.message) + '</div>';
+    }
+  }
+}
+
+async function _cveLoadProduct(id, name) {
+  const box = document.getElementById('cve-results');
+  if (!box) return;
+  box.innerHTML = '<div style="padding:20px;text-align:center;color:var(--dim);font-size:12px">Loading values and example image\u2026</div>';
+  try {
+    // Value data + Wikipedia example image in parallel. Wiki search tries
+    // the cleaned name first, then a year-stripped fallback (so "1889-S
+    // Morgan Dollar" still lands on the "Morgan dollar" article).
+    const clean = _cveCleanName(name);
+    const wikiPromise = (async function(){
+      let wk = await _cveWikiImage(clean);
+      if (!wk) {
+        const noYear = clean.replace(/^\s*(18|19|20)\d{2}[-\s]*[A-Z]?\b\s*/, '').trim();
+        if (noYear && noYear !== clean) wk = await _cveWikiImage(noYear);
+      }
+      return wk;
+    })();
+    const p = await pcGetProduct(id);
+    const wiki = await wikiPromise;
+
+    const labels = _pcTierLabels(p['console-name'], null);
+    const tierOrder = ['loose-price','cib-price','new-price','graded-price','box-only-price','manual-only-price','bgs-10-price','condition-17-price','condition-18-price'];
+    const tiers = [];
+    tierOrder.forEach(function(k){
+      const dollars = _pcCents(p[k]);
+      if (dollars != null && labels[k]) tiers.push({ key: k, label: labels[k], value: dollars });
+    });
+
+    const meta = [];
+    if (p['console-name']) meta.push(e(p['console-name']));
+    if (p['sales-volume']) meta.push(e(String(p['sales-volume'])) + ' sales/yr');
+    if (p['release-date']) meta.push('Released ' + e(p['release-date']));
+
+    const imgCard = wiki
+      ? '<div style="flex:0 0 220px;min-width:200px">'
+        + '<div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:10px">'
+        +   '<img src="' + e(wiki.url) + '" alt="Example image" style="width:100%;height:auto;display:block;border-radius:5px">'
+        +   '<div style="font-size:10px;color:var(--dim);margin-top:8px;line-height:1.5">Example image via Wikipedia \u2014 <a href="' + e(wiki.pageUrl) + '" target="_blank" rel="noopener" style="color:var(--gold)">' + e(wiki.title) + '</a>. Illustrates the coin type, not this specific grade.</div>'
+        + '</div>'
+        + '</div>'
+      : '<div style="flex:0 0 220px;min-width:200px">'
+        + '<div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:24px;text-align:center;color:var(--dim);font-size:11px;font-style:italic">No example image found on Wikipedia for this item.</div>'
+        + '</div>';
+
+    const tierRows = tiers.length === 0
+      ? '<div style="padding:14px;color:var(--dim);font-size:12px;font-style:italic">No price data available for this product.</div>'
+      : tiers.map(function(t){
+          return '<div style="display:flex;justify-content:space-between;padding:7px 12px;border-bottom:1px solid var(--border)">'
+            + '<span style="font-size:12px;color:var(--muted)">' + e(t.label) + '</span>'
+            + '<span style="font-size:12px;color:var(--gold);font-family:DM Mono,monospace;font-weight:600">$' + t.value.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2}) + '</span>'
+            + '</div>';
+        }).join('');
+
+    box.innerHTML = ''
+      + '<button class="bg" onclick="_cveRunSearch()" style="font-size:11px;margin-bottom:12px">\u2190 Back to results</button>'
+      + '<div style="background:var(--bg3);border:1px solid rgba(201,168,76,.35);border-radius:8px;padding:14px;margin-bottom:12px">'
+      +   '<div style="display:flex;justify-content:space-between;align-items:start;gap:10px">'
+      +     '<div>'
+      +       '<div style="font-size:15px;color:var(--text);font-weight:600">' + e(p['product-name'] || '?') + '</div>'
+      +       '<div style="font-size:11px;color:var(--dim);margin-top:2px">' + meta.join(' \u00b7 ') + '</div>'
+      +     '</div>'
+      +     '<a href="https://www.pricecharting.com/game/' + encodeURIComponent(String(p.id)) + '" target="_blank" rel="noopener" style="font-size:11px;color:var(--gold);white-space:nowrap">open on PriceCharting \u2197</a>'
+      +   '</div>'
+      + '</div>'
+      + '<div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-start;margin-bottom:12px">'
+      +   imgCard
+      +   '<div style="flex:1;min-width:300px">'
+      +     '<div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:14px">'
+      +       '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin-bottom:10px">Estimated Value by Grade</div>'
+      +       _cveGradeChart(tiers)
+      +     '</div>'
+      +   '</div>'
+      + '</div>'
+      + '<div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;overflow:hidden">'
+      +   '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);padding:10px 12px;border-bottom:1px solid var(--border)">Price Tiers</div>'
+      +   tierRows
+      + '</div>'
+      + '<div style="font-size:10px;color:var(--dim);margin-top:10px;font-style:italic;line-height:1.5">Estimates reflect recent completed sales tracked by PriceCharting, updated daily. Grade-tier mapping: Ungraded / VF (20\u201335) / AU (50\u201358) / MS62 / MS64 / MS66 for coins. Not an appraisal \u2014 your coin\u2019s actual value depends on its certified grade, eye appeal, and market timing.</div>';
+  } catch (err) {
+    box.innerHTML = '<div style="padding:16px;color:var(--red);font-size:12px">Failed to load: ' + e(err.message) + '</div>'
+      + '<button class="bg" onclick="_cveRunSearch()" style="font-size:11px;margin-top:8px">\u2190 Back to results</button>';
+  }
+}
+// #endregion [VALUE-EXPLORER]
+
 // #region [APMEX-IMPORT]
 // ═══════════════════════════════════════════════════════════════════════
 // APMEX COST MATCHER (v110)
@@ -8525,6 +8807,11 @@ function showErrorVarietyScanner(item) {
 
   if (item) {
     _evRenderSingle(panel, item);
+  } else if (typeof EV_BATCH !== 'undefined' && EV_BATCH && EV_BATCH.running) {
+    // v121: a batch is already running in the background — reattach its
+    // live progress view instead of showing a fresh picker. This is what
+    // makes close-and-reopen land back on the in-flight scan.
+    _evRenderBatchPanel(panel);
   } else {
     _evRenderPicker(panel, false, false);   // defaults: graded + bullion excluded
   }
@@ -8668,6 +8955,12 @@ function _evRenderPicker(panel, includeGraded, includeBullion) {
   panel.innerHTML = _evHeader('Batch Scanner', eligible.length + ' record' + (eligible.length===1?'':'s') + ' in scope of ' + fullCount + ' with photos')
     + '<div style="padding:16px 20px;overflow-y:auto;flex:1;min-height:0">'
     +   '<div style="font-size:11px;color:var(--muted);line-height:1.6;margin-bottom:14px;padding:10px 12px;background:var(--bg4);border-radius:5px;border-left:3px solid var(--gold)">' + e(_EV_DISCLAIMER) + '</div>'
+    +   ((typeof EV_BATCH !== 'undefined' && EV_BATCH && !EV_BATCH.running && EV_BATCH.found.length > 0)
+          ? '<div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--text);margin-bottom:14px;padding:10px 12px;background:rgba(217,140,43,.10);border-radius:5px;border-left:3px solid var(--gold)">'
+            + '<span>Last run: ' + EV_BATCH.done + ' scanned \u00b7 <strong style="color:var(--gold)">' + EV_BATCH.found.length + ' flagged candidate' + (EV_BATCH.found.length===1?'':'s') + '</strong>' + (EV_BATCH.found.filter(function(f){return f.flagged;}).length ? ' (' + EV_BATCH.found.filter(function(f){return f.flagged;}).length + ' already flagged)' : '') + '</span>'
+            + '<button class="bg" onclick="_evReopenBatch()" style="font-size:11px;white-space:nowrap">Review findings \u2192</button>'
+            + '</div>'
+          : '')
     +   '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px">'
     +     '<div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:14px;text-align:center">'
     +       '<div style="font-size:22px;font-weight:600;color:var(--text)">' + eligible.length + '</div>'
@@ -8732,13 +9025,159 @@ function _evFlaggedListHtml(flagged) {
     + '</details>';
 }
 
-let EV_BATCH_CANCEL = false;
+// ── Batch engine (v121 rewrite) ────────────────────────────────────────
+// Singleton batch state. Lives OUTSIDE the modal so closing/reopening the
+// scanner never kills or duplicates a run:
+//   • _evStartBatch refuses to start a second scan while one is running —
+//     it reattaches the progress view instead (fixes the "114 of 117" vs
+//     "55 of 71" oscillation, which was two concurrent loops fighting
+//     over the same progress element).
+//   • Every DOM update is null-guarded, so the loop keeps working with
+//     the modal closed and re-syncs whenever the view reattaches.
+//   • Findings stream into a live review table AS THEY ARE FOUND — each
+//     row has its own 🚩 flag button, plus checkbox bulk-flag at any time.
+//   • _evSetCached fires per record (unchanged), so an interrupted run
+//     keeps its progress: those records leave the "unscanned" pool.
+var EV_BATCH = null;
+// shape: { running, cancel, total, done, errors, found:[{item,result,flagged}],
+//          currentText, rescanAll, startedAt }
+
+const _EV_TD = 'padding:7px 8px;border-bottom:1px solid var(--border);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle';
+
+// Renders the batch progress + live review view into the modal panel.
+// Used on fresh start AND on reattach; fully rebuilds from EV_BATCH state.
+function _evRenderBatchPanel(panel) {
+  if (!panel || !EV_BATCH) return;
+  const B = EV_BATCH;
+  const sub = B.running
+    ? 'Scan in progress \u2014 you can close this window; the scan continues in the background'
+    : (B.cancel ? 'Scan cancelled \u2014 progress up to that point is saved' : 'Scan complete');
+  panel.innerHTML = _evHeader('Batch Scanner', sub)
+    + '<div style="padding:16px 20px;overflow-y:auto;flex:1;min-height:0">'
+    +   '<div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--muted);margin-bottom:6px">'
+    +     '<span id="ev-progress-text"></span>'
+    +     '<span style="display:flex;gap:6px">'
+    +       (B.running
+              ? '<button class="bg" onclick="EV_BATCH&&(EV_BATCH.cancel=true)" style="font-size:10px;padding:3px 10px">Cancel</button>'
+              : '<button class="bg" onclick="_evBackToPicker()" style="font-size:10px;padding:3px 10px">\u2190 Scanner options</button>')
+    +     '</span>'
+    +   '</div>'
+    +   '<div style="height:6px;background:var(--bg3);border-radius:3px;overflow:hidden;margin-bottom:14px"><div id="ev-progress-bar" style="height:100%;width:0%;background:var(--gold);transition:width .2s ease"></div></div>'
+    +   '<div style="font-size:11px;color:var(--gold);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px"><span id="ev-live-count">' + B.found.length + '</span> flagged so far \u2014 review as they come in, uncheck false positives, flag individually or in bulk</div>'
+    +   '<table style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:12px">'
+    +   '<colgroup><col style="width:32px"><col style="width:64px"><col><col style="width:120px"><col style="width:150px"><col style="width:68px"><col style="width:64px"></colgroup>'
+    +   '<thead><tr>'
+    +     '<th style="' + _EV_TD + '"></th>'
+    +     '<th style="' + _EV_TD + ';font-size:9px;color:var(--dim);text-transform:uppercase;text-align:left">Rec #</th>'
+    +     '<th style="' + _EV_TD + ';font-size:9px;color:var(--dim);text-transform:uppercase;text-align:left">Record</th>'
+    +     '<th style="' + _EV_TD + ';font-size:9px;color:var(--dim);text-transform:uppercase;text-align:left">Category</th>'
+    +     '<th style="' + _EV_TD + ';font-size:9px;color:var(--dim);text-transform:uppercase;text-align:left">Top Finding</th>'
+    +     '<th style="' + _EV_TD + ';font-size:9px;color:var(--dim);text-transform:uppercase;text-align:left">Conf.</th>'
+    +     '<th style="' + _EV_TD + '"></th>'
+    +   '</tr></thead>'
+    +   '<tbody id="ev-live-tbody">' + B.found.map(function(f, i){ return _evLiveRowHtml(f, i); }).join('') + '</tbody>'
+    +   '</table>'
+    +   '<div id="ev-live-empty" style="padding:18px;text-align:center;color:var(--dim);font-size:12px;font-style:italic;' + (B.found.length ? 'display:none' : '') + '">'
+    +     (B.running ? 'Nothing flagged yet \u2014 rows appear here the moment a finding comes back.' : '\u2713 No errors or varieties found in this run.')
+    +   '</div>'
+    +   '<div style="display:flex;justify-content:flex-end;margin-top:12px">'
+    +     '<button class="bp" onclick="_evApplyBatchFlags()">Flag Checked Records</button>'
+    +   '</div>'
+    + '</div>';
+  _evSyncBatchDom();
+}
+
+// One live-table row. Flagged rows render dimmed with a done marker.
+function _evLiveRowHtml(f, i) {
+  const item = f.item, result = f.result;
+  const desc = String(item.desc || (item.raw && item.raw.description) || item.sheet);
+  const sheetLabel = (SHEET_MAP && SHEET_MAP[item.sheet]) ? SHEET_MAP[item.sheet].label : item.sheet;
+  const top = result.findings[0];
+  const confColors = { high: '#22c55e', medium: '#c9a84c', low: '#6a8aab' };
+  const cc = confColors[top.confidence] || '#6a8aab';
+  const done = !!f.flagged;
+  return '<tr id="ev-live-row-' + i + '" style="' + (done ? 'opacity:.55' : '') + '">'
+    + '<td style="' + _EV_TD + ';text-align:center"><input type="checkbox" class="ev-batch-check" data-i="' + i + '"' + (done ? ' disabled' : ' checked') + '></td>'
+    + '<td style="' + _EV_TD + ';color:var(--dim);font-family:DM Mono,monospace;font-size:11px">' + e(cn(item.id)) + '</td>'
+    + '<td style="' + _EV_TD + ';color:var(--text)" title="' + e(desc) + '">' + e(desc) + '</td>'
+    + '<td style="' + _EV_TD + ';color:var(--dim);font-size:11px">' + e(sheetLabel) + '</td>'
+    + '<td style="' + _EV_TD + ';color:' + cc + ';font-size:11px" title="' + e(result.findings.map(function(x){ return x.type; }).join(', ')) + '">' + e(top.type) + (result.findings.length > 1 ? ' +' + (result.findings.length - 1) : '') + '</td>'
+    + '<td style="' + _EV_TD + ';font-size:9px;text-transform:uppercase;color:' + cc + '">' + e(top.confidence) + '</td>'
+    + '<td style="' + _EV_TD + ';text-align:center">'
+    +   (done
+        ? '<span style="font-size:10px;color:#22c55e" title="Flagged">\u2713\ud83d\udea9</span>'
+        : '<button class="bg" onclick="_evFlagOne(' + i + ')" style="font-size:10px;padding:2px 8px" title="Flag this record now">\ud83d\udea9</button>')
+    + '</td>'
+    + '</tr>';
+}
+
+// Null-guarded DOM sync — safe to call with the modal closed.
+function _evSyncBatchDom() {
+  if (!EV_BATCH) return;
+  const B = EV_BATCH;
+  const t = document.getElementById('ev-progress-text');
+  if (t) t.textContent = B.currentText || '';
+  const bar = document.getElementById('ev-progress-bar');
+  if (bar) bar.style.width = B.total ? Math.round(((B.done + B.errors) / B.total) * 100) + '%' : '0%';
+  const c = document.getElementById('ev-live-count');
+  if (c) c.textContent = String(B.found.length);
+}
+
+// Append one newly-found row without rebuilding the table (preserves any
+// checkbox changes the user has already made on earlier rows).
+function _evAppendFoundRow(f, i) {
+  const tb = document.getElementById('ev-live-tbody');
+  if (tb) tb.insertAdjacentHTML('beforeend', _evLiveRowHtml(f, i));
+  const empty = document.getElementById('ev-live-empty');
+  if (empty) empty.style.display = 'none';
+}
+
+// Per-row immediate flag — review-as-found without waiting for the run.
+async function _evFlagOne(i) {
+  if (!EV_BATCH || !EV_BATCH.found[i] || EV_BATCH.found[i].flagged) return;
+  const f = EV_BATCH.found[i];
+  try {
+    await _tpgApply(f.item, {
+      _errorVarietyFlag: {
+        findings: f.result.findings,
+        imageQualityNote: f.result.imageQualityNote,
+        scannedAt: f.result.scannedAt,
+        provider: f.result.provider,
+        note: 'AI-suggested \u2014 verify before relying on this attribution'
+      }
+    }, 'Error Scan');
+    f.flagged = true;
+    const row = document.getElementById('ev-live-row-' + i);
+    if (row) row.outerHTML = _evLiveRowHtml(f, i);
+    if (typeof cvToast === 'function') cvToast('\ud83d\udea9 Flagged #' + cn(f.item.id), 'ok');
+  } catch (err) {
+    console.error('[error-scan] single flag failed:', err);
+    if (typeof cvToast === 'function') cvToast('Flag failed \u2014 see console', 'error');
+  }
+}
+
+function _evBackToPicker() {
+  const panel = document.querySelector('#ev-modal .ref-modal-panel');
+  if (panel) _evRenderPicker(panel, false, false);
+}
+
+function _evReopenBatch() {
+  const panel = document.querySelector('#ev-modal .ref-modal-panel');
+  if (panel && EV_BATCH) _evRenderBatchPanel(panel);
+}
 
 async function _evStartBatch() {
+  // v121: hard singleton — never start a second concurrent scan. If one is
+  // running, reattach its view (this was the root cause of the oscillating
+  // progress counter: two loops alive at once).
+  if (EV_BATCH && EV_BATCH.running) {
+    if (typeof cvToast === 'function') cvToast('A scan is already running \u2014 showing its progress.', 'info');
+    const p = document.querySelector('#ev-modal .ref-modal-panel');
+    if (p) _evRenderBatchPanel(p);
+    return;
+  }
+
   const rescanAll = !!(document.getElementById('ev-rescan-all') || {}).checked;
-  // v116: scope follows BOTH toggles. Defaults exclude professionally-
-  // graded records (slab already attributed) and bullion (mass-produced,
-  // errors essentially never found).
   const includeGraded  = !!(document.getElementById('ev-include-graded')  || {}).checked;
   const includeBullion = !!(document.getElementById('ev-include-bullion') || {}).checked;
   const eligible = _evEligibleRecords(includeGraded, includeBullion);
@@ -8746,106 +9185,63 @@ async function _evStartBatch() {
 
   if (queue.length === 0) { if (typeof cvToast === 'function') cvToast('Nothing to scan.', 'info'); return; }
 
-  const estSeconds = queue.length * 2.2; // ~2.2s/record incl. throttle + network
+  const estSeconds = queue.length * 2.2;
   const estMin = Math.ceil(estSeconds / 60);
-  if (!confirm('Scan ' + queue.length + ' record' + (queue.length===1?'':'s') + '?\n\nThis makes ' + queue.length + ' AI vision API call' + (queue.length===1?'':'s') + ' against your configured provider(s) \u2014 roughly ' + estMin + ' minute' + (estMin===1?'':'s') + '. You can cancel partway through; anything already scanned stays saved.')) return;
+  if (!confirm('Scan ' + queue.length + ' record' + (queue.length===1?'':'s') + '?\n\nThis makes ' + queue.length + ' AI vision API call' + (queue.length===1?'':'s') + ' against your configured provider(s) \u2014 roughly ' + estMin + ' minute' + (estMin===1?'':'s') + '. You can close this window and come back \u2014 the scan keeps running, everything scanned stays saved, and findings appear in the review list as they come in.')) return;
 
-  EV_BATCH_CANCEL = false;
-  const controls = document.getElementById('ev-batch-controls');
-  const progressEl = document.getElementById('ev-batch-progress');
-  const resultsEl = document.getElementById('ev-batch-results');
-  if (controls) controls.style.display = 'none';
-  if (resultsEl) resultsEl.innerHTML = '';
-  if (progressEl) {
-    progressEl.style.display = 'block';
-    progressEl.innerHTML = '<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:6px">'
-      + '<span id="ev-progress-text">Starting\u2026</span>'
-      + '<button class="bg" onclick="EV_BATCH_CANCEL=true" style="font-size:10px;padding:3px 10px">Cancel</button>'
-      + '</div>'
-      + '<div style="height:6px;background:var(--bg3);border-radius:3px;overflow:hidden"><div id="ev-progress-bar" style="height:100%;width:0%;background:var(--gold);transition:width .2s ease"></div></div>';
-  }
+  EV_BATCH = {
+    running: true, cancel: false,
+    total: queue.length, done: 0, errors: 0,
+    found: [], currentText: 'Starting\u2026',
+    rescanAll: rescanAll, startedAt: Date.now()
+  };
+  window._evBatchFindings = EV_BATCH.found;   // bulk-flag reads this
 
-  const flaggedThisRun = [];
-  let done = 0, errors = 0;
+  const panel = document.querySelector('#ev-modal .ref-modal-panel');
+  if (panel) _evRenderBatchPanel(panel);
 
   for (let i = 0; i < queue.length; i++) {
-    if (EV_BATCH_CANCEL) break;
+    if (EV_BATCH.cancel) break;
     const item = queue[i];
     const desc = String(item.desc || (item.raw && item.raw.description) || item.sheet).slice(0, 40);
-    const textEl = document.getElementById('ev-progress-text');
-    const barEl = document.getElementById('ev-progress-bar');
-    if (textEl) textEl.textContent = 'Scanning ' + (i+1) + ' of ' + queue.length + ' \u2014 #' + cn(item.id) + ' ' + desc + ' (' + flaggedThisRun.length + ' flagged so far)';
-    if (barEl) barEl.style.width = Math.round(((i) / queue.length) * 100) + '%';
+    EV_BATCH.currentText = 'Scanning ' + (i+1) + ' of ' + queue.length + ' \u2014 #' + cn(item.id) + ' ' + desc + ' (' + EV_BATCH.found.length + ' flagged so far)';
+    _evSyncBatchDom();
 
     try {
       const result = await _evScanRecord(item);
+      // Persist per record IMMEDIATELY — an interrupted run keeps all its
+      // progress; these records leave the unscanned pool for next time.
       _evSetCached(item, { scannedAt: result.scannedAt, hasFinding: result.hasFinding });
       if (result.hasFinding && result.findings.length > 0) {
-        flaggedThisRun.push({ item: item, result: result });
+        const f = { item: item, result: result, flagged: false };
+        EV_BATCH.found.push(f);
+        _evAppendFoundRow(f, EV_BATCH.found.length - 1);
+        _evSyncBatchDom();
       }
-      done++;
+      EV_BATCH.done++;
     } catch (err) {
       console.warn('[error-scan] batch item failed:', item.sheet, item.id, err.message);
-      errors++;
+      EV_BATCH.errors++;
     }
 
-    // Gentle inter-record delay — protects free-tier per-minute quotas
-    // (Gemini free tier, Groq, OpenRouter all have per-minute caps well
-    // under what an unthrottled loop would hit across hundreds of records).
-    if (i < queue.length - 1 && !EV_BATCH_CANCEL) {
+    // Gentle inter-record delay — protects free-tier per-minute quotas.
+    if (i < queue.length - 1 && !EV_BATCH.cancel) {
       await new Promise(function(r){ setTimeout(r, 900); });
     }
   }
 
-  if (progressEl) {
-    const barEl = document.getElementById('ev-progress-bar');
-    if (barEl) barEl.style.width = '100%';
-    const textEl = document.getElementById('ev-progress-text');
-    if (textEl) textEl.textContent = (EV_BATCH_CANCEL ? 'Cancelled \u2014 ' : 'Done \u2014 ') + done + ' scanned' + (errors ? ', ' + errors + ' failed' : '') + ', ' + flaggedThisRun.length + ' flagged';
-  }
-
-  if (resultsEl) {
-    resultsEl.innerHTML = flaggedThisRun.length === 0
-      ? '<div style="padding:20px;text-align:center;color:#22c55e;font-size:12px">\u2713 No errors or varieties found in this batch.</div>'
-      : _evBatchReviewTable(flaggedThisRun);
-  }
-  window._evBatchFindings = flaggedThisRun;
-}
-
-// Reuses the fixed-table pattern from the APMEX Cost Matcher (v113) so the
-// review list stays legible regardless of description length.
-function _evBatchReviewTable(flaggedThisRun) {
-  const _td = 'padding:7px 8px;border-bottom:1px solid var(--border);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle';
-  const rows = flaggedThisRun.map(function(f, i){
-    const item = f.item, result = f.result;
-    const desc = String(item.desc || (item.raw && item.raw.description) || item.sheet);
-    const sheetLabel = (SHEET_MAP && SHEET_MAP[item.sheet]) ? SHEET_MAP[item.sheet].label : item.sheet;
-    const top = result.findings[0];
-    const confColors = { high: '#22c55e', medium: '#c9a84c', low: '#6a8aab' };
-    const cc = confColors[top.confidence] || '#6a8aab';
-    return '<tr>'
-      + '<td style="' + _td + ';text-align:center"><input type="checkbox" class="ev-batch-check" data-i="' + i + '" checked></td>'
-      + '<td style="' + _td + ';color:var(--dim);font-family:DM Mono,monospace;font-size:11px">' + e(cn(item.id)) + '</td>'
-      + '<td style="' + _td + ';color:var(--text)" title="' + e(desc) + '">' + e(desc) + '</td>'
-      + '<td style="' + _td + ';color:var(--dim);font-size:11px">' + e(sheetLabel) + '</td>'
-      + '<td style="' + _td + ';color:' + cc + ';font-size:11px">' + e(top.type) + (result.findings.length > 1 ? ' +' + (result.findings.length-1) : '') + '</td>'
-      + '<td style="' + _td + ';font-size:9px;text-transform:uppercase;color:' + cc + '">' + e(top.confidence) + '</td>'
-      + '</tr>';
-  }).join('');
-  return '<div style="font-size:11px;color:var(--gold);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">' + flaggedThisRun.length + ' record' + (flaggedThisRun.length===1?'':'s') + ' with possible findings \u2014 review, uncheck any false positives, then flag</div>'
-    + '<table style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:12px">'
-    + '<colgroup><col style="width:32px"><col style="width:64px"><col><col style="width:130px"><col style="width:160px"><col style="width:70px"></colgroup>'
-    + '<thead><tr>'
-    +   '<th style="' + _td + ';font-size:9px;color:var(--dim);text-transform:uppercase"></th>'
-    +   '<th style="' + _td + ';font-size:9px;color:var(--dim);text-transform:uppercase;text-align:left">Rec #</th>'
-    +   '<th style="' + _td + ';font-size:9px;color:var(--dim);text-transform:uppercase;text-align:left">Record</th>'
-    +   '<th style="' + _td + ';font-size:9px;color:var(--dim);text-transform:uppercase;text-align:left">Category</th>'
-    +   '<th style="' + _td + ';font-size:9px;color:var(--dim);text-transform:uppercase;text-align:left">Top Finding</th>'
-    +   '<th style="' + _td + ';font-size:9px;color:var(--dim);text-transform:uppercase;text-align:left">Confidence</th>'
-    + '</tr></thead><tbody>' + rows + '</tbody></table>'
-    + '<div style="display:flex;justify-content:flex-end;margin-top:12px">'
-    +   '<button class="bp" onclick="_evApplyBatchFlags()">Flag Checked Records</button>'
-    + '</div>';
+  EV_BATCH.running = false;
+  EV_BATCH.currentText = (EV_BATCH.cancel ? 'Cancelled \u2014 ' : 'Done \u2014 ')
+    + EV_BATCH.done + ' scanned'
+    + (EV_BATCH.errors ? ', ' + EV_BATCH.errors + ' failed' : '')
+    + ', ' + EV_BATCH.found.length + ' flagged';
+  _evSyncBatchDom();
+  // If the modal is open on the batch view, refresh it into finished state
+  // (swaps Cancel for the back-to-options button and finalizes empty-state
+  // text). If the modal is closed, this no-ops and state waits for reopen.
+  const panelEnd = document.querySelector('#ev-modal .ref-modal-panel');
+  if (panelEnd && document.getElementById('ev-live-tbody')) _evRenderBatchPanel(panelEnd);
+  if (typeof cvToast === 'function') cvToast('Error scan finished \u2014 ' + EV_BATCH.found.length + ' flagged candidate' + (EV_BATCH.found.length===1?'':'s'), 'ok');
 }
 
 async function _evApplyBatchFlags() {
@@ -8856,7 +9252,7 @@ async function _evApplyBatchFlags() {
   for (let i = 0; i < checked.length; i++) {
     const idx = parseInt(checked[i].dataset.i, 10);
     const f = flaggedThisRun[idx];
-    if (!f) continue;
+    if (!f || f.flagged) continue;
     try {
       await _tpgApply(f.item, {
         _errorVarietyFlag: {
@@ -8867,14 +9263,22 @@ async function _evApplyBatchFlags() {
           note: 'AI-suggested \u2014 verify before relying on this attribution'
         }
       }, 'Error Scan');
+      f.flagged = true;
       ok++;
     } catch (err) { console.error('[error-scan] flag apply failed:', err); }
   }
-  const modal = document.getElementById('ev-modal');
-  if (modal) modal.remove();
   if (typeof cvToast === 'function') cvToast('\u2713 Flagged ' + ok + ' record' + (ok===1?'':'s') + ' for review', 'ok');
-  if (typeof ST !== 'undefined' && ST.view === 'health' && typeof renderDataHealth === 'function') renderDataHealth();
-  if (typeof ST !== 'undefined' && ST.view === 'inv' && typeof renderInv === 'function') renderInv();
+  // v121: if the batch is still running, stay attached — re-render the
+  // batch view so flagged rows show their done state and the scan keeps
+  // streaming new findings in. Only close the modal when the run is over.
+  const panel = document.querySelector('#ev-modal .ref-modal-panel');
+  if (EV_BATCH && EV_BATCH.running) {
+    if (panel) _evRenderBatchPanel(panel);
+  } else {
+    if (panel) _evRenderBatchPanel(panel);   // finished: refresh into done state
+    if (typeof ST !== 'undefined' && ST.view === 'health' && typeof renderDataHealth === 'function') renderDataHealth();
+    if (typeof ST !== 'undefined' && ST.view === 'inv' && typeof renderInv === 'function') renderInv();
+  }
 }
 // #endregion [ERROR-VARIETY-SCAN]
 
@@ -11932,6 +12336,23 @@ function _healthChecks() {
       countable: false
     });
   })();
+
+  // 12. Coin Value Explorer (v120) — look up any coin's estimated market
+  // value across grade tiers: line chart of value vs. grade, example image
+  // from Wikipedia, and the full tier price list. Powered by the existing
+  // PriceCharting integration (paid token required).
+  checks.push({
+    id: 'coin-value-explorer',
+    label: 'Coin Value Explorer',
+    desc: 'Type any coin and see its estimated market value across grade tiers \u2014 a value-vs-grade line chart, an example image, and the full price breakdown.'
+          + ((typeof pcGetToken === 'function' && pcGetToken()) ? '' : ' Requires your PriceCharting API token (the tool walks you through setup).'),
+    icon: '\ud83d\udcca',
+    count: null,
+    action: function(){
+      if (typeof showCoinValueExplorer === 'function') showCoinValueExplorer();
+    },
+    countable: false
+  });
 
   return checks;
 }
