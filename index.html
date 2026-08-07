@@ -1995,7 +1995,7 @@ body.theme-modern-dark select option{
 // Bump this on every deploy so the user can see at a glance which build is
 // running in their browser. Surfaced in three places: the sidebar footer
 // (desktop), the mobile header badge, and the Settings → About section.
-const APP_VERSION = 'v121';
+const APP_VERSION = 'v122';
 const APP_BUILD_DATE = '2026-06-15';
 
 // ── EARLY-HOISTED MODULE STATE ──────────────────────────────────────────────
@@ -8955,12 +8955,17 @@ function _evRenderPicker(panel, includeGraded, includeBullion) {
   panel.innerHTML = _evHeader('Batch Scanner', eligible.length + ' record' + (eligible.length===1?'':'s') + ' in scope of ' + fullCount + ' with photos')
     + '<div style="padding:16px 20px;overflow-y:auto;flex:1;min-height:0">'
     +   '<div style="font-size:11px;color:var(--muted);line-height:1.6;margin-bottom:14px;padding:10px 12px;background:var(--bg4);border-radius:5px;border-left:3px solid var(--gold)">' + e(_EV_DISCLAIMER) + '</div>'
-    +   ((typeof EV_BATCH !== 'undefined' && EV_BATCH && !EV_BATCH.running && EV_BATCH.found.length > 0)
+    +   ((typeof EV_BATCH !== 'undefined' && EV_BATCH && EV_BATCH.running)
+          ? '<div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--text);margin-bottom:14px;padding:10px 12px;background:rgba(34,197,94,.08);border-radius:5px;border-left:3px solid #22c55e">'
+            + '<span>\u23f3 Scan in progress \u2014 ' + (EV_BATCH.done + EV_BATCH.errors) + ' of ' + EV_BATCH.total + ' done \u00b7 ' + EV_BATCH.found.length + ' flagged so far</span>'
+            + '<button class="bg" onclick="_evReopenBatch()" style="font-size:11px;white-space:nowrap">View progress \u2192</button>'
+            + '</div>'
+          : ((typeof EV_BATCH !== 'undefined' && EV_BATCH && !EV_BATCH.running && EV_BATCH.found.length > 0)
           ? '<div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--text);margin-bottom:14px;padding:10px 12px;background:rgba(217,140,43,.10);border-radius:5px;border-left:3px solid var(--gold)">'
             + '<span>Last run: ' + EV_BATCH.done + ' scanned \u00b7 <strong style="color:var(--gold)">' + EV_BATCH.found.length + ' flagged candidate' + (EV_BATCH.found.length===1?'':'s') + '</strong>' + (EV_BATCH.found.filter(function(f){return f.flagged;}).length ? ' (' + EV_BATCH.found.filter(function(f){return f.flagged;}).length + ' already flagged)' : '') + '</span>'
             + '<button class="bg" onclick="_evReopenBatch()" style="font-size:11px;white-space:nowrap">Review findings \u2192</button>'
             + '</div>'
-          : '')
+          : ''))
     +   '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px">'
     +     '<div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:14px;text-align:center">'
     +       '<div style="font-size:22px;font-weight:600;color:var(--text)">' + eligible.length + '</div>'
@@ -8992,36 +8997,85 @@ function _evRenderPicker(panel, includeGraded, includeBullion) {
     +     '<input type="checkbox" id="ev-include-bullion"' + (includeBullion ? ' checked' : '') + ' onchange="' + _reRender + '">'
     +     '<span>Include raw bullion <span style="color:var(--dim)">(bars, rounds, hand-poured, shot \u2014 no legal-tender or numismatic value, so errors aren\u2019t collected; bullion COINS like Eagles and Maple Leafs are always in scope' + (bullionExcluded > 0 ? '; ' + bullionExcluded + ' currently excluded' : '') + ')</span></span>'
     +   '</label>'
-    +   (flagged.length > 0 ? _evFlaggedListHtml(flagged) : '')
+    +   _evFlaggedListHtml()
     +   '<div id="ev-batch-controls">'
     +     '<label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);margin-bottom:12px;cursor:pointer">'
     +       '<input type="checkbox" id="ev-rescan-all"> Re-scan everything in scope (including ' + scanned.length + ' already-scanned records) \u2014 uses more API quota'
     +     '</label>'
-    +     '<button class="bp" id="ev-start-batch-btn" onclick="_evStartBatch()"' + (eligible.length === 0 ? ' disabled' : '') + '>'
-    +       (unscanned.length > 0 ? 'Scan ' + unscanned.length + ' Unscanned Record' + (unscanned.length === 1 ? '' : 's') : 'Nothing New to Scan')
-    +     '</button>'
+    +     ((typeof EV_BATCH !== 'undefined' && EV_BATCH && EV_BATCH.running)
+            ? '<button class="bp" id="ev-start-batch-btn" onclick="_evReopenBatch()">Scan running \u2014 view progress</button>'
+            : '<button class="bp" id="ev-start-batch-btn" onclick="_evStartBatch()"' + (eligible.length === 0 ? ' disabled' : '') + '>'
+              + (unscanned.length > 0 ? 'Scan ' + unscanned.length + ' Unscanned Record' + (unscanned.length === 1 ? '' : 's') : 'Nothing New to Scan')
+              + '</button>')
     +   '</div>'
     +   '<div id="ev-batch-progress" style="display:none;margin-top:16px"></div>'
     +   '<div id="ev-batch-results" style="margin-top:16px"></div>'
     + '</div>';
 }
 
-function _evFlaggedListHtml(flagged) {
-  const rows = flagged.map(function(it){
+// v122: flagged HISTORY — every record in the whole collection carrying an
+// _errorVarietyFlag, regardless of the picker's photo/graded/bullion scope.
+// Flags are persisted on the records (synced via _tpgApply), so this is the
+// scanner's complete find history across every run and device. Rows click
+// through to the record in inventory, where the amber flag banner and 🚩
+// marker live.
+function _evAllFlagged() {
+  return ALL_ITEMS.filter(function(it){ return !!_evGetFlag(it); });
+}
+
+function _evGoToFlagged(i) {
+  const list = window._evFlaggedAll || [];
+  const it = list[i];
+  if (!it) return;
+  const modal = document.getElementById('ev-modal');
+  if (modal) modal.remove();
+  if (typeof nav === 'function') nav('inv');
+  // Let the inventory render before opening the detail panel so the flag
+  // banner + 🚩 row marker are visibly behind/around the opened record.
+  setTimeout(function(){
+    if (typeof showDetail === 'function') showDetail(it);
+  }, 120);
+}
+
+function _evFlaggedListHtml() {
+  const flagged = _evAllFlagged();
+  if (flagged.length === 0) return '';
+  window._evFlaggedAll = flagged;
+  const _td = 'padding:7px 8px;border-bottom:1px solid var(--border);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle';
+  const rows = flagged.map(function(it, i){
     const flag = _evGetFlag(it);
-    const desc = it.desc || (it.raw && it.raw.description) || it.sheet;
-    const topFinding = flag.findings[0];
-    return '<div onclick="document.getElementById(\'ev-modal\').remove();showErrorVarietyScanner(ALL_ITEMS[' + ALL_ITEMS.indexOf(it) + '])" style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border:1px solid rgba(217,140,43,.35);border-radius:6px;margin-bottom:5px;cursor:pointer;background:var(--bg3)">'
-      + '<div style="min-width:0;overflow:hidden">'
-      +   '<div style="font-size:12px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">#' + e(cn(it.id)) + ' \u00b7 ' + e(String(desc).slice(0,50)) + '</div>'
-      +   '<div style="font-size:10px;color:var(--gold);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + e(topFinding ? topFinding.type : '') + (flag.findings.length > 1 ? ' +' + (flag.findings.length - 1) + ' more' : '') + '</div>'
-      + '</div>'
-      + '<div style="font-size:10px;color:var(--dim);white-space:nowrap">review \u2192</div>'
-      + '</div>';
+    const desc = String(it.desc || (it.raw && it.raw.description) || it.sheet);
+    const sheetLabel = (SHEET_MAP && SHEET_MAP[it.sheet]) ? SHEET_MAP[it.sheet].label : it.sheet;
+    const top = flag.findings && flag.findings[0];
+    const confColors = { high: '#22c55e', medium: '#c9a84c', low: '#6a8aab' };
+    const cc = top ? (confColors[top.confidence] || '#6a8aab') : '#6a8aab';
+    const when = flag.scannedAt ? String(flag.scannedAt).slice(0, 10) : '';
+    return '<tr onclick="_evGoToFlagged(' + i + ')" style="cursor:pointer" '
+      + 'onmouseover="this.style.background=\'var(--bg4)\'" onmouseout="this.style.background=\'transparent\'">'
+      + '<td style="' + _td + ';color:var(--dim);font-family:DM Mono,monospace;font-size:11px">' + e(cn(it.id)) + '</td>'
+      + '<td style="' + _td + ';color:var(--text)" title="' + e(desc) + '">' + e(desc) + '</td>'
+      + '<td style="' + _td + ';color:var(--dim);font-size:11px">' + e(sheetLabel) + '</td>'
+      + '<td style="' + _td + ';color:' + cc + ';font-size:11px" title="' + e(flag.findings ? flag.findings.map(function(x){ return x.type; }).join(', ') : '') + '">' + e(top ? top.type : '?') + (flag.findings && flag.findings.length > 1 ? ' +' + (flag.findings.length - 1) : '') + '</td>'
+      + '<td style="' + _td + ';font-size:9px;text-transform:uppercase;color:' + cc + '">' + e(top ? top.confidence : '') + '</td>'
+      + '<td style="' + _td + ';color:var(--dim);font-size:10px;font-family:DM Mono,monospace">' + e(when) + '</td>'
+      + '<td style="' + _td + ';color:var(--gold);font-size:10px;text-align:right">open \u2192</td>'
+      + '</tr>';
   }).join('');
   return '<details style="margin-bottom:16px">'
-    + '<summary style="font-size:11px;color:var(--gold);cursor:pointer;margin-bottom:8px">\ud83d\udea9 ' + flagged.length + ' flagged record' + (flagged.length===1?'':'s') + ' \u2014 click to review</summary>'
-    + '<div style="margin-top:8px">' + rows + '</div>'
+    + '<summary style="font-size:11px;color:var(--gold);cursor:pointer">\ud83d\udea9 Flagged history \u2014 ' + flagged.length + ' record' + (flagged.length===1?'':'s') + ' across all scans; click a row to open it in inventory</summary>'
+    + '<div style="margin-top:8px;max-height:280px;overflow-y:auto;border:1px solid rgba(217,140,43,.3);border-radius:6px">'
+    + '<table style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:12px">'
+    + '<colgroup><col style="width:64px"><col><col style="width:120px"><col style="width:150px"><col style="width:64px"><col style="width:86px"><col style="width:58px"></colgroup>'
+    + '<thead><tr>'
+    +   '<th style="' + _td + ';font-size:9px;color:var(--dim);text-transform:uppercase;text-align:left">Rec #</th>'
+    +   '<th style="' + _td + ';font-size:9px;color:var(--dim);text-transform:uppercase;text-align:left">Record</th>'
+    +   '<th style="' + _td + ';font-size:9px;color:var(--dim);text-transform:uppercase;text-align:left">Category</th>'
+    +   '<th style="' + _td + ';font-size:9px;color:var(--dim);text-transform:uppercase;text-align:left">Top Finding</th>'
+    +   '<th style="' + _td + ';font-size:9px;color:var(--dim);text-transform:uppercase;text-align:left">Conf.</th>'
+    +   '<th style="' + _td + ';font-size:9px;color:var(--dim);text-transform:uppercase;text-align:left">Scanned</th>'
+    +   '<th style="' + _td + '"></th>'
+    + '</tr></thead><tbody>' + rows + '</tbody></table>'
+    + '</div>'
     + '</details>';
 }
 
@@ -9057,9 +9111,10 @@ function _evRenderBatchPanel(panel) {
     +   '<div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--muted);margin-bottom:6px">'
     +     '<span id="ev-progress-text"></span>'
     +     '<span style="display:flex;gap:6px">'
+    +       '<button class="bg" onclick="_evBackToPicker()" style="font-size:10px;padding:3px 10px" title="Scan continues in the background">\u2190 Options' + (B.running ? ' (scan continues)' : '') + '</button>'
     +       (B.running
               ? '<button class="bg" onclick="EV_BATCH&&(EV_BATCH.cancel=true)" style="font-size:10px;padding:3px 10px">Cancel</button>'
-              : '<button class="bg" onclick="_evBackToPicker()" style="font-size:10px;padding:3px 10px">\u2190 Scanner options</button>')
+              : '')
     +     '</span>'
     +   '</div>'
     +   '<div style="height:6px;background:var(--bg3);border-radius:3px;overflow:hidden;margin-bottom:14px"><div id="ev-progress-bar" style="height:100%;width:0%;background:var(--gold);transition:width .2s ease"></div></div>'
