@@ -1995,7 +1995,7 @@ body.theme-modern-dark select option{
 // Bump this on every deploy so the user can see at a glance which build is
 // running in their browser. Surfaced in three places: the sidebar footer
 // (desktop), the mobile header badge, and the Settings → About section.
-const APP_VERSION = 'v125';
+const APP_VERSION = 'v126';
 const APP_BUILD_DATE = '2026-06-15';
 
 // ── EARLY-HOISTED MODULE STATE ──────────────────────────────────────────────
@@ -15583,15 +15583,19 @@ function lockAppNow() {
 const AI_PROVIDER_DEFAULT = 'gemini';
 const AI_MODELS = {
   gemini:     ['gemini-flash-latest', 'gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash'],
-  // Groq vision models. The "preview" names rotate; if a model 404s, the user
-  // can pick another from this list in Settings → AI Vision. Llama 4 Scout
-  // is the newest as of June 2026; the 90b vision preview is older but very
-  // well-tested. Both run on Groq's free tier.
-  groq:       ['meta-llama/llama-4-scout-17b-16e-instruct', 'llama-3.2-90b-vision-preview', 'llama-3.2-11b-vision-preview'],
-  // OpenRouter free models — note the ":free" suffix is REQUIRED. OpenRouter
-  // rotates which models are free; if one 404s, switch to another in Settings.
-  // Llama 3.2 Vision is the most stable free vision option.
-  openrouter: ['meta-llama/llama-3.2-90b-vision-instruct:free', 'meta-llama/llama-3.2-11b-vision-instruct:free', 'qwen/qwen-2.5-vl-72b-instruct:free', 'google/gemini-2.0-flash-exp:free'],
+  // Groq vision models (verified Aug 2026). Groq retired Llama 4 Scout
+  // (June 17 2026) and Maverick (Mar 9 2026) for free/dev tiers; their
+  // gpt-oss replacements are TEXT-ONLY. qwen3.6-27b is the current
+  // vision-capable model (served as preview). Scout kept as a secondary
+  // for enterprise committed-spend accounts, which were exempted.
+  groq:       ['qwen/qwen3.6-27b', 'meta-llama/llama-4-scout-17b-16e-instruct'],
+  // OpenRouter free vision (verified Aug 2026). The ":free" roster rotates
+  // weekly, so the DEFAULT is 'openrouter/free' — OpenRouter's own
+  // capability-aware auto-router, which picks a live free model that
+  // accepts image input per request and therefore never rots. The named
+  // entries behind it are the current free vision models if the user
+  // prefers a fixed choice.
+  openrouter: ['openrouter/free', 'minimax/minimax-m3:free', 'google/gemma-4-31b-it:free', 'google/gemma-4-26b-a4b-it:free', 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free'],
   // v124: xAI Grok vision models. grok-2-vision-1212 is the stable vision
   // model; keys start with "xai-". The API is OpenAI-compatible.
   grok:       ['grok-2-vision-1212'],
@@ -15599,8 +15603,8 @@ const AI_MODELS = {
 };
 const AI_MODEL_DEFAULTS = {
   gemini:     'gemini-flash-latest',
-  groq:       'meta-llama/llama-4-scout-17b-16e-instruct',
-  openrouter: 'meta-llama/llama-3.2-90b-vision-instruct:free',
+  groq:       'qwen/qwen3.6-27b',
+  openrouter: 'openrouter/free',
   grok:       'grok-2-vision-1212',
   anthropic:  'claude-sonnet-4-5'
 };
@@ -15777,7 +15781,18 @@ function _aiDispatch(provider, key, model, frontImg, backImg, onStatus) {
   }
 }
 
+// v126: classify a provider error as "the model ID no longer exists" —
+// distinct from quota/auth/network failures. Matches the phrasings Groq,
+// OpenRouter, xAI, and Gemini actually use for retired or unknown models.
+function _aiIsModelRotError(msg) {
+  return /model_not_found|model[_\s]?decommissioned|does not exist|No endpoints found|has been decommissioned|is not found|unknown model|model not supported/i.test(String(msg || ''));
+}
+// Per-run memory of models already attempted per provider, so the rot
+// auto-advance never loops on the same dead ID. Reset at each run start.
+let _aiTriedModels = {};
+
 async function aiAnalyzeWithFallback(frontImg, backImg, onStatus) {
+  _aiTriedModels = {};
   const primaryProvider = aiCurrentProvider();
   const primaryKey      = aiKeyFor(primaryProvider);
   const primaryModel    = aiCurrentModel();
@@ -15817,10 +15832,47 @@ async function aiAnalyzeWithFallback(frontImg, backImg, onStatus) {
         result._aiFallbackModel = step.model;
         result._aiFellBack      = true;
       }
+      // v126 auto-heal: this step succeeded as an automatic retry after the
+      // provider's SAVED model came back "not found" (retired/renamed).
+      // Persist the working model so every future scan skips the dead one,
+      // and tell the user what happened.
+      if (step._autoModelRetry) {
+        localStorage.setItem('cv_ai_model_' + step.provider, step.model);
+        result._aiModelHealed = step.model;
+        console.log('[ai-fallback] auto-healed ' + step.provider + ' model \u2192 ' + step.model +
+          ' (previous model "' + step._replacedModel + '" was retired)');
+        if (typeof cvToast === 'function') {
+          cvToast(_aiProviderLabel(step.provider) + ' model auto-updated to ' + step.model +
+            ' \u2014 the old one was retired by the provider', 'ok');
+        }
+      }
       return result;
     } catch (err) {
       console.warn('[ai-fallback] step ' + i + ' (' + step.provider + '/' +
         step.model + ') failed:', err.message);
+      // v126: MODEL ROT auto-advance. Providers retire model IDs constantly
+      // (Groq killed Llama 4 Scout June 2026; OpenRouter's :free roster
+      // rotates weekly). When the failure is a model-not-found class error
+      // — not quota, not auth — retry the SAME provider with its next known
+      // model from AI_MODELS before falling through to the next provider.
+      if (_aiIsModelRotError(err.message) && AI_MODELS[step.provider]) {
+        _aiTriedModels[step.provider] = _aiTriedModels[step.provider] || new Set();
+        _aiTriedModels[step.provider].add(step.model);
+        const candidate = AI_MODELS[step.provider].find(function(m){
+          return !_aiTriedModels[step.provider].has(m);
+        });
+        if (candidate) {
+          _aiTriedModels[step.provider].add(candidate);
+          chain.splice(i + 1, 0, {
+            provider: step.provider, model: candidate,
+            _autoModelRetry: true, _replacedModel: step.model
+          });
+          errors.push({ step: step, message: err.message + ' \u2014 model retired; auto-trying ' + candidate });
+          continue;
+        }
+        errors.push({ step: step, message: err.message + ' \u2014 model retired; no alternates left, pick a current model in Settings \u2192 AI Vision' });
+        continue;
+      }
       errors.push({ step: step, message: err.message });
       // Continue to next step in chain
     }
