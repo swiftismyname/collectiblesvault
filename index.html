@@ -1995,8 +1995,12 @@ body.theme-modern-dark select option{
 // Bump this on every deploy so the user can see at a glance which build is
 // running in their browser. Surfaced in three places: the sidebar footer
 // (desktop), the mobile header badge, and the Settings → About section.
-const APP_VERSION = 'v126';
-const APP_BUILD_DATE = '2026-06-15';
+const APP_VERSION = 'v128';
+const APP_BUILD_DATE = '2026-08-28';
+// Boot banner — makes the running build unambiguous in any console log or
+// screenshot, since stale-deploy confusion has bitten more than once.
+console.log('%c[boot] Collectibles Vault ' + APP_VERSION + ' \u00b7 built ' + APP_BUILD_DATE,
+  'color:#c9a84c;font-weight:bold');
 
 // ── EARLY-HOISTED MODULE STATE ──────────────────────────────────────────────
 // v99: _FANCY_CACHE moved here from its original location in the FANCY-SERIAL
@@ -2102,11 +2106,13 @@ const SYNC_KEYS = [
   'cv_ai_key_groq',           // v101
   'cv_ai_key_openrouter',     // v101
   'cv_ai_key_grok',           // v124
+  'cv_ai_key_openai',         // v127
   'cv_ai_model_gemini',
   'cv_ai_model_anthropic',
   'cv_ai_model_groq',         // v101
   'cv_ai_model_openrouter',   // v101
   'cv_ai_model_grok',         // v124
+  'cv_ai_model_openai',       // v127
   'cv_ai_fallback_provider',  // legacy single-fallback (v77+)
   'cv_ai_fallback_model',     // legacy single-fallback (v77+)
   'cv_ai_fallback_chain',     // v101 — JSON array, supersedes legacy keys if set
@@ -14154,6 +14160,16 @@ function renderSettings(){
           keyHelp: 'Sign in at console.x.ai, create an API key (starts with \"xai-\"), paste below. Grok\u2019s vision model reads coin/currency photos well and slots in as another fallback before any paid Anthropic calls.',
           models: (typeof AI_MODELS !== 'undefined' ? AI_MODELS.grok : ['grok-2-vision-1212'])
         },
+        // v127: OpenAI — cheapest reliable paid vision via gpt-4o-mini
+        openai: {
+          label: 'OpenAI',
+          cost: 'Paid \u00b7 roughly <strong>$0.002\u20130.01</strong> per scan with gpt-4o-mini \u00b7 very reliable JSON + vision',
+          keyUrl: 'https://platform.openai.com/api-keys',
+          keyHost: 'platform.openai.com',
+          keyPrefix: 'sk-\u2026',
+          keyHelp: 'Create an OpenAI account, add a payment method, generate a key at platform.openai.com/api-keys. gpt-4o-mini reads coin/currency photos well at a fraction of a cent per scan \u2014 a rock-solid backstop when the free tiers are rate-limited.',
+          models: (typeof AI_MODELS !== 'undefined' ? AI_MODELS.openai : ['gpt-4o-mini'])
+        },
         anthropic: {
           label: 'Anthropic Claude',
           cost: 'Paid · roughly <strong>$0.01–0.03</strong> per scan · pay-as-you-go after free credits',
@@ -15595,17 +15611,21 @@ const AI_MODELS = {
   // accepts image input per request and therefore never rots. The named
   // entries behind it are the current free vision models if the user
   // prefers a fixed choice.
-  openrouter: ['openrouter/free', 'minimax/minimax-m3:free', 'google/gemma-4-31b-it:free', 'google/gemma-4-26b-a4b-it:free', 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free'],
+  openrouter: ['minimax/minimax-m3:free', 'google/gemma-4-31b-it:free', 'google/gemma-4-26b-a4b-it:free', 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free', 'openrouter/free'],
   // v124: xAI Grok vision models. grok-2-vision-1212 is the stable vision
   // model; keys start with "xai-". The API is OpenAI-compatible.
   grok:       ['grok-2-vision-1212'],
+  // v127: OpenAI vision. gpt-4o-mini is the cheap workhorse (~$0.002/scan);
+  // if OpenAI retires an ID, the rot auto-advance walks this list.
+  openai:     ['gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini'],
   anthropic:  ['claude-sonnet-4-5', 'claude-opus-4-5', 'claude-haiku-4-5']
 };
 const AI_MODEL_DEFAULTS = {
   gemini:     'gemini-flash-latest',
   groq:       'qwen/qwen3.6-27b',
-  openrouter: 'openrouter/free',
+  openrouter: 'minimax/minimax-m3:free',
   grok:       'grok-2-vision-1212',
+  openai:     'gpt-4o-mini',
   anthropic:  'claude-sonnet-4-5'
 };
 const AI_PROVIDER_LABELS = {
@@ -15613,12 +15633,13 @@ const AI_PROVIDER_LABELS = {
   groq:       'Groq (free tier, fast)',
   openrouter: 'OpenRouter (free models)',
   grok:       'xAI Grok',
+  openai:     'OpenAI (paid, cheap)',
   anthropic:  'Anthropic Claude (paid)'
 };
 // Order for auto-building the fallback chain. Free providers come first so
 // users on free tiers don't accidentally hit a paid provider unless they
 // configured Anthropic themselves.
-const AI_PROVIDER_FALLBACK_ORDER = ['gemini', 'groq', 'openrouter', 'grok', 'anthropic'];
+const AI_PROVIDER_FALLBACK_ORDER = ['gemini', 'groq', 'openrouter', 'grok', 'openai', 'anthropic'];
 let AI_FRONT_IMG = null;   // data URL
 let AI_BACK_IMG  = null;
 let AI_LAST_RESULT = null;
@@ -15776,9 +15797,62 @@ function _aiDispatch(provider, key, model, frontImg, backImg, onStatus) {
     case 'groq':       return aiAnalyzeGroq(key, model, frontImg, backImg, onStatus);
     case 'openrouter': return aiAnalyzeOpenRouter(key, model, frontImg, backImg, onStatus);
     case 'grok':       return aiAnalyzeGrok(key, model, frontImg, backImg, onStatus);
+    case 'openai':     return aiAnalyzeOpenAI(key, model, frontImg, backImg, onStatus);
     case 'gemini':
     default:           return aiAnalyzeGemini(key, model, frontImg, backImg, onStatus);
   }
+}
+
+// v127: classify "request too big" errors — Groq's qwen3.6-27b sits behind
+// an 8,000 tokens-per-minute free-tier cap, and two full-resolution photos
+// alone exceed it (a real 413 from the field requested 10,348 tokens).
+function _aiIsPayloadTooLarge(msg) {
+  return /\b413\b|Request too large|tokens per minute|\bTPM\b|reduce your message size|payload too large/i.test(String(msg || ''));
+}
+
+// Canvas downscale for a data-URL image. Fail-open: any error returns the
+// original so a shrink problem never blocks a scan outright.
+function _aiShrinkDataUrl(dataUrl, maxDim) {
+  return new Promise(function(resolve){
+    if (!dataUrl) return resolve(null);
+    try {
+      const img = new Image();
+      img.onload = function(){
+        try {
+          const w = img.naturalWidth, h = img.naturalHeight;
+          if (Math.max(w, h) <= maxDim) return resolve(dataUrl);
+          const scale = maxDim / Math.max(w, h);
+          const c = document.createElement('canvas');
+          c.width = Math.round(w * scale);
+          c.height = Math.round(h * scale);
+          c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+          resolve(c.toDataURL('image/jpeg', 0.82));
+        } catch (e) { resolve(dataUrl); }
+      };
+      img.onerror = function(){ resolve(dataUrl); };
+      img.src = dataUrl;
+    } catch (e) { resolve(dataUrl); }
+  });
+}
+
+// Per-provider image budget. Groq gets pre-shrunk to 768px so a normal
+// two-photo request fits under its 8k TPM cap; a reactive 413 retry drops
+// to 512px front-only. Everyone else gets the originals untouched.
+async function _aiImagesForProvider(provider, front, back, forceTiny) {
+  if (provider !== 'groq' && !forceTiny) return { front: front, back: back };
+  const dim = forceTiny ? 512 : 768;
+  const sf = await _aiShrinkDataUrl(front, dim);
+  const sb = forceTiny ? null : await _aiShrinkDataUrl(back, dim);
+  return { front: sf, back: sb };
+}
+
+// v127: session quota cooldown. When a provider reports minute/day quota
+// exhaustion, skip its remaining chain steps for a while instead of
+// burning 5 slow retries per step (Gemini's two models were adding ~10
+// pointless attempts to every failed run).
+let _aiQuotaCooldown = {};
+function _aiIsQuotaError(msg) {
+  return /rate-limited|quota|RESOURCE_EXHAUSTED|429/i.test(String(msg || ''));
 }
 
 // v126: classify a provider error as "the model ID no longer exists" —
@@ -15824,9 +15898,19 @@ async function aiAnalyzeWithFallback(frontImg, backImg, onStatus) {
       }
     }
 
+    // Quota cooldown: skip this provider's remaining steps while cooling
+    // (the primary step still gets one attempt — quota may have reset).
+    if (i > 0 && _aiQuotaCooldown[step.provider] && Date.now() < _aiQuotaCooldown[step.provider]) {
+      console.log('[ai-fallback] skipping ' + step.provider + ' (quota cooldown, ' +
+        Math.ceil((_aiQuotaCooldown[step.provider] - Date.now()) / 60000) + 'm left)');
+      continue;
+    }
+
     try {
+      const _imgs = await _aiImagesForProvider(step.provider, frontImg !== undefined ? frontImg : AI_FRONT_IMG,
+        backImg !== undefined ? backImg : AI_BACK_IMG, !!step._forceTiny);
       const result = await _aiDispatch(step.provider, stepKey, step.model,
-        frontImg, backImg, onStatus);
+        _imgs.front, _imgs.back, onStatus);
       if (isFallback) {
         result._aiProvider      = step.provider;
         result._aiFallbackModel = step.model;
@@ -15855,6 +15939,21 @@ async function aiAnalyzeWithFallback(frontImg, backImg, onStatus) {
       // rotates weekly). When the failure is a model-not-found class error
       // — not quota, not auth — retry the SAME provider with its next known
       // model from AI_MODELS before falling through to the next provider.
+      // Quota exhaustion → cool this provider down for 8 minutes so later
+      // steps and subsequent runs stop stalling on doomed retries.
+      if (_aiIsQuotaError(err.message)) {
+        _aiQuotaCooldown[step.provider] = Date.now() + 8 * 60 * 1000;
+      }
+      // Payload too large (Groq TPM class): one same-provider retry with
+      // aggressively shrunk front-only imagery, then give up on it.
+      if (_aiIsPayloadTooLarge(err.message) && !step._forceTiny) {
+        chain.splice(i + 1, 0, {
+          provider: step.provider, model: step.model,
+          _forceTiny: true, _autoModelRetry: step._autoModelRetry, _replacedModel: step._replacedModel
+        });
+        errors.push({ step: step, message: err.message.slice(0, 220) + ' \u2014 retrying with smaller image' });
+        continue;
+      }
       if (_aiIsModelRotError(err.message) && AI_MODELS[step.provider]) {
         _aiTriedModels[step.provider] = _aiTriedModels[step.provider] || new Set();
         _aiTriedModels[step.provider].add(step.model);
@@ -15887,14 +15986,14 @@ async function aiAnalyzeWithFallback(frontImg, backImg, onStatus) {
   });
   // Suggest a free fallback the user hasn't enabled yet, if any
   const unconfigured = AI_PROVIDER_FALLBACK_ORDER.filter(function(p){
-    return p !== 'anthropic' && !aiKeyFor(p);
+    return p !== 'anthropic' && p !== 'openai' && !aiKeyFor(p);
   });
   let tip = '';
   if (unconfigured.length) {
     tip = '\n\nTip: add a free ' + unconfigured.map(_aiProviderLabel).join(' or ') +
       ' key in Settings \u2192 AI Vision to extend the fallback chain.';
   }
-  throw new Error('All AI providers failed:\n' + lines.join('\n') + tip);
+  throw new Error('All AI providers failed [build ' + (typeof APP_VERSION !== 'undefined' ? APP_VERSION : '?') + ']:\n' + lines.join('\n') + tip);
 }
 
 const AI_PROMPT = `You are an expert numismatist and currency specialist. You will be shown one or two images of a coin OR paper banknote (typically obverse/front and reverse/back).
@@ -16401,6 +16500,15 @@ async function _aiAnalyzeOpenAICompatible(endpoint, extraHeaders, model, frontIm
     // so this is a "best-effort hint" not a hard requirement.
     response_format: { type: 'json_object' }
   };
+  // v127: OpenRouter-specific hardening. require_parameters makes their
+  // router send the request ONLY to endpoints that actually honor
+  // response_format — this is what stops reasoning models from returning
+  // pure thinking prose with no JSON (seen with openrouter/free). Extra
+  // headroom for models that spend tokens reasoning before answering.
+  if (providerLabel === 'OpenRouter') {
+    body.provider = { require_parameters: true };
+    body.max_tokens = 6000;
+  }
 
   const headers = Object.assign({ 'content-type': 'application/json' }, extraHeaders);
   const r = await _aiFetchWithRetry(endpoint, {
@@ -16453,6 +16561,15 @@ async function aiAnalyzeGrok(key, model, frontImg, backImg, onStatus) {
     'https://api.x.ai/v1/chat/completions',
     { 'Authorization': 'Bearer ' + key },
     model, frontImg, backImg, 'xAI Grok', onStatus
+  );
+}
+
+// \u2500\u2500 OpenAI (v127) \u2500\u2500 gpt-4o-mini: cheap, reliable JSON + vision \u2500\u2500\u2500\u2500\u2500\u2500
+async function aiAnalyzeOpenAI(key, model, frontImg, backImg, onStatus) {
+  return _aiAnalyzeOpenAICompatible(
+    'https://api.openai.com/v1/chat/completions',
+    { 'Authorization': 'Bearer ' + key },
+    model, frontImg, backImg, 'OpenAI', onStatus
   );
 }
 
