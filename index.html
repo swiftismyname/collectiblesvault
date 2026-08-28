@@ -1995,7 +1995,7 @@ body.theme-modern-dark select option{
 // Bump this on every deploy so the user can see at a glance which build is
 // running in their browser. Surfaced in three places: the sidebar footer
 // (desktop), the mobile header badge, and the Settings → About section.
-const APP_VERSION = 'v122';
+const APP_VERSION = 'v125';
 const APP_BUILD_DATE = '2026-06-15';
 
 // ── EARLY-HOISTED MODULE STATE ──────────────────────────────────────────────
@@ -2101,10 +2101,12 @@ const SYNC_KEYS = [
   'cv_ai_key_anthropic',
   'cv_ai_key_groq',           // v101
   'cv_ai_key_openrouter',     // v101
+  'cv_ai_key_grok',           // v124
   'cv_ai_model_gemini',
   'cv_ai_model_anthropic',
   'cv_ai_model_groq',         // v101
   'cv_ai_model_openrouter',   // v101
+  'cv_ai_model_grok',         // v124
   'cv_ai_fallback_provider',  // legacy single-fallback (v77+)
   'cv_ai_fallback_model',     // legacy single-fallback (v77+)
   'cv_ai_fallback_chain',     // v101 — JSON array, supersedes legacy keys if set
@@ -3298,57 +3300,95 @@ async function flushPendingLabelOps() {
 // migration. Reader code separates these rows from real manual-queue entries.
 const PRINTED_SHEET_SENTINEL = '__printed__';
 
+// Pure merge helper (v125) — unit-testable. Strict mode reconciles the
+// local set against the complete remote set using the pending-ops queue
+// as the source of truth for in-flight intent:
+//   result = (remote ∪ pendingAdds) − pendingRemoves
+// This kills the "resurrection" bug where a label removed on device B kept
+// bouncing back because device A union-merged its stale local copy and
+// pushed it up again. Heal mode (one-time, first load after upgrade)
+// keeps the old union behavior so labels added by the pre-v124 range tool
+// (which never pushed to the cloud) get uploaded instead of dropped.
+function _lblStrictMerge(remoteKeys, localSet, pendingOps, healed) {
+  const pendingAdds = new Set(), pendingRemoves = new Set();
+  (pendingOps || []).forEach(function(op){
+    const key = op.sheet + '|' + String(op.id);
+    if (op.action === 'add') pendingAdds.add(key);
+    else if (op.action === 'remove') pendingRemoves.add(key);
+  });
+  const out = new Set(remoteKeys);
+  pendingAdds.forEach(function(k){ out.add(k); });
+  if (!healed) {
+    // Heal pass: keep local-only keys and report them for upload
+    const localOnly = [];
+    localSet.forEach(function(k){ if (!out.has(k)) { out.add(k); localOnly.push(k); } });
+    pendingRemoves.forEach(function(k){ out.delete(k); });
+    return { set: out, pushUp: localOnly };
+  }
+  pendingRemoves.forEach(function(k){ out.delete(k); });
+  return { set: out, pushUp: [] };
+}
+
 async function loadLabelQueueFromSupabase() {
   if (!SB_URL || !SB_KEY) return;
-  // Surface "syncing…" state in the labels view header if it's currently open
   const _statusEl = document.getElementById('lbl-sync-status');
   if (_statusEl) _statusEl.textContent = 'syncing\u2026';
   try {
-    const url = SB_URL.replace(/\/+$/, '') + '/rest/v1/' + SB_LABELS_TABLE +
-      '?select=sheet,id&order=added_at.asc';
-    const r = await fetch(url, {
-      headers: {
-        'apikey': SB_KEY, 'Authorization': 'Bearer ' + SB_KEY, 'Content-Type': 'application/json'
+    // v125: PAGINATED load. Supabase REST silently caps responses at 1000
+    // rows; this table holds manual entries AND printed markers, which
+    // accumulate past 1000 over time — after that, un-paginated loads
+    // return only the OLDEST 1000 rows and newer labels never reach other
+    // devices. Page until a short page comes back.
+    const base = SB_URL.replace(/\/+$/, '') + '/rest/v1/' + SB_LABELS_TABLE +
+      '?select=sheet,id&order=added_at.asc,sheet.asc,id.asc';
+    const PAGE = 1000;
+    const remote = [];
+    for (let off = 0; ; off += PAGE) {
+      const r = await fetch(base, {
+        headers: {
+          'apikey': SB_KEY, 'Authorization': 'Bearer ' + SB_KEY,
+          'Content-Type': 'application/json',
+          'Range-Unit': 'items',
+          'Range': off + '-' + (off + PAGE - 1)
+        }
+      });
+      if (!r.ok) {
+        const body = await r.text();
+        if (body.includes('PGRST') || body.includes('not exist') || r.status === 404) {
+          console.warn('[label-queue] table not found \u2014 run 20260605_label_queue.sql in Supabase');
+        } else {
+          console.warn('[label-queue] load failed:', r.status, body.slice(0, 200));
+        }
+        if (_statusEl) _statusEl.textContent = 'sync failed';
+        return;
       }
-    });
-    if (!r.ok) {
-      const body = await r.text();
-      if (body.includes('PGRST') || body.includes('not exist') || r.status === 404) {
-        console.warn('[label-queue] table not found — run 20260605_label_queue.sql in Supabase');
-      } else {
-        console.warn('[label-queue] load failed:', r.status, body.slice(0, 200));
-      }
-      if (_statusEl) _statusEl.textContent = 'sync failed';
-      return;
+      const page = await r.json();
+      if (!Array.isArray(page)) break;
+      remote.push.apply(remote, page);
+      if (page.length < PAGE) break;
+      if (off > 50000) { console.warn('[label-queue] pagination safety stop'); break; }
     }
-    const remote = await r.json();
-    if (!Array.isArray(remote)) return;
 
-    // Split rows: real label_queue entries (sheet=actual sheet name) vs printed
-    // markers (sheet=PRINTED_SHEET_SENTINEL). Same table, different semantics.
     const printedRows = remote.filter(row => row.sheet === PRINTED_SHEET_SENTINEL);
     const labelRows   = remote.filter(row => row.sheet !== PRINTED_SHEET_SENTINEL);
 
-    // ── Manual labels (existing 2-way merge) ─────────────────────────
-    const remoteKeys  = new Set(labelRows.map(row => row.sheet + '|' + row.id));
-    const localOnly   = [...MANUAL_LABELS].filter(k => !remoteKeys.has(k));
-    MANUAL_LABELS = new Set([
-      ...labelRows.map(row => row.sheet + '|' + row.id),
-      ...localOnly
-    ]);
+    // ── Manual labels: strict pending-aware merge (v125) ─────────────
+    const remoteKeys = new Set(labelRows.map(row => row.sheet + '|' + row.id));
+    const healed = localStorage.getItem('cv_lbl_strict_v125') === '1';
+    const merged = _lblStrictMerge(remoteKeys, MANUAL_LABELS, PENDING_LABEL_OPS, healed);
+    MANUAL_LABELS = merged.set;
     saveManualLabels();
-    // Push local-only manual entries up (fire-and-forget)
-    localOnly.forEach(key => {
-      const sep = key.indexOf('|');
-      if (sep < 0) return;
-      pushLabelToSupabase(key.slice(0, sep), key.slice(sep + 1));
-    });
+    if (!healed) {
+      merged.pushUp.forEach(key => {
+        const sep = key.indexOf('|');
+        if (sep < 0) return;
+        pushLabelToSupabase(key.slice(0, sep), key.slice(sep + 1));
+      });
+      localStorage.setItem('cv_lbl_strict_v125', '1');
+      if (merged.pushUp.length) console.log('[label-queue] one-time heal \u2014 pushed', merged.pushUp.length, 'local-only label(s) to cloud');
+    }
 
-    // ── Printed markers (new in v88) ─────────────────────────────────
-    // Same 2-way merge logic: pull remote into local set, push any local-only
-    // entries up. This is what makes "Mark All Printed" propagate across
-    // devices: device A pushes the printed markers, device B pulls them down,
-    // and renderLabels() then suppresses those records from "pending".
+    // ── Printed markers: grow-only, union stays correct ──────────────
     const remotePrintedIds = new Set(printedRows.map(row => String(row.id)));
     const localOnlyPrinted = [...labelsPrinted].filter(id => !remotePrintedIds.has(String(id)));
     labelsPrinted = new Set([
@@ -3360,11 +3400,9 @@ async function loadLabelQueueFromSupabase() {
       pushLabelToSupabase(PRINTED_SHEET_SENTINEL, String(id));
     });
 
-    // Retry any queued ops
     flushPendingLabelOps();
 
-    console.log('[label-queue] Synced — ' + labelRows.length + ' manual (' + localOnly.length + ' pushed up), ' + printedRows.length + ' printed markers (' + localOnlyPrinted.length + ' pushed up)');
-    // Mark successful sync time so the UI can show "synced 5s ago"
+    console.log('[label-queue] Synced \u2014 ' + labelRows.length + ' manual, ' + printedRows.length + ' printed markers (paginated ' + remote.length + ' rows)');
     window.LABEL_QUEUE_LAST_SYNC = Date.now();
     if (_statusEl) _statusEl.textContent = 'synced just now';
     if (typeof updateBadges === 'function') updateBadges();
@@ -3500,13 +3538,20 @@ function updateBadges(){
   if (totEl) totEl.textContent = _total;
   const mTot = document.getElementById('m-b-total'); if (mTot) mTot.textContent = _total;
   const mHTot = document.getElementById('m-h-total'); if (mHTot) mHTot.textContent = _mhTot;
-  // Count only PENDING (not-yet-printed) labels from the two in-app sources
+  // Count only PENDING (not-yet-printed) labels from the two in-app sources.
+  // v125: manual entries that duplicate a pending NEW_RECORDS row are
+  // skipped so a freshly-added record (now in BOTH sources — see the
+  // add-record synced-queue hook) counts exactly once.
   const printed = (typeof labelsPrinted!=='undefined') ? labelsPrinted : new Set();
-  const newPend = (typeof NEW_RECORDS!=='undefined')
-    ? NEW_RECORDS.filter(r => !printed.has(String(r.id))).length : 0;
+  const newPendRows = (typeof NEW_RECORDS!=='undefined')
+    ? NEW_RECORDS.filter(r => !printed.has(String(r.id))) : [];
+  const newPend = newPendRows.length;
+  const _newKeys = new Set(newPendRows.map(r => r.sheet + '|' + cn(r.id)));
   const manualPend = (typeof MANUAL_LABELS!=='undefined')
     ? [...MANUAL_LABELS].filter(key => {
+        if (_newKeys.has(key)) return false;
         const [ml_sheet, ml_id] = key.split('|');
+        if (printed.has(ml_id)) return false;
         return ALL_ITEMS.some(i => i.sheet === ml_sheet && cn(i.id) === ml_id);
       }).length
     : 0;
@@ -6376,22 +6421,32 @@ function showDetail(item){
       pcBtn.onclick = () => lookupPriceCharting(item);
       actions.appendChild(pcBtn);
     }
-    // Error & Die Variety Scanner button (v114) — only shown when the record
-    // is an eligible sheet (coins/currency, not bullion bars/rounds) AND has
-    // at least one photo, since the scan needs images to work with.
-    if (typeof EV_ELIGIBLE_SHEETS !== 'undefined' && EV_ELIGIBLE_SHEETS.has(item.sheet) && typeof _hasImages === 'function' && _hasImages(item)) {
+    // Error & Die Variety Scanner button — v123: shown on EVERY record.
+    // Enabled whenever the record has at least one photo (the scan needs
+    // images); disabled with an explanatory tooltip when it doesn't. Sheet
+    // gating removed for the per-record button — an explicit click is the
+    // user's override, and the single-scan view already shows info notes
+    // for professionally-graded and raw-bullion records.
+    {
+      const _evHasImgs = (typeof _hasImages === 'function') && _hasImages(item);
       const evBtn = document.createElement('button');
       const _flaggedEV = typeof _evGetFlag === 'function' ? !!_evGetFlag(item) : false;
       evBtn.className = 'lookup-btn' + (_flaggedEV ? ' tpg-done' : '');
       evBtn.id = 'errorscan-btn-' + cn(item.id);
       evBtn.textContent = _flaggedEV ? '\ud83d\udea9 Error Scan' : '\ud83d\udd0e Error Scan';
-      evBtn.title = _flaggedEV
-        ? 'This record is flagged with possible findings \u2014 click to review'
-        : 'Screen this record\u2019s photos for minting errors or die varieties (AI-assisted, unverified)';
-      evBtn.style.cssText = _flaggedEV
-        ? 'background:rgba(217,140,43,.15);border-color:rgba(217,140,43,.45);color:var(--gold)'
-        : 'background:rgba(106,138,171,.12);border-color:rgba(106,138,171,.35);color:#8ba3bd';
-      evBtn.onclick = () => showErrorVarietyScanner(item);
+      if (!_evHasImgs) {
+        evBtn.disabled = true;
+        evBtn.title = 'Add a front or back photo to enable error/variety scanning';
+        evBtn.style.cssText = 'background:rgba(106,138,171,.06);border-color:rgba(106,138,171,.2);color:#5a6b7d;opacity:.55;cursor:not-allowed';
+      } else {
+        evBtn.title = _flaggedEV
+          ? 'This record is flagged with possible findings \u2014 click to review'
+          : 'Screen this record\u2019s photos for minting errors or die varieties (AI-assisted, unverified)';
+        evBtn.style.cssText = _flaggedEV
+          ? 'background:rgba(217,140,43,.15);border-color:rgba(217,140,43,.45);color:var(--gold)'
+          : 'background:rgba(106,138,171,.12);border-color:rgba(106,138,171,.35);color:#8ba3bd';
+        evBtn.onclick = () => showErrorVarietyScanner(item);
+      }
       actions.appendChild(evBtn);
     }
     // Paper-money-only reference buttons — pure browse links, no data capture.
@@ -8999,12 +9054,23 @@ function _evRenderPicker(panel, includeGraded, includeBullion) {
     +   '</label>'
     +   _evFlaggedListHtml()
     +   '<div id="ev-batch-controls">'
-    +     '<label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);margin-bottom:12px;cursor:pointer">'
+    +     '<label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);margin-bottom:10px;cursor:pointer">'
     +       '<input type="checkbox" id="ev-rescan-all"> Re-scan everything in scope (including ' + scanned.length + ' already-scanned records) \u2014 uses more API quota'
     +     '</label>'
+    // v123: scan-count limiter. Blank = scan everything in the queue;
+    // a number scans just the first N (inventory order). Lets the user
+    // do small test batches or ration API quota. The Start button label
+    // live-updates as the number changes.
+    +     '<label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);margin-bottom:12px">'
+    +       '<span>Limit this run to</span>'
+    +       '<input type="number" id="ev-scan-limit" min="1" step="1" placeholder="all" '
+    +         'style="width:80px;padding:6px 8px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:12px;font-family:DM Mono,monospace" '
+    +         'oninput="var b=document.getElementById(\'ev-start-batch-btn\');if(!b||b.dataset.running)return;var u=parseInt(b.dataset.u||\'0\',10);var n=parseInt(this.value,10);var k=(!isNaN(n)&&n>0)?Math.min(n,u):u;b.textContent=(k>0?\'Scan \'+k+\' Record\'+(k===1?\'\':\'s\'):\'Nothing New to Scan\');">'
+    +       '<span>records <span style="color:var(--dim)">(blank = all in scope)</span></span>'
+    +     '</label>'
     +     ((typeof EV_BATCH !== 'undefined' && EV_BATCH && EV_BATCH.running)
-            ? '<button class="bp" id="ev-start-batch-btn" onclick="_evReopenBatch()">Scan running \u2014 view progress</button>'
-            : '<button class="bp" id="ev-start-batch-btn" onclick="_evStartBatch()"' + (eligible.length === 0 ? ' disabled' : '') + '>'
+            ? '<button class="bp" id="ev-start-batch-btn" data-running="1" onclick="_evReopenBatch()">Scan running \u2014 view progress</button>'
+            : '<button class="bp" id="ev-start-batch-btn" data-u="' + unscanned.length + '" onclick="_evStartBatch()"' + (eligible.length === 0 ? ' disabled' : '') + '>'
               + (unscanned.length > 0 ? 'Scan ' + unscanned.length + ' Unscanned Record' + (unscanned.length === 1 ? '' : 's') : 'Nothing New to Scan')
               + '</button>')
     +   '</div>'
@@ -9236,7 +9302,15 @@ async function _evStartBatch() {
   const includeGraded  = !!(document.getElementById('ev-include-graded')  || {}).checked;
   const includeBullion = !!(document.getElementById('ev-include-bullion') || {}).checked;
   const eligible = _evEligibleRecords(includeGraded, includeBullion);
-  const queue = rescanAll ? eligible : eligible.filter(function(it){ return !_evGetCached(it); });
+  let queue = rescanAll ? eligible : eligible.filter(function(it){ return !_evGetCached(it); });
+
+  // v123: optional run limit — first N records of the queue (inventory
+  // order). Applied BEFORE the estimate/confirm so the numbers the user
+  // approves are the numbers that run.
+  const _limitRaw = parseInt((document.getElementById('ev-scan-limit') || {}).value, 10);
+  if (!isNaN(_limitRaw) && _limitRaw > 0 && _limitRaw < queue.length) {
+    queue = queue.slice(0, _limitRaw);
+  }
 
   if (queue.length === 0) { if (typeof cvToast === 'function') cvToast('Nothing to scan.', 'info'); return; }
 
@@ -11700,6 +11774,51 @@ async function markAllPrinted() {
 
 
 /** Show modal to add a range of record IDs to the labels queue. */
+// v124: bulk label-queue entry. One smart input accepts any mix of
+// single record numbers and ranges — "101, 105, 210-215" — separated by
+// commas, spaces, or newlines. Optional sheet filter narrows matching.
+// Also fixes a latent sync bug: the old range-add never called
+// pushLabelToSupabase, so range-added labels existed only on the local
+// device. Every key added here now pushes to the cloud queue.
+
+// Parse "101, 105, 210-215" → Set of normalized id strings. Range spans
+// are capped at 2000 ids to protect against typos like "1-99999".
+function _lqParseTokens(text) {
+  const ids = new Set();
+  const bad = [];
+  String(text || '').split(/[\s,;]+/).forEach(function(tok){
+    if (!tok) return;
+    const range = tok.match(/^(\d+)\s*[-\u2013]\s*(\d+)$/);
+    if (range) {
+      let a = parseInt(range[1], 10), b = parseInt(range[2], 10);
+      if (isNaN(a) || isNaN(b)) { bad.push(tok); return; }
+      if (a > b) { const t = a; a = b; b = t; }
+      if (b - a > 2000) { bad.push(tok + ' (range too large)'); return; }
+      for (let n = a; n <= b; n++) ids.add(String(n));
+    } else if (/^\d+$/.test(tok)) {
+      ids.add(String(parseInt(tok, 10)));
+    } else {
+      bad.push(tok);
+    }
+  });
+  return { ids: ids, bad: bad };
+}
+
+function _lqMatchRecords(idSet, sheet) {
+  const found = [];
+  const matchedIds = new Set();
+  ALL_ITEMS.forEach(function(i){
+    const idStr = String(parseInt(cn(i.id), 10));
+    if (idSet.has(idStr) && (!sheet || i.sheet === sheet)) {
+      found.push(i);
+      matchedIds.add(idStr);
+    }
+  });
+  const missing = [];
+  idSet.forEach(function(id){ if (!matchedIds.has(id)) missing.push(id); });
+  return { found: found, missing: missing };
+}
+
 function showAddRangeToLabels() {
   const existing = document.getElementById('range-label-modal');
   if (existing) existing.remove();
@@ -11711,30 +11830,23 @@ function showAddRangeToLabels() {
   document.body.appendChild(modal);
 
   modal.innerHTML = `
-    <div class="ref-modal-box" style="width:min(480px,94vw)">
+    <div class="ref-modal-box" style="width:min(520px,94vw)">
       <div class="ref-modal-head">
-        <div style="font-family:var(--font-display,'Cormorant Garamond',serif);font-size:17px;font-weight:600">Add Range to Labels Queue</div>
-        <button class="rb" onclick="document.getElementById('range-label-modal').remove()" style="font-size:18px">✕</button>
+        <div style="font-family:var(--font-display,'Cormorant Garamond',serif);font-size:17px;font-weight:600">Add Records to Labels Queue</div>
+        <button class="rb" onclick="document.getElementById('range-label-modal').remove()" style="font-size:18px">\u2715</button>
       </div>
       <div class="ref-modal-body" style="padding:20px">
         <div style="font-size:12px;color:var(--muted);margin-bottom:16px">
-          Enter a start and end Record # to add all matching records to the queue.<br>
-          You can also filter by sheet to add only records from a specific category.
+          Enter record numbers and/or ranges, separated by commas or spaces.<br>
+          <span style="color:var(--dim)">Example: <span style="font-family:DM Mono,monospace;color:var(--gold)">101, 105, 210-215, 400</span></span>
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
-          <div>
-            <div style="font-size:10px;color:var(--dim);margin-bottom:4px;text-transform:uppercase;letter-spacing:.07em">From Record #</div>
-            <input id="rl-from" type="number" min="1" placeholder="e.g. 1001"
-              style="width:100%;box-sizing:border-box;padding:8px 10px;background:var(--bg4);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:14px">
-          </div>
-          <div>
-            <div style="font-size:10px;color:var(--dim);margin-bottom:4px;text-transform:uppercase;letter-spacing:.07em">To Record #</div>
-            <input id="rl-to" type="number" min="1" placeholder="e.g. 1045"
-              style="width:100%;box-sizing:border-box;padding:8px 10px;background:var(--bg4);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:14px">
-          </div>
+        <div style="margin-bottom:12px">
+          <div style="font-size:10px;color:var(--dim);margin-bottom:4px;text-transform:uppercase;letter-spacing:.07em">Record #s / Ranges</div>
+          <textarea id="rl-ids" rows="2" placeholder="e.g. 101, 105, 210-215"
+            style="width:100%;box-sizing:border-box;padding:8px 10px;background:var(--bg4);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:14px;font-family:DM Mono,monospace;resize:vertical"></textarea>
         </div>
         <div style="margin-bottom:16px">
-          <div style="font-size:10px;color:var(--dim);margin-bottom:4px;text-transform:uppercase;letter-spacing:.07em">Sheet (optional — leave blank for all)</div>
+          <div style="font-size:10px;color:var(--dim);margin-bottom:4px;text-transform:uppercase;letter-spacing:.07em">Sheet (optional \u2014 leave blank for all)</div>
           <select id="rl-sheet"
             style="width:100%;box-sizing:border-box;padding:8px 10px;background:var(--bg4);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:13px">
             <option value="">All sheets</option>
@@ -11749,54 +11861,63 @@ function showAddRangeToLabels() {
       </div>
     </div>`;
 
-  // Live preview as user types
+  // Live preview: parses the full expression as the user types
   const update = () => {
-    const from  = parseInt(document.getElementById('rl-from').value) || 0;
-    const to    = parseInt(document.getElementById('rl-to').value) || 0;
-    const sheet = document.getElementById('rl-sheet').value;
-    if (!from || !to) { document.getElementById('rl-preview').textContent = ''; return; }
-    const matches = ALL_ITEMS.filter(i => {
-      const n = parseInt(cn(i.id));
-      return n >= from && n <= to && (!sheet || i.sheet === sheet);
-    });
     const prev = document.getElementById('rl-preview');
-    if (matches.length === 0) {
-      prev.innerHTML = '<span style="color:var(--red)">No records found in that range.</span>';
-    } else {
-      prev.innerHTML = '<span style="color:var(--green)">&#9679; ' + matches.length + ' record' + (matches.length !== 1 ? 's' : '') + ' will be added.</span>';
+    const raw = document.getElementById('rl-ids').value;
+    const sheet = document.getElementById('rl-sheet').value;
+    if (!raw.trim()) { prev.textContent = ''; return; }
+    const parsed = _lqParseTokens(raw);
+    if (parsed.ids.size === 0) {
+      prev.innerHTML = '<span style="color:var(--red)">No valid record numbers yet.</span>';
+      return;
     }
+    const m = _lqMatchRecords(parsed.ids, sheet);
+    let out = m.found.length === 0
+      ? '<span style="color:var(--red)">No matching records found.</span>'
+      : '<span style="color:var(--green)">\u25cf ' + m.found.length + ' record' + (m.found.length !== 1 ? 's' : '') + ' will be added.</span>';
+    if (m.missing.length > 0) {
+      out += ' <span style="color:var(--dim)">' + m.missing.length + ' number' + (m.missing.length !== 1 ? 's' : '') + ' not found (' + m.missing.slice(0, 8).join(', ') + (m.missing.length > 8 ? '\u2026' : '') + ')</span>';
+    }
+    if (parsed.bad.length > 0) {
+      out += ' <span style="color:var(--red)">Ignored: ' + parsed.bad.slice(0, 5).map(e).join(', ') + '</span>';
+    }
+    prev.innerHTML = out;
   };
-  document.getElementById('rl-from').addEventListener('input', update);
-  document.getElementById('rl-to').addEventListener('input', update);
+  document.getElementById('rl-ids').addEventListener('input', update);
   document.getElementById('rl-sheet').addEventListener('change', update);
-  document.getElementById('rl-from').focus();
+  document.getElementById('rl-ids').focus();
 }
 
 function _addRangeToLabels() {
-  const from  = parseInt(document.getElementById('rl-from').value) || 0;
-  const to    = parseInt(document.getElementById('rl-to').value) || 0;
+  const raw = document.getElementById('rl-ids').value;
   const sheet = document.getElementById('rl-sheet').value;
-  if (!from || !to) { alert('Enter both a start and end Record #.'); return; }
-  if (from > to) { alert('Start # must be less than or equal to End #.'); return; }
+  const parsed = _lqParseTokens(raw);
+  if (parsed.ids.size === 0) { alert('Enter at least one record number (e.g. "101, 105, 210-215").'); return; }
+  const m = _lqMatchRecords(parsed.ids, sheet);
+  if (m.found.length === 0) { alert('No records found matching those numbers' + (sheet ? ' on that sheet' : '') + '.'); return; }
 
-  const matches = ALL_ITEMS.filter(i => {
-    const n = parseInt(cn(i.id));
-    return n >= from && n <= to && (!sheet || i.sheet === sheet);
-  });
-  if (!matches.length) { alert('No records found in that range.'); return; }
-
-  let added = 0;
-  for (const item of matches) {
-    const key = item.sheet + '|' + cn(item.id);
-    if (!MANUAL_LABELS.has(key)) { MANUAL_LABELS.add(key); added++; }
+  let added = 0, already = 0;
+  for (const item of m.found) {
+    const cleanId = cn(item.id);
+    const key = item.sheet + '|' + cleanId;
+    if (MANUAL_LABELS.has(key)) { already++; continue; }
+    MANUAL_LABELS.add(key);
+    // Cloud sync per key — the old implementation skipped this, so
+    // range-added labels never reached other devices.
+    pushLabelToSupabase(item.sheet, cleanId);
+    added++;
   }
   saveManualLabels();
   updateBadges();
   document.getElementById('range-label-modal').remove();
-  renderLabels();
-  if (added < matches.length) {
-    alert(added + ' record' + (added !== 1 ? 's' : '') + ' added (' + (matches.length - added) + ' were already in the queue).');
-  }
+  if (typeof ST !== 'undefined' && ST.view === 'labels') renderLabels();
+
+  let summary = 'Added ' + added + ' record' + (added !== 1 ? 's' : '') + ' to the label queue';
+  if (already > 0) summary += ' \u00b7 ' + already + ' already queued';
+  if (m.missing.length > 0) summary += ' \u00b7 ' + m.missing.length + ' not found';
+  if (typeof cvToast === 'function') cvToast(summary, added > 0 ? 'ok' : 'info');
+  else alert(summary + (m.missing.length ? '\nNot found: ' + m.missing.slice(0, 15).join(', ') : ''));
 }
 
 function renderLabels(){
@@ -11820,8 +11941,14 @@ function renderLabels(){
       };
     });
 
+  // v125: manual rows skip (a) keys already shown as NEW_RECORDS rows —
+  // freshly-added records now live in BOTH sources — and (b) records whose
+  // labels were already marked printed, matching the badge count exactly.
+  const _newKeys = new Set(newRecLabels.map(l => l.sheetKey + '|' + l.id));
   const manualLabels = [...(MANUAL_LABELS || [])].map(key => {
     const [sheet, id] = key.split('|');
+    if (_newKeys.has(key)) return null;
+    if (labelsPrinted.has(id)) return null;
     const item = ALL_ITEMS.find(i => i.sheet === sheet && cn(i.id) === id);
     if (!item) return null;
     const r = item.raw || {};
@@ -14017,6 +14144,16 @@ function renderSettings(){
           keyHelp: 'Sign up at openrouter.ai (Google/GitHub login), create a key in the Keys page, paste below. Pick any model with the ":free" suffix to stay at zero cost.',
           models: (typeof AI_MODELS !== 'undefined' ? AI_MODELS.openrouter : ['meta-llama/llama-3.2-90b-vision-instruct:free'])
         },
+        // v124: xAI Grok — OpenAI-compatible API at api.x.ai
+        grok: {
+          label: 'xAI Grok',
+          cost: 'Paid API \u00b7 xAI periodically offers <strong style="color:var(--green)">free promotional credits</strong> (e.g. monthly credit with data sharing opt-in) via console.x.ai \u2014 check your account',
+          keyUrl: 'https://console.x.ai',
+          keyHost: 'console.x.ai',
+          keyPrefix: 'xai-\u2026',
+          keyHelp: 'Sign in at console.x.ai, create an API key (starts with \"xai-\"), paste below. Grok\u2019s vision model reads coin/currency photos well and slots in as another fallback before any paid Anthropic calls.',
+          models: (typeof AI_MODELS !== 'undefined' ? AI_MODELS.grok : ['grok-2-vision-1212'])
+        },
         anthropic: {
           label: 'Anthropic Claude',
           cost: 'Paid · roughly <strong>$0.01–0.03</strong> per scan · pay-as-you-go after free credits',
@@ -14966,6 +15103,15 @@ async function _submitBulkAdd(sheet, baseRec, quantity) {
 
     arr.push(rec);
     NEW_RECORDS.push(Object.assign({sheet}, rec));
+    // v125: enqueue the new record's label in the SYNCED queue at creation.
+    // Previously labels for new records lived only in device-local
+    // NEW_RECORDS — other devices never saw them, and the Supabase
+    // autoclean stripped them here once the record synced, so the label
+    // vanished before printing. The synced queue survives both.
+    try {
+      const _lk = sheet + '|' + cn(rec.id);
+      if (!MANUAL_LABELS.has(_lk)) { MANUAL_LABELS.add(_lk); saveManualLabels(); pushLabelToSupabase(sheet, cn(rec.id)); }
+    } catch (e) { console.warn('[label-queue] enqueue on add failed:', e.message); }
 
     // Add to label print queue (Supabase + local) for cross-device sync
     const _qKey = sheet + '|' + cn(rec.id);
@@ -15102,6 +15248,11 @@ async function submitAdd(){
   arr.push(rec);
   D[sheet] = arr;
   NEW_RECORDS.push({sheet, ...rec});
+  // v125: same synced-queue enqueue as the primary add path (see above).
+  try {
+    const _lk = sheet + '|' + cn(rec.id);
+    if (!MANUAL_LABELS.has(_lk)) { MANUAL_LABELS.add(_lk); saveManualLabels(); pushLabelToSupabase(sheet, cn(rec.id)); }
+  } catch (e) { console.warn('[label-queue] enqueue on add failed:', e.message); }
   saveNR();
 
   // Auto-add to the label print queue — every new record gets a label by default.
@@ -15441,24 +15592,29 @@ const AI_MODELS = {
   // rotates which models are free; if one 404s, switch to another in Settings.
   // Llama 3.2 Vision is the most stable free vision option.
   openrouter: ['meta-llama/llama-3.2-90b-vision-instruct:free', 'meta-llama/llama-3.2-11b-vision-instruct:free', 'qwen/qwen-2.5-vl-72b-instruct:free', 'google/gemini-2.0-flash-exp:free'],
+  // v124: xAI Grok vision models. grok-2-vision-1212 is the stable vision
+  // model; keys start with "xai-". The API is OpenAI-compatible.
+  grok:       ['grok-2-vision-1212'],
   anthropic:  ['claude-sonnet-4-5', 'claude-opus-4-5', 'claude-haiku-4-5']
 };
 const AI_MODEL_DEFAULTS = {
   gemini:     'gemini-flash-latest',
   groq:       'meta-llama/llama-4-scout-17b-16e-instruct',
   openrouter: 'meta-llama/llama-3.2-90b-vision-instruct:free',
+  grok:       'grok-2-vision-1212',
   anthropic:  'claude-sonnet-4-5'
 };
 const AI_PROVIDER_LABELS = {
   gemini:     'Google Gemini (free tier)',
   groq:       'Groq (free tier, fast)',
   openrouter: 'OpenRouter (free models)',
+  grok:       'xAI Grok',
   anthropic:  'Anthropic Claude (paid)'
 };
 // Order for auto-building the fallback chain. Free providers come first so
 // users on free tiers don't accidentally hit a paid provider unless they
 // configured Anthropic themselves.
-const AI_PROVIDER_FALLBACK_ORDER = ['gemini', 'groq', 'openrouter', 'anthropic'];
+const AI_PROVIDER_FALLBACK_ORDER = ['gemini', 'groq', 'openrouter', 'grok', 'anthropic'];
 let AI_FRONT_IMG = null;   // data URL
 let AI_BACK_IMG  = null;
 let AI_LAST_RESULT = null;
@@ -15615,6 +15771,7 @@ function _aiDispatch(provider, key, model, frontImg, backImg, onStatus) {
     case 'anthropic':  return aiAnalyzeAnthropic(key, model, frontImg, backImg, onStatus);
     case 'groq':       return aiAnalyzeGroq(key, model, frontImg, backImg, onStatus);
     case 'openrouter': return aiAnalyzeOpenRouter(key, model, frontImg, backImg, onStatus);
+    case 'grok':       return aiAnalyzeGrok(key, model, frontImg, backImg, onStatus);
     case 'gemini':
     default:           return aiAnalyzeGemini(key, model, frontImg, backImg, onStatus);
   }
@@ -16235,6 +16392,15 @@ async function aiAnalyzeGroq(key, model, frontImg, backImg, onStatus) {
     'https://api.groq.com/openai/v1/chat/completions',
     { 'Authorization': 'Bearer ' + key },
     model, frontImg, backImg, 'Groq', onStatus
+  );
+}
+
+// ── xAI Grok (v124) ── OpenAI-compatible endpoint at api.x.ai ────────
+async function aiAnalyzeGrok(key, model, frontImg, backImg, onStatus) {
+  return _aiAnalyzeOpenAICompatible(
+    'https://api.x.ai/v1/chat/completions',
+    { 'Authorization': 'Bearer ' + key },
+    model, frontImg, backImg, 'xAI Grok', onStatus
   );
 }
 
