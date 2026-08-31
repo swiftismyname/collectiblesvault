@@ -2003,7 +2003,7 @@ body.theme-modern-dark select option{
 // Bump this on every deploy so the user can see at a glance which build is
 // running in their browser. Surfaced in three places: the sidebar footer
 // (desktop), the mobile header badge, and the Settings → About section.
-const APP_VERSION = 'v139';
+const APP_VERSION = 'v140';
 const APP_BUILD_DATE = '2026-08-28';
 // Boot banner — makes the running build unambiguous in any console log or
 // screenshot, since stale-deploy confusion has bitten more than once.
@@ -15219,6 +15219,35 @@ function focusFirstInvResult() {
   if (firstRow) firstRow.click();
 }
 
+// v140: AI-captured extras section for the Add form. Every field the AI
+// scan wrote into ADD_FORM_STATE that the CURRENT category's schema does
+// not render gets its own visible, editable input here — so nothing the
+// AI brought over is hidden between scan and save. Inputs use the same
+// af-<field> id convention, which means the existing persistence wiring
+// (_wireAddFormPersistence) and sheet-switch survival work automatically.
+// Clearing a field deletes it from state → it will NOT be saved (the
+// delete-on-empty rule in the input listener is the user's veto).
+function _aiAddExtrasHtml(schema) {
+  const excl = new Set((schema || []).map(function(s){ return s.f; }));
+  excl.add('id'); excl.add('quantity');
+  const keys = Object.keys(ADD_FORM_STATE).filter(function(k){
+    return !excl.has(k) && ADD_FORM_STATE[k] != null && ADD_FORM_STATE[k] !== '';
+  });
+  if (keys.length === 0) return '';
+  return '<div style="margin-top:14px;background:rgba(139,92,246,.07);border:1px solid rgba(139,92,246,.3);border-radius:7px;padding:14px">'
+    + '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:#a78bfa;margin-bottom:4px">\u2728 AI-captured fields \u2014 not part of this category\u2019s form</div>'
+    + '<div style="font-size:11px;color:var(--muted);line-height:1.5;margin-bottom:12px">These came from the AI scan and WILL be saved onto the record. Edit anything below; clear a field to drop it entirely. Switching category moves matching fields into the main form automatically.</div>'
+    + '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px">'
+    + keys.map(function(k){
+        return '<div>'
+          + '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);margin-bottom:3px">' + e(k) + '</div>'
+          + '<input type="text" id="af-' + e(k) + '" value="' + e(String(ADD_FORM_STATE[k])) + '" style="width:100%;box-sizing:border-box;background:var(--bg2);border:1px solid rgba(139,92,246,.3);color:var(--text);padding:8px 10px;border-radius:4px;font-size:13px">'
+          + '</div>';
+      }).join('')
+    + '</div>'
+    + '</div>';
+}
+
 function renderAdd(){
   const schema = SCHEMAS[ADD_SHEET] || [];
   // v92: group the 19 sheets by category using native <optgroup>. HTML5,
@@ -15272,6 +15301,7 @@ function renderAdd(){
     +'</div>'
     +'</div>'
     +fields
+    +_aiAddExtrasHtml(schema)
     +'<div style="display:flex;gap:10px;margin-top:8px">'
     +'<button class="bp" id="af-submit-btn" onclick="submitAdd()" style="flex:1">Add to Collection</button>'
     +'<button class="bg" onclick="resetAdd();renderAdd()" style="flex:1">Clear</button>'
@@ -15477,20 +15507,29 @@ async function submitAdd(){
   });
 
   // Attach AI-scanned image URLs uploaded earlier (if any)
-  // v130: merge EVERYTHING the AI extracted into the record, regardless of
-  // which category is selected — bullion purity/weight, currency plate and
-  // signature data, coin mint/composition — anything the current form
-  // didn't render still lands on the record. User-typed values always win;
-  // only empty slots are filled. Consumed once, then cleared.
-  if (window.AI_APPLIED_RESULT) {
-    const _mk = _aiMergeIntoRec(rec, _aiFieldMapFromResult(window.AI_APPLIED_RESULT));
-    if (_mk.length) {
+  // v140 (supersedes v130's raw-result merge): the extras now live as
+  // VISIBLE, EDITABLE inputs in the Add form, all persisted into
+  // ADD_FORM_STATE — so the state, not the original AI result, is the
+  // source of truth at save. Your edits to AI-captured fields are what
+  // get saved; a cleared field is gone. Only empty slots on the record
+  // are filled (schema-collected values already sit in rec and win).
+  {
+    const _exclC = new Set((SCHEMAS[sheet] || []).map(function(s){ return s.f; }));
+    _exclC.add('id'); _exclC.add('quantity');
+    const _mk = [];
+    Object.keys(ADD_FORM_STATE).forEach(function(k){
+      if (_exclC.has(k)) return;
+      const v = ADD_FORM_STATE[k];
+      if (v == null || v === '') return;
+      if (rec[k] == null || rec[k] === '') { rec[k] = v; _mk.push(k); }
+    });
+    if (_mk.length && window.AI_APPLIED_RESULT) {
       rec.aiScanDate = new Date().toISOString().split('T')[0];
       const _ar = window.AI_APPLIED_RESULT;
       rec.aiSource = (_ar._aiProvider || localStorage.getItem('cv_ai_provider') || 'AI')
         + (_ar._aiFallbackModel ? '/' + _ar._aiFallbackModel : '');
-      console.log('[ai-merge] appended ' + _mk.length + ' AI field(s) beyond the form: ' + _mk.join(', '));
     }
+    if (_mk.length) console.log('[ai-merge] appended ' + _mk.length + ' field(s) beyond the form (as edited): ' + _mk.join(', '));
     window.AI_APPLIED_RESULT = null;
   }
   if (window.PENDING_AI_IMAGES) {
