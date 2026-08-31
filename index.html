@@ -2003,7 +2003,7 @@ body.theme-modern-dark select option{
 // Bump this on every deploy so the user can see at a glance which build is
 // running in their browser. Surfaced in three places: the sidebar footer
 // (desktop), the mobile header badge, and the Settings → About section.
-const APP_VERSION = 'v135';
+const APP_VERSION = 'v136';
 const APP_BUILD_DATE = '2026-08-28';
 // Boot banner — makes the running build unambiguous in any console log or
 // screenshot, since stale-deploy confusion has bitten more than once.
@@ -14691,6 +14691,18 @@ function openEditModal(item) {
     if (raw[k] !== null && typeof raw[k] === 'object') return; // flags etc.
     seen.add(k);
     fields.push({ f: k, l: k, v: raw[k] != null ? raw[k] : '' });
+  });
+  // v136: universal tail — a few fields every record should expose for
+  // editing even when the sheet's schema omits them and the record has
+  // no value yet (schema fields + raw extras above can both miss these).
+  [
+    { f: 'notes',         l: 'Notes' },
+    { f: 'imageFrontUrl', l: 'Image URL (front)' },
+    { f: 'imageBackUrl',  l: 'Image URL (back)' }
+  ].forEach(function(u){
+    if (seen.has(u.f)) return;
+    seen.add(u.f);
+    fields.push({ f: u.f, l: u.l, v: raw[u.f] != null ? raw[u.f] : '' });
   });
 
   const sheetOptions = Object.entries(SHEET_MAP).map(function(pair){
