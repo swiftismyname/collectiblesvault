@@ -138,6 +138,14 @@ tbody tr.sel td{background:rgba(201,168,76,.06)}
 .rb.d:hover{color:var(--red)}
 /* Section title */
 .stt{font-size:10px;text-transform:uppercase;letter-spacing:.12em;color:var(--dim);margin:0 0 10px}
+/* v133: collapsible Settings sections */
+.set-acc{border:1px solid var(--border);border-radius:8px;margin-bottom:10px;background:var(--bg3);overflow:hidden}
+.set-acc>.set-acc-sum{cursor:pointer;list-style:none;display:flex;align-items:center;gap:10px;padding:13px 16px;user-select:none}
+.set-acc>.set-acc-sum::-webkit-details-marker{display:none}
+.set-acc>.set-acc-sum:hover{background:var(--bg4)}
+.set-acc-chev{transition:transform .15s ease;color:var(--gold);font-size:10px;flex-shrink:0}
+.set-acc[open]>.set-acc-sum .set-acc-chev{transform:rotate(90deg)}
+.set-acc-body{padding:2px 16px 14px}
 /* Pagination */
 .pag{display:flex;align-items:center;gap:8px;padding:14px 0 0;justify-content:flex-end;font-size:12px;color:var(--muted)}
 .pag button{background:transparent;border:1px solid var(--border);color:var(--muted);padding:4px 10px;border-radius:3px;cursor:pointer;font-size:12px;font-family:var(--font-body,'Karla',sans-serif)}
@@ -1995,7 +2003,7 @@ body.theme-modern-dark select option{
 // Bump this on every deploy so the user can see at a glance which build is
 // running in their browser. Surfaced in three places: the sidebar footer
 // (desktop), the mobile header badge, and the Settings → About section.
-const APP_VERSION = 'v132';
+const APP_VERSION = 'v134';
 const APP_BUILD_DATE = '2026-08-28';
 // Boot banner — makes the running build unambiguous in any console log or
 // screenshot, since stale-deploy confusion has bitten more than once.
@@ -14503,6 +14511,66 @@ function renderSettings(){
       return h;
     })()
   ].join('\n');
+  _collapsifySettings();
+}
+
+// v133: fold the flat Settings page into collapsible sections. Runs as a
+// DOM pass AFTER render so the section markup above stays untouched:
+// each .stt header and everything until the next .stt becomes a native
+// <details> accordion. The original .stt node moves into the <summary>,
+// so exact typography — including live status spans like "Supabase ✓" —
+// stays visible even while a section is collapsed. Open/closed state
+// persists in localStorage across re-renders (saving a key won't slam
+// your section shut) and across visits. Default: everything collapsed,
+// maximum screen space.
+function _collapsifySettings() {
+  const c = document.getElementById('content');
+  if (!c) return;
+  let openSet;
+  try { openSet = new Set(JSON.parse(localStorage.getItem('cv_settings_open') || '[]')); }
+  catch (e) { openSet = new Set(); }
+  const keyFor = function(sttEl) {
+    return String(sttEl.textContent || '').replace(/[^A-Za-z0-9 ]/g, '').trim().toLowerCase().slice(0, 40);
+  };
+  const kids = Array.prototype.slice.call(c.children);
+  let i = 0;
+  // Leave everything before the first .stt (page heading) untouched
+  while (i < kids.length && !(kids[i].classList && kids[i].classList.contains('stt'))) i++;
+  while (i < kids.length) {
+    const stt = kids[i];
+    if (!(stt.classList && stt.classList.contains('stt'))) { i++; continue; }
+    const key = keyFor(stt);
+    const det = document.createElement('details');
+    det.className = 'set-acc';
+    if (openSet.has(key)) det.open = true;
+    const sum = document.createElement('summary');
+    sum.className = 'set-acc-sum';
+    const chev = document.createElement('span');
+    chev.className = 'set-acc-chev';
+    chev.textContent = '\u25b6';
+    sum.appendChild(chev);
+    stt.style.margin = '0';
+    const body = document.createElement('div');
+    body.className = 'set-acc-body';
+    c.insertBefore(det, stt);
+    sum.appendChild(stt);            // moves the .stt node into the summary
+    det.appendChild(sum);
+    det.appendChild(body);
+    // Pull following siblings into the body until the next .stt
+    let j = i + 1;
+    while (j < kids.length && !(kids[j].classList && kids[j].classList.contains('stt'))) {
+      body.appendChild(kids[j]);
+      j++;
+    }
+    det.addEventListener('toggle', function() {
+      try {
+        const cur = new Set(JSON.parse(localStorage.getItem('cv_settings_open') || '[]'));
+        if (det.open) cur.add(key); else cur.delete(key);
+        localStorage.setItem('cv_settings_open', JSON.stringify(Array.prototype.slice.call(cur)));
+      } catch (e) {}
+    });
+    i = j;
+  }
 }
 // #endregion [SETTINGS]
 
@@ -15801,7 +15869,12 @@ const AI_PROVIDER_LABELS = {
 // Order for auto-building the fallback chain. Free providers come first so
 // users on free tiers don't accidentally hit a paid provider unless they
 // configured Anthropic themselves.
-const AI_PROVIDER_FALLBACK_ORDER = ['gemini', 'groq', 'openrouter', 'mistral', 'grok', 'openai', 'anthropic'];
+// v134: chain ordered by ACCURACY, not just cost. Gemini and Pixtral Large
+// (Mistral) read slabs best among the free tiers; Groq's qwen is decent;
+// OpenRouter's rotating free models respond reliably but read WORST, so
+// they run dead last — the "at least give me something" tier. Paid slots
+// (openai via proxy, anthropic) sit before it and are skipped when keyless.
+const AI_PROVIDER_FALLBACK_ORDER = ['gemini', 'mistral', 'groq', 'grok', 'openai', 'anthropic', 'openrouter'];
 let AI_FRONT_IMG = null;   // data URL
 let AI_BACK_IMG  = null;
 let AI_LAST_RESULT = null;
