@@ -2003,7 +2003,7 @@ body.theme-modern-dark select option{
 // Bump this on every deploy so the user can see at a glance which build is
 // running in their browser. Surfaced in three places: the sidebar footer
 // (desktop), the mobile header badge, and the Settings → About section.
-const APP_VERSION = 'v137';
+const APP_VERSION = 'v139';
 const APP_BUILD_DATE = '2026-08-28';
 // Boot banner — makes the running build unambiguous in any console log or
 // screenshot, since stale-deploy confusion has bitten more than once.
@@ -6437,6 +6437,30 @@ function showDetail(item){
       pcBtn.onclick = () => lookupPriceCharting(item);
       actions.appendChild(pcBtn);
     }
+    // AI identity scan button — v139: shown on EVERY record. Runs the same
+    // AI vision identification as the Add flow against the record's saved
+    // photos, then fills ONLY EMPTY fields after user review. Enabled when
+    // the record has at least one photo; disabled with a hint otherwise.
+    {
+      const _aiHasImgs = (typeof _hasImages === 'function') && _hasImages(item);
+      const aiBtn = document.createElement('button');
+      aiBtn.className = 'lookup-btn';
+      aiBtn.id = 'aiscan-btn-' + cn(item.id);
+      aiBtn.textContent = '\u2728 AI Scan';
+      if (!_aiHasImgs) {
+        aiBtn.disabled = true;
+        aiBtn.title = 'Add a front or back photo to enable AI identification';
+        aiBtn.style.cssText = 'background:rgba(139,92,246,.06);border-color:rgba(139,92,246,.2);color:#6b5a8f;opacity:.55;cursor:not-allowed';
+      } else {
+        aiBtn.title = (item.raw && item.raw.aiScanDate)
+          ? 'AI-scanned ' + item.raw.aiScanDate + ' \u2014 scan again (fills only empty fields; your values are never overwritten)'
+          : 'Identify with AI vision from this record\u2019s photos \u2014 fills only empty fields after your review';
+        aiBtn.style.cssText = 'background:rgba(139,92,246,.12);border-color:rgba(139,92,246,.35);color:#a78bfa';
+        aiBtn.onclick = () => showAIRecordScan(item);
+      }
+      actions.appendChild(aiBtn);
+    }
+
     // Error & Die Variety Scanner button — v123: shown on EVERY record.
     // Enabled whenever the record has at least one photo (the scan needs
     // images); disabled with an explanatory tooltip when it doesn't. Sheet
@@ -12539,6 +12563,17 @@ function _healthChecks() {
   // value across grade tiers: line chart of value vs. grade, example image
   // from Wikipedia, and the full tier price list. Powered by the existing
   // PriceCharting integration (paid token required).
+  // v138: AI Provider Test Bench — diagnose accuracy per provider
+  checks.push({
+    id: 'ai-provider-test',
+    label: 'AI Provider Test Bench',
+    desc: 'Run one record\u2019s photos through every configured AI provider side by side and compare what each one reads \u2014 the fastest way to see which provider is accurate on YOUR coins and which is guessing.',
+    icon: '\ud83e\uddea',
+    count: null,
+    action: function(){ if (typeof showAIProviderTest === 'function') showAIProviderTest(); },
+    countable: false
+  });
+
   checks.push({
     id: 'coin-value-explorer',
     label: 'Coin Value Explorer',
@@ -15901,6 +15936,261 @@ let AI_BACK_IMG  = null;
 let AI_LAST_RESULT = null;
 let AI_CAPTURE_MODE = 'coin';  // 'coin' | 'currency'
 
+// ═══════════════════════════════════════════════════════════════════════
+// AI PROVIDER TEST BENCH (v138) — Data Health tool. Runs the SAME record
+// photos through EVERY configured provider, one call each, and shows the
+// parsed identity fields side by side. This is how you SEE which provider
+// reads your coins accurately instead of guessing from chain behavior.
+// Chain order is not changed by running this — it is purely diagnostic.
+// ═══════════════════════════════════════════════════════════════════════
+function showAIProviderTest() {
+  const ex = document.getElementById('aitest-modal');
+  if (ex) ex.remove();
+  const modal = document.createElement('div');
+  modal.id = 'aitest-modal';
+  modal.className = 'ref-modal';
+  modal.onclick = function(ev){ if (ev.target === modal) modal.remove(); };
+  document.body.appendChild(modal);
+  const configured = AI_PROVIDER_FALLBACK_ORDER.filter(function(p){ return !!aiKeyFor(p); });
+  modal.innerHTML = ''
+    + '<div class="ref-modal-panel" style="background:var(--bg2);border:1px solid var(--gold3);border-radius:10px;width:min(920px,95vw);max-height:90vh;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 16px 48px rgba(0,0,0,.7)">'
+    +   '<div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--border)">'
+    +     '<div>'
+    +       '<h2 style="margin:0;font-family:var(--font-display);font-size:17px;color:var(--gold)">\ud83e\uddea AI Provider Test Bench</h2>'
+    +       '<div style="font-size:11px;color:var(--muted);margin-top:2px">Same photos \u2192 every configured provider \u2192 side-by-side results. One API call per provider.</div>'
+    +     '</div>'
+    +     '<button onclick="document.getElementById(\'aitest-modal\').remove()" style="background:transparent;border:1px solid var(--border);color:var(--muted);padding:6px 14px;border-radius:4px;cursor:pointer;font-size:12px">Close</button>'
+    +   '</div>'
+    +   '<div style="padding:16px 20px;overflow-y:auto;flex:1;min-height:0">'
+    +     '<div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">'
+    +       '<span style="font-size:12px;color:var(--muted)">Record # with photos:</span>'
+    +       '<input type="text" id="aitest-recid" placeholder="e.g. 2787" style="width:110px;padding:8px 10px;background:var(--bg3);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:13px;font-family:DM Mono,monospace" onkeydown="if(event.key===\'Enter\')_aiTestRun()">'
+    +       '<button class="bp" onclick="_aiTestRun()"' + (configured.length ? '' : ' disabled') + '>Test ' + configured.length + ' Provider' + (configured.length===1?'':'s') + '</button>'
+    +     '</div>'
+    +     '<div style="font-size:11px;color:var(--dim);margin-bottom:12px">Tests: ' + (configured.length ? configured.map(function(p){ return e(AI_PROVIDER_LABELS[p] || p); }).join(' \u00b7 ') : 'no providers configured \u2014 add keys in Settings \u2192 AI Vision') + '</div>'
+    +     '<div id="aitest-results"></div>'
+    +   '</div>'
+    + '</div>';
+  setTimeout(function(){ const i = document.getElementById('aitest-recid'); if (i) i.focus(); }, 60);
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// AI RECORD SCAN (v139) — identity scan for an EXISTING record's photos.
+// Full fallback chain (same as the Add flow), then a review table: only
+// fields that are EMPTY on the record are offered (checked by default);
+// fields you've already filled are shown as kept — the never-overwrite
+// rule from v130 applies here structurally, with checkboxes on top.
+// Applies via _tpgApply → local + Supabase + GAS, with provenance stamps.
+// ═══════════════════════════════════════════════════════════════════════
+const _AI_METALS_SHEETS = new Set(['gold','silver','copper','platinum','palladium']);
+
+// Review rows from a normalized result vs the record: drop alias keys when
+// their twin carries the same value (purity/silverContent, state/country,
+// description/features) so the table reads clean. Pure — unit-testable.
+function _aiRecScanRows(map, raw, sheet) {
+  const rows = [];
+  Object.keys(map).forEach(function(k){
+    const v = map[k];
+    if (v == null || v === '' || v === 0) return;
+    if (k === 'purity' && map.silverContent === v && !_AI_METALS_SHEETS.has(sheet)) return;
+    if (k === 'silverContent' && map.purity === v && _AI_METALS_SHEETS.has(sheet)) return;
+    if (k === 'state' && map.country === v) return;
+    if (k === 'description' && map.features === v) return;
+    const cur = raw[k];
+    const empty = (cur == null || cur === '');
+    rows.push({ key: k, value: v, current: cur, fillable: empty });
+  });
+  return rows;
+}
+
+function showAIRecordScan(item) {
+  const ex = document.getElementById('airec-modal');
+  if (ex) ex.remove();
+  const modal = document.createElement('div');
+  modal.id = 'airec-modal';
+  modal.className = 'ref-modal';
+  modal.onclick = function(ev){ if (ev.target === modal) modal.remove(); };
+  document.body.appendChild(modal);
+  window._aiRecScan = { item: item, result: null, rows: [] };
+  modal.innerHTML = ''
+    + '<div class="ref-modal-panel" style="background:var(--bg2);border:1px solid var(--gold3);border-radius:10px;width:min(640px,95vw);max-height:90vh;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 16px 48px rgba(0,0,0,.7)">'
+    +   '<div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--border)">'
+    +     '<div>'
+    +       '<h2 style="margin:0;font-family:var(--font-display);font-size:17px;color:#a78bfa">\u2728 AI Scan \u2014 #' + e(cn(item.id)) + '</h2>'
+    +       '<div style="font-size:11px;color:var(--muted);margin-top:2px">' + e(String(item.desc || (item.raw && item.raw.description) || '').slice(0,60)) + '</div>'
+    +     '</div>'
+    +     '<button onclick="document.getElementById(\'airec-modal\').remove()" style="background:transparent;border:1px solid var(--border);color:var(--muted);padding:6px 14px;border-radius:4px;cursor:pointer;font-size:12px">Close</button>'
+    +   '</div>'
+    +   '<div id="airec-body" style="padding:16px 20px;overflow-y:auto;flex:1;min-height:0">'
+    +     '<div id="airec-status" style="padding:26px;text-align:center;color:var(--dim);font-size:12px">Loading photos\u2026</div>'
+    +   '</div>'
+    + '</div>';
+  _aiRecScanRun(item);
+}
+
+async function _aiRecScanRun(item) {
+  const body = document.getElementById('airec-body');
+  const status = function(t){ const s = document.getElementById('airec-status'); if (s) s.textContent = t; };
+  try {
+    const urls = _evGetImageUrls(item);
+    if (!urls.front && !urls.back) throw new Error('No photos on this record.');
+    const isCurrency = (typeof EV_CURRENCY_SHEETS !== 'undefined' && EV_CURRENCY_SHEETS.has(item.sheet));
+    const maxPx = isCurrency ? 1800 : 1200;
+    const [front, back] = await Promise.all([
+      urls.front ? _evUrlToDataUrl(urls.front, maxPx).catch(function(){ return null; }) : Promise.resolve(null),
+      urls.back  ? _evUrlToDataUrl(urls.back,  maxPx).catch(function(){ return null; }) : Promise.resolve(null)
+    ]);
+    const prevMode = AI_CAPTURE_MODE;
+    AI_CAPTURE_MODE = isCurrency ? 'currency' : 'coin';
+    let result;
+    try {
+      result = await aiAnalyzeWithFallback(front, back, status);
+    } finally {
+      AI_CAPTURE_MODE = prevMode;
+    }
+    const map = _aiFieldMapFromResult(result);
+    const rows = _aiRecScanRows(map, item.raw || {}, item.sheet);
+    window._aiRecScan = { item: item, result: result, rows: rows };
+
+    const provider = (result._aiProvider || localStorage.getItem('cv_ai_provider') || 'AI')
+      + (result._aiFallbackModel ? '/' + result._aiFallbackModel : '');
+    const _td = 'padding:6px 8px;border-bottom:1px solid var(--border);font-size:12px;vertical-align:middle;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+    const fillable = rows.filter(function(r){ return r.fillable; });
+    const kept = rows.filter(function(r){ return !r.fillable; });
+
+    if (!body) return;
+    body.innerHTML = ''
+      + '<div style="font-size:11px;color:var(--dim);margin-bottom:10px">Read by <span style="color:#a78bfa">' + e(provider) + '</span>' + (result._aiFellBack ? ' (fallback)' : '') + ' \u00b7 fills only empty fields \u2014 your existing values are never overwritten</div>'
+      + (fillable.length === 0
+          ? '<div style="padding:18px;text-align:center;color:var(--dim);font-size:12px;font-style:italic">Nothing new to fill \u2014 every field the AI read is already set on this record.</div>'
+          : '<table style="width:100%;border-collapse:collapse;table-layout:fixed">'
+            + '<colgroup><col style="width:30px"><col style="width:150px"><col></colgroup>'
+            + fillable.map(function(r, i){
+                return '<tr>'
+                  + '<td style="' + _td + ';text-align:center"><input type="checkbox" class="airec-check" data-i="' + i + '" checked></td>'
+                  + '<td style="' + _td + ';color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.05em">' + e(r.key) + '</td>'
+                  + '<td style="' + _td + ';color:var(--gold)" title="' + e(String(r.value)) + '">' + e(String(r.value)) + '</td>'
+                  + '</tr>';
+              }).join('')
+            + '</table>')
+      + (kept.length > 0
+          ? '<details style="margin-top:12px"><summary style="font-size:11px;color:var(--dim);cursor:pointer">' + kept.length + ' field' + (kept.length===1?'':'s') + ' already set \u2014 kept as yours</summary>'
+            + '<div style="margin-top:6px">' + kept.map(function(r){
+                return '<div style="font-size:11px;color:var(--dim);padding:3px 0">' + e(r.key) + ': <span style="color:var(--muted)">' + e(String(r.current)) + '</span> <span style="opacity:.6">(AI read: ' + e(String(r.value)) + ')</span></div>';
+              }).join('') + '</div></details>'
+          : '')
+      + '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">'
+      +   '<button class="bg" onclick="document.getElementById(\'airec-modal\').remove()">Cancel</button>'
+      +   (fillable.length > 0 ? '<button class="bp" onclick="_aiRecScanApply()">Apply Checked to Record</button>' : '')
+      + '</div>';
+    // Stash fillable separately so checkbox indices line up
+    window._aiRecScan.fillable = fillable;
+  } catch (err) {
+    if (body) body.innerHTML = '<div style="padding:16px;color:var(--red);font-size:12px;white-space:pre-wrap">' + e(err.message || 'Scan failed') + '</div>';
+  }
+}
+
+async function _aiRecScanApply() {
+  const S = window._aiRecScan;
+  if (!S || !S.item || !S.fillable) return;
+  const checked = Array.prototype.slice.call(document.querySelectorAll('.airec-check:checked'));
+  if (checked.length === 0) { alert('Nothing checked.'); return; }
+  const updates = {};
+  checked.forEach(function(cb){
+    const r = S.fillable[parseInt(cb.dataset.i, 10)];
+    if (r) updates[r.key] = r.value;
+  });
+  updates.aiScanDate = new Date().toISOString().split('T')[0];
+  updates.aiSource = (S.result._aiProvider || localStorage.getItem('cv_ai_provider') || 'AI')
+    + (S.result._aiFallbackModel ? '/' + S.result._aiFallbackModel : '');
+  try {
+    await _tpgApply(S.item, updates, 'AI Scan');
+    if (typeof cvToast === 'function') cvToast('\u2728 Applied ' + checked.length + ' field' + (checked.length===1?'':'s') + ' to #' + cn(S.item.id), 'ok');
+    const modal = document.getElementById('airec-modal');
+    if (modal) modal.remove();
+    if (typeof showDetail === 'function') showDetail(S.item);
+    if (typeof ST !== 'undefined' && ST.view === 'inv' && typeof renderInv === 'function') renderInv();
+  } catch (err) {
+    alert('Apply failed: ' + (err.message || 'unknown error'));
+  }
+}
+
+async function _aiTestRun() {
+  const box = document.getElementById('aitest-results');
+  const idRaw = (document.getElementById('aitest-recid') || {}).value || '';
+  const idNorm = cn(String(idRaw).trim());
+  if (!idNorm) { if (box) box.innerHTML = '<div style="color:var(--red);font-size:12px;padding:10px">Enter a record number.</div>'; return; }
+  const item = ALL_ITEMS.find(function(i){ return normId(i.id) === normId(idNorm); });
+  if (!item) { box.innerHTML = '<div style="color:var(--red);font-size:12px;padding:10px">No record #' + e(idNorm) + ' found.</div>'; return; }
+  const urls = _evGetImageUrls(item);
+  if (!urls.front && !urls.back) { box.innerHTML = '<div style="color:var(--red);font-size:12px;padding:10px">Record #' + e(idNorm) + ' has no photos \u2014 pick one with images.</div>'; return; }
+
+  box.innerHTML = '<div style="color:var(--dim);font-size:12px;padding:10px">Loading photos\u2026</div>';
+  const isCurrency = (typeof EV_CURRENCY_SHEETS !== 'undefined' && EV_CURRENCY_SHEETS.has(item.sheet));
+  const maxPx = isCurrency ? 1800 : 1200;
+  const [front, back] = await Promise.all([
+    urls.front ? _evUrlToDataUrl(urls.front, maxPx).catch(function(){ return null; }) : Promise.resolve(null),
+    urls.back  ? _evUrlToDataUrl(urls.back,  maxPx).catch(function(){ return null; }) : Promise.resolve(null)
+  ]);
+
+  const prevMode = AI_CAPTURE_MODE;
+  AI_CAPTURE_MODE = isCurrency ? 'currency' : 'coin';
+  const configured = AI_PROVIDER_FALLBACK_ORDER.filter(function(p){ return !!aiKeyFor(p); });
+  const rows = [];
+  const _td = 'padding:7px 8px;border-bottom:1px solid var(--border);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;vertical-align:middle';
+  const renderTable = function(done) {
+    box.innerHTML = ''
+      + '<div style="font-size:11px;color:var(--muted);margin-bottom:8px">#' + e(idNorm) + ' \u00b7 ' + e(String(item.desc || '').slice(0,60)) + (done ? ' \u2014 done. Compare against the coin in hand; the provider that reads the slab right is your accuracy pick.' : ' \u2014 running\u2026') + '</div>'
+      + '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;table-layout:fixed;min-width:760px">'
+      + '<colgroup><col style="width:130px"><col style="width:64px"><col><col style="width:56px"><col style="width:90px"><col style="width:70px"><col style="width:70px"><col style="width:58px"></colgroup>'
+      + '<thead><tr>'
+      +   ['Provider','Time','Series / Type','Year','Grade','Service','Denom','Cert?'].map(function(h){ return '<th style="' + _td + ';font-size:9px;color:var(--dim);text-transform:uppercase;text-align:left">' + h + '</th>'; }).join('')
+      + '</tr></thead><tbody>'
+      + rows.map(function(r){
+          if (r.error) return '<tr><td style="' + _td + ';color:var(--text)">' + e(r.label) + '</td><td style="' + _td + '"></td><td colspan="6" style="' + _td + ';color:var(--red)" title="' + e(r.error) + '">' + e(r.error.slice(0,90)) + '</td></tr>';
+          return '<tr>'
+            + '<td style="' + _td + ';color:var(--text)" title="' + e(r.model) + '">' + e(r.label) + '</td>'
+            + '<td style="' + _td + ';color:var(--dim);font-family:DM Mono,monospace">' + (r.ms/1000).toFixed(1) + 's</td>'
+            + '<td style="' + _td + ';color:var(--gold)" title="' + e((r.series||'') + ' ' + (r.type||'')) + '">' + e([r.series, r.type].filter(Boolean).join(' \u00b7 ') || '\u2014') + '</td>'
+            + '<td style="' + _td + '">' + e(r.year || '\u2014') + '</td>'
+            + '<td style="' + _td + '">' + e(r.grade || '\u2014') + '</td>'
+            + '<td style="' + _td + '">' + e(r.gradingAuth || '\u2014') + '</td>'
+            + '<td style="' + _td + '">' + e(r.denomination || '\u2014') + '</td>'
+            + '<td style="' + _td + '" title="' + e(r.serial || '') + '">' + (r.serial ? '\u2713' : '\u2014') + '</td>'
+            + '</tr>';
+        }).join('')
+      + '</tbody></table></div>';
+  };
+  renderTable(false);
+
+  try {
+    for (let i = 0; i < configured.length; i++) {
+      const p = configured[i];
+      const label = AI_PROVIDER_LABELS[p] || p;
+      const model = aiModelFor(p);
+      rows.push({ label: label + ' \u23f3', model: model });
+      renderTable(false);
+      const t0 = Date.now();
+      try {
+        const imgs = await _aiImagesForProvider(p, front, back, false);
+        const r = await _aiDispatch(p, aiKeyFor(p), model, imgs.front, imgs.back, null);
+        rows[rows.length - 1] = {
+          label: label, model: model, ms: Date.now() - t0,
+          series: r.series, type: r.type, year: r.year, grade: r.grade,
+          gradingAuth: r.gradingAuth, denomination: r.denomination, serial: r.serial
+        };
+      } catch (err) {
+        rows[rows.length - 1] = { label: label, model: model, error: err.message || 'failed' };
+      }
+      renderTable(false);
+      if (i < configured.length - 1) await new Promise(function(res){ setTimeout(res, 500); });
+    }
+  } finally {
+    AI_CAPTURE_MODE = prevMode;
+  }
+  renderTable(true);
+}
+
 const AI_MODE_LABELS = {
   coin: {
     intro: 'Capture the <strong style="color:var(--gold)">obverse</strong> (heads) and <strong style="color:var(--gold)">reverse</strong> (tails). The AI analyzes both and pre-fills the Add form.',
@@ -16379,7 +16669,12 @@ function aiBuildPrompt() {
     '- Type of note: Federal Reserve Note, Silver Certificate, Gold Certificate, US Note, National Bank Note, Confederate, Obsolete (broken bank), Fractional, foreign issuer, etc.\n' +
     '- Currency-specific category: usNotes, foreignNotes, confederate, obsolete, fractional. NEVER choose a coin category.\n' +
     '- Banknote grading scale: Good 4, VG 8, Fine 12, VF 20-35, EF/XF 40-45, AU 50-58, UNC 60-65, GEM UNC 66+.\n\n';
-  return (AI_CAPTURE_MODE === 'currency' ? noteprefix : coinPrefix) + AI_PROMPT;
+  // v138: transcription-first. Forcing the model to READ before it FILLS
+  // measurably improves label accuracy on mid-tier vision models — fields
+  // must be grounded in transcribed text, not pattern-matched guesses.
+  const transcribeFirst =
+    'STEP 1 \u2014 TRANSCRIBE FIRST: before filling any field, read out (to yourself) ALL text visible on any slab/holder label, the coin surfaces, or the note itself \u2014 grading service, grade, certification number, series, date, mint mark, signatures. Every field you output MUST be grounded in text or features actually visible in the photos. If a detail is not clearly legible, leave that field empty rather than guessing. Never invent a grading service or certification number.\n\n';
+  return transcribeFirst + (AI_CAPTURE_MODE === 'currency' ? noteprefix : coinPrefix) + AI_PROMPT;
 }
 
 // Compress to a reasonable size to keep API costs/payload small
@@ -16613,7 +16908,7 @@ async function aiAnalyzeGemini(key, model, frontImg, backImg, onStatus) {
       contents: [{parts: parts}],
       generationConfig: {
         responseMimeType: 'application/json',
-        temperature: 0.3,
+        temperature: 0.1,
         // Gemini 2.5+ models have "thinking" enabled by default, and the thinking
         // tokens count against maxOutputTokens. For a structured JSON extraction
         // task like coin identification, thinking adds latency and cost without
@@ -16794,14 +17089,20 @@ async function _aiAnalyzeOpenAICompatible(endpoint, extraHeaders, model, frontIm
   const front = (frontImg !== undefined) ? frontImg : AI_FRONT_IMG;
   const back  = (backImg  !== undefined) ? backImg  : AI_BACK_IMG;
   const content = [];
-  if (front) content.push({ type: 'image_url', image_url: { url: front } });
-  if (back)  content.push({ type: 'image_url', image_url: { url: back  } });
+  // v138: detail:'high' matters enormously here. Without it, several
+  // OpenAI-compatible providers tile images at LOW resolution by default —
+  // slab microtext (grade, cert number, grading service) becomes an
+  // unreadable smudge and the model starts guessing. Gemini always got
+  // full-resolution inline data, which is exactly why it "read better".
+  // Providers that don't support the field ignore it harmlessly.
+  if (front) content.push({ type: 'image_url', image_url: { url: front, detail: 'high' } });
+  if (back)  content.push({ type: 'image_url', image_url: { url: back,  detail: 'high' } });
   content.push({ type: 'text', text: aiBuildPrompt() });
 
   const body = {
     model: model,
     messages: [{ role: 'user', content: content }],
-    temperature: 0.3,
+    temperature: 0.1,
     max_tokens: 4000,
     // Some providers/models honor this; others ignore. Either way, the
     // _parseAIJson extractor below recovers JSON from prose preambles too,
