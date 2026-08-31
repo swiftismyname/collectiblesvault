@@ -1995,7 +1995,7 @@ body.theme-modern-dark select option{
 // Bump this on every deploy so the user can see at a glance which build is
 // running in their browser. Surfaced in three places: the sidebar footer
 // (desktop), the mobile header badge, and the Settings → About section.
-const APP_VERSION = 'v128';
+const APP_VERSION = 'v129';
 const APP_BUILD_DATE = '2026-08-28';
 // Boot banner — makes the running build unambiguous in any console log or
 // screenshot, since stale-deploy confusion has bitten more than once.
@@ -16243,8 +16243,15 @@ async function _aiFetchWithRetry(url, opts, providerLabel, onStatus) {
 
     if (r.ok) return r;
 
-    // Non-2xx — decide whether to retry
-    if (RETRY_CODES.has(r.status) && attempt < MAX_ATTEMPTS) {
+    // Non-2xx — decide whether to retry.
+    // v129: rate limits fail FAST. When a minute/day quota is exhausted,
+    // five backoff attempts (~17s) just stall the chain — quota won't
+    // clear in seconds. One quick retry absorbs transient bursts; then we
+    // throw so the fallback chain (and the v127 cooldown) take over. This
+    // is the "Gemini keeps timing out" feel: it wasn't timing out, it was
+    // burning 17 seconds of doomed backoff per model.
+    const _maxForStatus = (r.status === 429) ? 2 : MAX_ATTEMPTS;
+    if (RETRY_CODES.has(r.status) && attempt < _maxForStatus) {
       const wait = BACKOFFS[attempt - 1];
       const friendly = r.status === 503 ? 'overloaded' :
                        r.status === 429 ? 'rate-limited' :
@@ -16265,7 +16272,7 @@ async function _aiFetchWithRetry(url, opts, providerLabel, onStatus) {
       throw new Error(providerLabel + ' is overloaded (tried ' + MAX_ATTEMPTS + 'x over ' + Math.round(BACKOFFS.reduce((a,b)=>a+b,0)/1000) + 's). Servers are temporarily at capacity.');
     }
     if (r.status === 429) {
-      throw new Error(providerLabel + ' rate-limited (tried ' + MAX_ATTEMPTS + 'x). API quota for the current minute/day is exhausted.');
+      throw new Error(providerLabel + ' rate-limited (tried ' + _maxForStatus + 'x \u2014 failing fast; exhausted quota won\u2019t clear in seconds). API quota for the current minute/day is exhausted.');
     }
     if (r.status === 401 || r.status === 403) {
       throw new Error(providerLabel + ' rejected your API key (' + r.status + '). Check Settings \u2192 AI Vision and verify the key is current and has access to ' + providerLabel + '.');
@@ -16807,6 +16814,33 @@ function saveAIKey() {
   }
   if (provider === 'gemini' && !key.startsWith('AIza') && !key.startsWith('AQ.')) {
     if (msg) { msg.textContent = 'Gemini key should start with "AIza" or "AQ.".'; msg.style.color = 'var(--red)'; }
+    return;
+  }
+  // v129: catch the classic wrong-credential mistakes before they burn a
+  // scan with a confusing 401. Most common: pasting the key ID (a UUID
+  // shown in the console's key LIST) instead of the secret itself, which
+  // is displayed exactly once at creation.
+  const _uuidLike = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(key);
+  if (provider === 'grok' && !key.startsWith('xai-')) {
+    if (msg) {
+      msg.textContent = _uuidLike
+        ? 'That looks like a key ID, not the secret. xAI secrets start with "xai-" and are shown once at creation \u2014 create a new key at console.x.ai and copy the xai-\u2026 value.'
+        : 'xAI Grok keys start with "xai-".';
+      msg.style.color = 'var(--red)';
+    }
+    return;
+  }
+  if (provider === 'openai' && !key.startsWith('sk-')) {
+    if (msg) {
+      msg.textContent = _uuidLike
+        ? 'That looks like a key ID, not the secret. OpenAI secrets start with "sk-" and are shown once at creation \u2014 generate a new key at platform.openai.com/api-keys.'
+        : 'OpenAI keys start with "sk-".';
+      msg.style.color = 'var(--red)';
+    }
+    return;
+  }
+  if (provider === 'groq' && !key.startsWith('gsk_')) {
+    if (msg) { msg.textContent = 'Groq keys start with "gsk_" \u2014 get one at console.groq.com/keys.'; msg.style.color = 'var(--red)'; }
     return;
   }
   localStorage.setItem('cv_ai_provider', provider);
