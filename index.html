@@ -2003,7 +2003,7 @@ body.theme-modern-dark select option{
 // Bump this on every deploy so the user can see at a glance which build is
 // running in their browser. Surfaced in three places: the sidebar footer
 // (desktop), the mobile header badge, and the Settings → About section.
-const APP_VERSION = 'v134';
+const APP_VERSION = 'v135';
 const APP_BUILD_DATE = '2026-08-28';
 // Boot banner — makes the running build unambiguous in any console log or
 // screenshot, since stale-deploy confusion has bitten more than once.
@@ -14232,26 +14232,29 @@ function renderSettings(){
         +'Identify coins and paper currency by photographing them — the AI analyzes both sides and pre-fills the Add form with grade, denomination, country, composition, and estimated value.'
         +'</div>'
 
-        // Provider selector
+        // Provider selector — v135: built from AI_PROVIDER_FALLBACK_ORDER +
+        // AI_PROVIDER_LABELS so every registered provider appears. The old
+        // hardcoded 4-option list silently hid mistral/grok/openai — they
+        // were in the chain but unselectable, so keys couldn't be saved
+        // for them through this UI at all.
         +'<div style="margin-bottom:14px">'
         +'<div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--dim);margin-bottom:5px">AI Provider</div>'
         +'<select id="ai-provider-input" onchange="aiSwitchProvider(this.value)" style="width:100%;padding:9px 12px;background:var(--bg4);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:13px">'
-        +'<option value="gemini"'    +(provider==='gemini'    ?' selected':'')+ '>Google Gemini (free)</option>'
-        +'<option value="groq"'      +(provider==='groq'      ?' selected':'')+ '>Groq (free, fast)</option>'
-        +'<option value="openrouter"'+(provider==='openrouter'?' selected':'')+ '>OpenRouter (free models)</option>'
-        +'<option value="anthropic"' +(provider==='anthropic' ?' selected':'')+ '>Anthropic Claude (paid)</option>'
+        +AI_PROVIDER_FALLBACK_ORDER.map(function(p){
+            return '<option value="'+p+'"'+(provider===p?' selected':'')+'>'+e(AI_PROVIDER_LABELS[p]||p)+'</option>';
+          }).join('')
         +'</select>'
         +'</div>'
 
         // Cost note — color the left border by tier: green for free providers,
         // gold for paid. Provider check is explicit since we have 3 free now.
-        +'<div style="font-size:12px;color:var(--muted);line-height:1.7;margin-bottom:14px;padding:10px 12px;background:var(--bg4);border-radius:5px;border-left:3px solid '+(provider==='anthropic'?'var(--gold)':'var(--green)')+'">'
+        +'<div style="font-size:12px;color:var(--muted);line-height:1.7;margin-bottom:14px;padding:10px 12px;background:var(--bg4);border-radius:5px;border-left:3px solid '+((provider==='anthropic'||provider==='openai')?'var(--gold)':'var(--green)')+'">'
         +info.cost
         +'</div>'
 
         // Setup help
         +'<div style="font-size:12px;color:var(--muted);line-height:1.6;margin-bottom:14px">'
-        +'<strong style="color:var(--gold)">Setup:</strong> '+info.keyHelp+' Free key from <a href="'+info.keyUrl+'" target="_blank" rel="noopener" style="color:var(--gold);text-decoration:underline">'+info.keyHost+'</a>.'
+        +'<strong style="color:var(--gold)">Setup:</strong> '+info.keyHelp+' Get your key from <a href="'+info.keyUrl+'" target="_blank" rel="noopener" style="color:var(--gold);text-decoration:underline">'+info.keyHost+'</a>.'
         +'</div>'
 
         // Status
