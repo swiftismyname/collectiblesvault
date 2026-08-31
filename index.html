@@ -1995,7 +1995,7 @@ body.theme-modern-dark select option{
 // Bump this on every deploy so the user can see at a glance which build is
 // running in their browser. Surfaced in three places: the sidebar footer
 // (desktop), the mobile header badge, and the Settings → About section.
-const APP_VERSION = 'v129';
+const APP_VERSION = 'v132';
 const APP_BUILD_DATE = '2026-08-28';
 // Boot banner — makes the running build unambiguous in any console log or
 // screenshot, since stale-deploy confusion has bitten more than once.
@@ -2107,12 +2107,14 @@ const SYNC_KEYS = [
   'cv_ai_key_openrouter',     // v101
   'cv_ai_key_grok',           // v124
   'cv_ai_key_openai',         // v127
+  'cv_ai_key_mistral',        // v131
   'cv_ai_model_gemini',
   'cv_ai_model_anthropic',
   'cv_ai_model_groq',         // v101
   'cv_ai_model_openrouter',   // v101
   'cv_ai_model_grok',         // v124
-  'cv_ai_model_openai',       // v127
+  'cv_ai_model_openai',       // v131
+  'cv_ai_model_mistral',      // v131
   'cv_ai_fallback_provider',  // legacy single-fallback (v77+)
   'cv_ai_fallback_model',     // legacy single-fallback (v77+)
   'cv_ai_fallback_chain',     // v101 — JSON array, supersedes legacy keys if set
@@ -14150,6 +14152,16 @@ function renderSettings(){
           keyHelp: 'Sign up at openrouter.ai (Google/GitHub login), create a key in the Keys page, paste below. Pick any model with the ":free" suffix to stay at zero cost.',
           models: (typeof AI_MODELS !== 'undefined' ? AI_MODELS.openrouter : ['meta-llama/llama-3.2-90b-vision-instruct:free'])
         },
+        // v131: Mistral — free Experiment tier with Pixtral vision
+        mistral: {
+          label: 'Mistral (Pixtral vision)',
+          cost: '<strong style="color:var(--green)">Free Experiment tier</strong> \u00b7 1B tokens/month, ~2 requests/min, no credit card \u00b7 Pixtral Large is the most accurate free-tier vision model available',
+          keyUrl: 'https://console.mistral.ai',
+          keyHost: 'console.mistral.ai',
+          keyPrefix: '32-char key',
+          keyHelp: 'Sign up at console.mistral.ai, activate the free Experiment plan (phone verification required), then create a key under API Keys. The free tier includes ALL Mistral models \u2014 pick pixtral-large-latest for the strongest slab/label reading. Rate limit is ~2 requests/min, fine for single scans; batch runs may occasionally wait.',
+          models: (typeof AI_MODELS !== 'undefined' ? AI_MODELS.mistral : ['pixtral-large-latest'])
+        },
         // v124: xAI Grok — OpenAI-compatible API at api.x.ai
         grok: {
           label: 'xAI Grok',
@@ -14157,7 +14169,7 @@ function renderSettings(){
           keyUrl: 'https://console.x.ai',
           keyHost: 'console.x.ai',
           keyPrefix: 'xai-\u2026',
-          keyHelp: 'Sign in at console.x.ai, create an API key (starts with \"xai-\"), paste below. Grok\u2019s vision model reads coin/currency photos well and slots in as another fallback before any paid Anthropic calls.',
+          keyHelp: '\u26a0 api.x.ai blocks browser calls (no CORS) \u2014 a raw xai- key cannot work here. WORKING PATH: deploy the grok-proxy Supabase Edge Function (30 lines, ships with the app docs), set your xai- key as a server secret there, then paste the proxy address into THIS field as: https://YOUR-REF.supabase.co/functions/v1/grok-proxy|YOUR_SHARED_TOKEN \u2014 the app detects the https:// prefix and routes through your proxy; your xai- key never touches the browser. Grok\u2019s vision model reads coin/currency photos well and slots in as another fallback before any paid Anthropic calls.',
           models: (typeof AI_MODELS !== 'undefined' ? AI_MODELS.grok : ['grok-2-vision-1212'])
         },
         // v127: OpenAI — cheapest reliable paid vision via gpt-4o-mini
@@ -14167,7 +14179,7 @@ function renderSettings(){
           keyUrl: 'https://platform.openai.com/api-keys',
           keyHost: 'platform.openai.com',
           keyPrefix: 'sk-\u2026',
-          keyHelp: 'Create an OpenAI account, add a payment method, generate a key at platform.openai.com/api-keys. gpt-4o-mini reads coin/currency photos well at a fraction of a cent per scan \u2014 a rock-solid backstop when the free tiers are rate-limited.',
+          keyHelp: '\u26a0 BROWSER-BLOCKED: api.openai.com blocks browser CORS by design, so this client-side app cannot call it directly \u2014 the chain will auto-skip it if it network-fails. For paid reliability in-browser, use OpenRouter paid models instead (one key, CORS-friendly). \u2014 Create an OpenAI account, add a payment method, generate a key at platform.openai.com/api-keys. gpt-4o-mini reads coin/currency photos well at a fraction of a cent per scan \u2014 a rock-solid backstop when the free tiers are rate-limited.',
           models: (typeof AI_MODELS !== 'undefined' ? AI_MODELS.openai : ['gpt-4o-mini'])
         },
         anthropic: {
@@ -14587,27 +14599,54 @@ function openEditModal(item) {
   const ex = document.getElementById('edit-modal');
   if (ex) ex.remove();
   const raw = item.raw || {};
-  // Filter out empties AND internal underscore-prefixed fields (_modifiedAt,
-  // _modifiedBy, _tpgApplied, etc.) — these are managed by the app and must
-  // not be editable as plain text.
-  const fields = Object.entries(raw).filter(([k,v]) =>
-    v != null && v !== '' && !(typeof k === 'string' && k.charAt(0) === '_')
-  );
+
+  // v130: render the UNION of (a) the category's full schema — so blank
+  // fields are finally editable instead of invisible — and (b) any extra
+  // keys present on the record (AI-appended, legacy, image URLs), so
+  // nothing on a record is out of reach. Internal underscore keys and
+  // object-valued keys (flags, audit trails) stay app-managed.
+  const schema = (typeof SCHEMAS !== 'undefined' && SCHEMAS[item.sheet]) || [];
+  const seen = new Set(['id']);
+  const fields = [];
+  fields.push({ f: 'id', l: 'Record # (ID)', v: raw.id != null ? raw.id : item.id });
+  schema.forEach(function(s){
+    if (seen.has(s.f)) return;
+    seen.add(s.f);
+    fields.push({ f: s.f, l: s.l || s.f, v: raw[s.f] != null ? raw[s.f] : '' });
+  });
+  Object.keys(raw).forEach(function(k){
+    if (seen.has(k)) return;
+    if (k.charAt(0) === '_') return;                 // internal
+    if (raw[k] !== null && typeof raw[k] === 'object') return; // flags etc.
+    seen.add(k);
+    fields.push({ f: k, l: k, v: raw[k] != null ? raw[k] : '' });
+  });
+
+  const sheetOptions = Object.entries(SHEET_MAP).map(function(pair){
+    return '<option value="' + pair[0] + '"' + (pair[0] === item.sheet ? ' selected' : '') + '>' + e(pair[1].label) + '</option>';
+  }).join('');
+
+  const fieldsHtml = fields.map(function(fd){
+    return '<div style="margin-bottom:10px">'
+      + '<label style="display:block;font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin-bottom:3px">' + e(String(fd.l)) + '</label>'
+      + '<input data-field="' + e(String(fd.f)) + '" value="' + e(String(fd.v)) + '" style="width:100%;box-sizing:border-box;background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:4px;font-size:13px">'
+      + '</div>';
+  }).join('');
+
   const modal = document.createElement('div');
   modal.id = 'edit-modal';
   modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.7);z-index:1000;display:flex;align-items:center;justify-content:center';
-  const fieldsHtml = fields.map(([k,v]) =>
-    '<div style="margin-bottom:10px">'
-    + '<label style="display:block;font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin-bottom:3px">' + k + '</label>'
-    + '<input data-field="' + k + '" value="' + String(v).replace(/"/g, '&quot;') + '" style="width:100%;background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:4px;font-size:13px">'
-    + '</div>'
-  ).join('');
   modal.innerHTML =
-    '<div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;width:480px;max-height:80vh;overflow-y:auto;padding:24px">'
-    + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">'
+    '<div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;width:min(520px,94vw);max-height:85vh;overflow-y:auto;padding:24px">'
+    + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">'
     + '<div style="font-family:var(--font-display,\'Cormorant Garamond\',serif);font-size:20px;color:var(--gold)">'
-    + SHEET_MAP[item.sheet].label + ' #' + cn(item.id) + '</div>'
+    + e(SHEET_MAP[item.sheet].label) + ' #' + e(cn(item.id)) + '</div>'
     + '<button onclick="document.getElementById(\'edit-modal\').remove()" style="background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer">&times;</button>'
+    + '</div>'
+    + '<div style="margin-bottom:14px;padding:10px 12px;background:var(--bg4);border:1px solid var(--border);border-radius:5px">'
+    +   '<label style="display:block;font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--gold);margin-bottom:4px">Category</label>'
+    +   '<select id="edit-sheet-select" style="width:100%;box-sizing:border-box;background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:4px;font-size:13px">' + sheetOptions + '</select>'
+    +   '<div style="font-size:10px;color:var(--dim);margin-top:5px;line-height:1.5">Changing the category moves this record to that sheet (cloud + backup included). If the record # is taken there, the next free number is assigned automatically.</div>'
     + '</div>'
     + '<div id="edit-fields">' + fieldsHtml + '</div>'
     + '<div style="display:flex;gap:8px;margin-top:16px">'
@@ -14618,6 +14657,99 @@ function openEditModal(item) {
   document.body.appendChild(modal);
 }
 
+// Next free numeric record # on a sheet (max + 1; 1 for an empty sheet).
+function _nextFreeIdInSheet(sheetKey) {
+  const arr = D[sheetKey] || [];
+  let max = 0;
+  arr.forEach(function(r){
+    const n = parseInt(cn(r.id), 10);
+    if (!isNaN(n) && n > max) max = n;
+  });
+  return String(max + 1);
+}
+
+// v130: full record MOVE between categories. Local structures, Supabase
+// (insert-to-new + delete-old — both helpers already battle-tested), GAS
+// backup (addRecord + deleteRecord actions), label-queue key migration,
+// and pending-edit cleanup all handled. Runs the cloud move immediately
+// and reports honestly if it fails (no silent divergence).
+async function _moveEditedRecord(oldSheet, oldId, newSheet, updates, modal) {
+  const arrOld = D[oldSheet];
+  const idx = arrOld.findIndex(function(r){ return normId(r.id) === normId(oldId); });
+  if (idx < 0) { alert('Record not found for move.'); return; }
+  const merged = Object.assign({}, arrOld[idx], updates);
+
+  // Collision check in the target sheet
+  let finalId = cn(String(merged.id != null ? merged.id : oldId));
+  const collide = (D[newSheet] || []).some(function(r){ return normId(r.id) === normId(finalId); });
+  let idNote = '';
+  if (collide) {
+    finalId = _nextFreeIdInSheet(newSheet);
+    idNote = '\n\nRecord #' + cn(String(merged.id)) + ' is already taken in ' + SHEET_MAP[newSheet].label +
+             ' \u2014 this record will become #' + finalId + ' there.';
+  }
+  if (!confirm('Move record #' + cn(oldId) + ' from ' + SHEET_MAP[oldSheet].label +
+               ' to ' + SHEET_MAP[newSheet].label + '?' + idNote)) return;
+  merged.id = finalId;
+
+  // ── Local move ──
+  arrOld.splice(idx, 1);
+  if (!D[newSheet]) D[newSheet] = [];
+  D[newSheet].push(merged);
+
+  // Label queue key migration (synced)
+  const oldKey = oldSheet + '|' + cn(oldId);
+  const newKey = newSheet + '|' + finalId;
+  if (typeof MANUAL_LABELS !== 'undefined' && MANUAL_LABELS.has(oldKey)) {
+    MANUAL_LABELS.delete(oldKey);
+    MANUAL_LABELS.add(newKey);
+    saveManualLabels();
+    try { removeLabelFromSupabase(oldSheet, cn(oldId)); pushLabelToSupabase(newSheet, finalId); } catch (e) {}
+  }
+  // NEW_RECORDS + pending edits
+  NEW_RECORDS = NEW_RECORDS.map(function(nr){
+    return (nr.sheet === oldSheet && normId(nr.id) === normId(oldId))
+      ? Object.assign({}, nr, merged, { sheet: newSheet }) : nr;
+  });
+  saveNR();
+  delete PENDING_EDITS[oldKey];
+  savePendingEdits();
+
+  buildFlat();
+  updateBadges();
+  refreshSidebarTotal();
+  if (modal) modal.remove();
+  closeDetail();
+  if (ST.view === 'inv') renderInv();
+  else if (ST.view === 'dash') renderDash();
+  else if (ST.view === 'dups') renderDups();
+
+  // ── Cloud move: insert new location first, then delete old ──
+  let cloudOk = false;
+  if (SB_URL && SB_KEY) {
+    try {
+      await insertInSupabase(newSheet, merged);
+      await deleteFromSupabase(oldSheet, String(oldId));
+      cloudOk = true;
+    } catch (err) {
+      console.error('[move] Supabase move failed:', err.message);
+    }
+  }
+  // GAS backup mirror (fire-and-forget)
+  if (GSHEETS_URL) {
+    try {
+      const dataParam = encodeURIComponent(JSON.stringify(merged));
+      fetch(GSHEETS_URL + '?action=addRecord&sheet=' + encodeURIComponent(newSheet) + '&data=' + dataParam).catch(function(){});
+      fetch(GSHEETS_URL + '?action=deleteRecord&sheet=' + encodeURIComponent(oldSheet) + '&id=' + encodeURIComponent(String(oldId))).catch(function(){});
+    } catch (e) {}
+  }
+
+  alert('\u2713 Moved #' + cn(oldId) + ' \u2192 ' + SHEET_MAP[newSheet].label + ' #' + finalId +
+    (cloudOk ? '\n\nCloud updated.' :
+      (SB_URL ? '\n\n\u26a0 Cloud move FAILED \u2014 the move is local-only right now. Open the record and re-save while online to retry.' :
+                '\n\nNote: Supabase not configured; move saved locally.')));
+}
+
 function saveEditedRecord(sheetKey, recordId) {
   const modal = document.getElementById('edit-modal');
   if (!modal) return;
@@ -14625,6 +14757,10 @@ function saveEditedRecord(sheetKey, recordId) {
   const updates = {};
   const arr = D[sheetKey];
   if (!arr) { alert('Sheet not found'); return; }
+  // v130: category change → dedicated move flow (collision-safe id, local +
+  // Supabase + GAS + label-queue migration). Field edits ride along.
+  const _sheetSel = document.getElementById('edit-sheet-select');
+  const _newSheet = (_sheetSel && _sheetSel.value) || sheetKey;
   // Use normalized ID matching so "1", "0001", "001", "1.0" all find the same record
   const recIdx = arr.findIndex(r => normId(r.id) === normId(recordId));
   if (recIdx < 0) { alert('Record not found: #' + cn(recordId) + ' in ' + sheetKey); return; }
@@ -14647,6 +14783,11 @@ function saveEditedRecord(sheetKey, recordId) {
       changedOnly[f] = newVal;
     }
   });
+
+  if (_newSheet !== sheetKey) {
+    _moveEditedRecord(sheetKey, recordId, _newSheet, updates, modal);
+    return;
+  }
 
   if (changed.length === 0) {
     if (!confirm('No fields appear to have changed. Save anyway?')) {
@@ -15218,6 +15359,22 @@ async function submitAdd(){
   });
 
   // Attach AI-scanned image URLs uploaded earlier (if any)
+  // v130: merge EVERYTHING the AI extracted into the record, regardless of
+  // which category is selected — bullion purity/weight, currency plate and
+  // signature data, coin mint/composition — anything the current form
+  // didn't render still lands on the record. User-typed values always win;
+  // only empty slots are filled. Consumed once, then cleared.
+  if (window.AI_APPLIED_RESULT) {
+    const _mk = _aiMergeIntoRec(rec, _aiFieldMapFromResult(window.AI_APPLIED_RESULT));
+    if (_mk.length) {
+      rec.aiScanDate = new Date().toISOString().split('T')[0];
+      const _ar = window.AI_APPLIED_RESULT;
+      rec.aiSource = (_ar._aiProvider || localStorage.getItem('cv_ai_provider') || 'AI')
+        + (_ar._aiFallbackModel ? '/' + _ar._aiFallbackModel : '');
+      console.log('[ai-merge] appended ' + _mk.length + ' AI field(s) beyond the form: ' + _mk.join(', '));
+    }
+    window.AI_APPLIED_RESULT = null;
+  }
   if (window.PENDING_AI_IMAGES) {
     if (window.PENDING_AI_IMAGES.front) rec.imageFrontUrl = window.PENDING_AI_IMAGES.front;
     if (window.PENDING_AI_IMAGES.back)  rec.imageBackUrl  = window.PENDING_AI_IMAGES.back;
@@ -15614,6 +15771,9 @@ const AI_MODELS = {
   openrouter: ['minimax/minimax-m3:free', 'google/gemma-4-31b-it:free', 'google/gemma-4-26b-a4b-it:free', 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free', 'openrouter/free'],
   // v124: xAI Grok vision models. grok-2-vision-1212 is the stable vision
   // model; keys start with "xai-". The API is OpenAI-compatible.
+  // v131: Mistral free Experiment tier — includes Pixtral vision models.
+  // Pixtral Large is the accuracy pick among free-tier vision options.
+  mistral:    ['pixtral-large-latest', 'pixtral-12b-latest', 'mistral-small-latest'],
   grok:       ['grok-2-vision-1212'],
   // v127: OpenAI vision. gpt-4o-mini is the cheap workhorse (~$0.002/scan);
   // if OpenAI retires an ID, the rot auto-advance walks this list.
@@ -15624,6 +15784,7 @@ const AI_MODEL_DEFAULTS = {
   gemini:     'gemini-flash-latest',
   groq:       'qwen/qwen3.6-27b',
   openrouter: 'minimax/minimax-m3:free',
+  mistral:    'pixtral-large-latest',
   grok:       'grok-2-vision-1212',
   openai:     'gpt-4o-mini',
   anthropic:  'claude-sonnet-4-5'
@@ -15632,6 +15793,7 @@ const AI_PROVIDER_LABELS = {
   gemini:     'Google Gemini (free tier)',
   groq:       'Groq (free tier, fast)',
   openrouter: 'OpenRouter (free models)',
+  mistral:    'Mistral (free tier)',
   grok:       'xAI Grok',
   openai:     'OpenAI (paid, cheap)',
   anthropic:  'Anthropic Claude (paid)'
@@ -15639,7 +15801,7 @@ const AI_PROVIDER_LABELS = {
 // Order for auto-building the fallback chain. Free providers come first so
 // users on free tiers don't accidentally hit a paid provider unless they
 // configured Anthropic themselves.
-const AI_PROVIDER_FALLBACK_ORDER = ['gemini', 'groq', 'openrouter', 'grok', 'openai', 'anthropic'];
+const AI_PROVIDER_FALLBACK_ORDER = ['gemini', 'groq', 'openrouter', 'mistral', 'grok', 'openai', 'anthropic'];
 let AI_FRONT_IMG = null;   // data URL
 let AI_BACK_IMG  = null;
 let AI_LAST_RESULT = null;
@@ -15796,6 +15958,7 @@ function _aiDispatch(provider, key, model, frontImg, backImg, onStatus) {
     case 'anthropic':  return aiAnalyzeAnthropic(key, model, frontImg, backImg, onStatus);
     case 'groq':       return aiAnalyzeGroq(key, model, frontImg, backImg, onStatus);
     case 'openrouter': return aiAnalyzeOpenRouter(key, model, frontImg, backImg, onStatus);
+    case 'mistral':    return aiAnalyzeMistral(key, model, frontImg, backImg, onStatus);
     case 'grok':       return aiAnalyzeGrok(key, model, frontImg, backImg, onStatus);
     case 'openai':     return aiAnalyzeOpenAI(key, model, frontImg, backImg, onStatus);
     case 'gemini':
@@ -15851,6 +16014,13 @@ async function _aiImagesForProvider(provider, front, back, forceTiny) {
 // burning 5 slow retries per step (Gemini's two models were adding ~10
 // pointless attempts to every failed run).
 let _aiQuotaCooldown = {};
+// v131: providers whose API doesn't send CORS headers hard-fail from a
+// browser with a network-level error (Failed to fetch). Once seen, skip
+// that provider for the whole session — no key can fix server-side CORS.
+let _aiNetBlocked = {};
+function _aiIsNetworkBlocked(msg) {
+  return /network error|Failed to fetch|Load failed|NetworkError|CORS/i.test(String(msg || ''));
+}
 function _aiIsQuotaError(msg) {
   return /rate-limited|quota|RESOURCE_EXHAUSTED|429/i.test(String(msg || ''));
 }
@@ -15898,6 +16068,11 @@ async function aiAnalyzeWithFallback(frontImg, backImg, onStatus) {
       }
     }
 
+    // Browser-blocked provider (no CORS): skip every step this session.
+    if (_aiNetBlocked[step.provider]) {
+      console.log('[ai-fallback] skipping ' + step.provider + ' (browser-blocked \u2014 API sends no CORS headers)');
+      continue;
+    }
     // Quota cooldown: skip this provider's remaining steps while cooling
     // (the primary step still gets one attempt — quota may have reset).
     if (i > 0 && _aiQuotaCooldown[step.provider] && Date.now() < _aiQuotaCooldown[step.provider]) {
@@ -15944,6 +16119,13 @@ async function aiAnalyzeWithFallback(frontImg, backImg, onStatus) {
       if (_aiIsQuotaError(err.message)) {
         _aiQuotaCooldown[step.provider] = Date.now() + 8 * 60 * 1000;
       }
+      // Network-level failure on repeat = almost certainly CORS-blocked
+      // (grok/openai from a browser). Mark for session skip and annotate.
+      if (_aiIsNetworkBlocked(err.message)) {
+        _aiNetBlocked[step.provider] = true;
+        errors.push({ step: step, message: err.message + ' \u2014 this API appears browser-blocked (no CORS); a client-side app cannot call it. Skipping for this session.' });
+        continue;
+      }
       // Payload too large (Groq TPM class): one same-provider retry with
       // aggressively shrunk front-only imagery, then give up on it.
       if (_aiIsPayloadTooLarge(err.message) && !step._forceTiny) {
@@ -15986,7 +16168,9 @@ async function aiAnalyzeWithFallback(frontImg, backImg, onStatus) {
   });
   // Suggest a free fallback the user hasn't enabled yet, if any
   const unconfigured = AI_PROVIDER_FALLBACK_ORDER.filter(function(p){
-    return p !== 'anthropic' && p !== 'openai' && !aiKeyFor(p);
+    // paid (anthropic/openai) and browser-blocked (grok/openai) providers
+    // don't belong in a "free things to add" tip
+    return p !== 'anthropic' && p !== 'openai' && p !== 'grok' && !aiKeyFor(p);
   });
   let tip = '';
   if (unconfigured.length) {
@@ -16563,7 +16747,33 @@ async function aiAnalyzeGroq(key, model, frontImg, backImg, onStatus) {
 }
 
 // ── xAI Grok (v124) ── OpenAI-compatible endpoint at api.x.ai ────────
+// ── Mistral (v131) ── free Experiment tier; Pixtral vision ─────────────
+async function aiAnalyzeMistral(key, model, frontImg, backImg, onStatus) {
+  return _aiAnalyzeOpenAICompatible(
+    'https://api.mistral.ai/v1/chat/completions',
+    { 'Authorization': 'Bearer ' + key },
+    model, frontImg, backImg, 'Mistral', onStatus
+  );
+}
+
 async function aiAnalyzeGrok(key, model, frontImg, backImg, onStatus) {
+  // v132: PROXY MODE. api.x.ai sends no CORS headers, so direct browser
+  // calls can never work. If the "key" field holds a URL in the form
+  //   https://<project>.supabase.co/functions/v1/grok-proxy|SHARED_TOKEN
+  // the app routes through the user's own Supabase Edge Function, which
+  // injects the real xai- key server-side (see grok-proxy-index.ts).
+  // The pipe-separated token authenticates the app to the proxy.
+  if (/^https:\/\//i.test(key)) {
+    const sep = key.indexOf('|');
+    const proxyUrl = sep > 0 ? key.slice(0, sep).trim() : key.trim();
+    const token    = sep > 0 ? key.slice(sep + 1).trim() : '';
+    return _aiAnalyzeOpenAICompatible(
+      proxyUrl,
+      token ? { 'x-cv-token': token } : {},
+      model, frontImg, backImg, 'xAI Grok', onStatus
+    );
+  }
+  // Direct mode kept for anyone running the app outside a browser context.
   return _aiAnalyzeOpenAICompatible(
     'https://api.x.ai/v1/chat/completions',
     { 'Authorization': 'Bearer ' + key },
@@ -16660,6 +16870,59 @@ function renderAIResults(r) {
   document.getElementById('ai-results').classList.add('show');
 }
 
+// v130: one shared mapping from a normalized AI result to record/form field
+// keys — used by aiApplyToForm (form prefill) AND by add-save (full merge),
+// so nothing the AI extracted is ever dropped just because the selected
+// category's form doesn't render that input.
+function _aiFieldMapFromResult(r) {
+  return {
+    country:       r.country,
+    series:        r.series,
+    year:          r.year,
+    type:          r.type,
+    denomination:  r.denomination,
+    grade:         r.grade,
+    gradingAuth:   r.gradingAuth,
+    serial:        r.serial,
+    mint:          r.mint,
+    composition:   r.composition,
+    silverContent: r.silverContent,
+    purity:        r.silverContent,      // bullion sheets name it 'purity'
+    weight:        r.weight,
+    features:      r.features,
+    notes:         r.notes,
+    state:         r.country,
+    description:   r.features,
+    frNum:         r.frNum,
+    pickNumber:    r.pickNumber,
+    criswell:      r.criswell,
+    noteType:      r.noteType,
+    signatures:    r.signatures,
+    sealColor:     r.sealColor,
+    frDistrict:    r.frDistrict,
+    blockLetter:   r.blockLetter,
+    plate:         r.plate,
+    variety:       r.variety,
+    charter:       r.charter,
+    bankName:      r.bankName,
+    city:          r.city,
+    bankState:     r.bankState,
+    defects:       r.defects
+  };
+}
+
+// Pure merge: fill only EMPTY slots on the record — user-typed values always
+// win over AI values. Returns list of keys merged (for the save summary).
+function _aiMergeIntoRec(rec, map) {
+  const mergedKeys = [];
+  Object.keys(map).forEach(function(k){
+    const v = map[k];
+    if (v == null || v === '' || v === 0) return;
+    if (rec[k] == null || rec[k] === '') { rec[k] = v; mergedKeys.push(k); }
+  });
+  return mergedKeys;
+}
+
 async function aiApplyToForm() {
   if (!AI_LAST_RESULT) return;
   const r = AI_LAST_RESULT;
@@ -16708,41 +16971,12 @@ async function aiApplyToForm() {
   // This means: if the user later switches the sheet category (because the AI
   // guessed wrong), the data survives — renderAdd re-applies the state into
   // whichever new schema's fields exist with matching IDs.
-  const _aiMap = {
-    country:       r.country,
-    series:        r.series,
-    year:          r.year,
-    type:          r.type,
-    denomination:  r.denomination,
-    grade:         r.grade,
-    gradingAuth:   r.gradingAuth,
-    serial:        r.serial,
-    mint:          r.mint,
-    composition:   r.composition,
-    silverContent: r.silverContent,
-    weight:        r.weight,
-    features:      r.features,
-    notes:         r.notes,
-    state:         r.country,
-    description:   r.features,
-    // Paper money fields (added v69) — only set when AI flags a banknote
-    frNum:         r.frNum,
-    pickNumber:    r.pickNumber,
-    criswell:      r.criswell,
-    noteType:      r.noteType,
-    signatures:    r.signatures,
-    sealColor:     r.sealColor,
-    frDistrict:    r.frDistrict,
-    blockLetter:   r.blockLetter,
-    plate:         r.plate,
-    variety:       r.variety,
-    charter:       r.charter,
-    bankName:      r.bankName,
-    city:          r.city,
-    bankState:     r.bankState,
-    defects:       r.defects
-  };
-  Object.keys(_aiMap).forEach(function(k) {
+  const _aiMap = _aiFieldMapFromResult(r);
+  // v130: remember the full applied result so add-save can merge EVERYTHING
+  // the AI extracted into the record — including fields the selected
+  // category's form doesn't render. Consumed (and cleared) at save time.
+  window.AI_APPLIED_RESULT = r;
+    Object.keys(_aiMap).forEach(function(k) {
     const v = _aiMap[k];
     if (v == null || v === '' || v === 0) return;
     ADD_FORM_STATE[k] = v;
@@ -16821,7 +17055,15 @@ function saveAIKey() {
   // shown in the console's key LIST) instead of the secret itself, which
   // is displayed exactly once at creation.
   const _uuidLike = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(key);
-  if (provider === 'grok' && !key.startsWith('xai-')) {
+  if (provider === 'grok' && /^https:\/\//i.test(key)) {
+    // v132: proxy-mode value — "https://…/grok-proxy|SHARED_TOKEN". Light
+    // sanity check only; the function itself validates the token.
+    if (key.indexOf('|') < 8 && msg) {
+      msg.textContent = 'Proxy format: https://\u2026/grok-proxy|YOUR_SHARED_TOKEN (URL, pipe, token).';
+      msg.style.color = 'var(--red)';
+      return;
+    }
+  } else if (provider === 'grok' && !key.startsWith('xai-')) {
     if (msg) {
       msg.textContent = _uuidLike
         ? 'That looks like a key ID, not the secret. xAI secrets start with "xai-" and are shown once at creation \u2014 create a new key at console.x.ai and copy the xai-\u2026 value.'
