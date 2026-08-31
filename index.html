@@ -2003,7 +2003,7 @@ body.theme-modern-dark select option{
 // Bump this on every deploy so the user can see at a glance which build is
 // running in their browser. Surfaced in three places: the sidebar footer
 // (desktop), the mobile header badge, and the Settings → About section.
-const APP_VERSION = 'v136';
+const APP_VERSION = 'v137';
 const APP_BUILD_DATE = '2026-08-28';
 // Boot banner — makes the running build unambiguous in any console log or
 // screenshot, since stale-deploy confusion has bitten more than once.
@@ -14163,11 +14163,11 @@ function renderSettings(){
         // v131: Mistral — free Experiment tier with Pixtral vision
         mistral: {
           label: 'Mistral (Pixtral vision)',
-          cost: '<strong style="color:var(--green)">Free Experiment tier</strong> \u00b7 1B tokens/month, ~2 requests/min, no credit card \u00b7 Pixtral Large is the most accurate free-tier vision model available',
+          cost: '<strong style="color:var(--green)">Free Experiment tier</strong> \u00b7 1B tokens/month, ~2 requests/min, no credit card \u00b7 Mistral Medium 3 is among the most accurate free-tier vision models available',
           keyUrl: 'https://console.mistral.ai',
           keyHost: 'console.mistral.ai',
           keyPrefix: '32-char key',
-          keyHelp: 'Sign up at console.mistral.ai, activate the free Experiment plan (phone verification required), then create a key under API Keys. The free tier includes ALL Mistral models \u2014 pick pixtral-large-latest for the strongest slab/label reading. Rate limit is ~2 requests/min, fine for single scans; batch runs may occasionally wait.',
+          keyHelp: 'Sign up at console.mistral.ai, activate the free Experiment plan (phone verification required), then create a key under API Keys. The free tier includes ALL Mistral models \u2014 mistral-medium-latest (Medium 3, their frontier multimodal) is the strongest slab/label reader. Rate limit is ~2 requests/min, fine for single scans; batch runs may occasionally wait.',
           models: (typeof AI_MODELS !== 'undefined' ? AI_MODELS.mistral : ['pixtral-large-latest'])
         },
         // v124: xAI Grok — OpenAI-compatible API at api.x.ai
@@ -15854,10 +15854,16 @@ const AI_MODELS = {
   openrouter: ['minimax/minimax-m3:free', 'google/gemma-4-31b-it:free', 'google/gemma-4-26b-a4b-it:free', 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free', 'openrouter/free'],
   // v124: xAI Grok vision models. grok-2-vision-1212 is the stable vision
   // model; keys start with "xai-". The API is OpenAI-compatible.
-  // v131: Mistral free Experiment tier — includes Pixtral vision models.
-  // Pixtral Large is the accuracy pick among free-tier vision options.
-  mistral:    ['pixtral-large-latest', 'pixtral-12b-latest', 'mistral-small-latest'],
-  grok:       ['grok-2-vision-1212'],
+  // v137: Pixtral Large DEPRECATED per Mistral's own docs (the -latest
+  // alias now 400s as invalid_model). Current vision-capable IDs:
+  // mistral-medium-latest = Medium 3, their frontier multimodal — the
+  // accuracy pick; small-latest has vision too; pixtral-12b-2409 remains
+  // served as the Apache-2 open model.
+  mistral:    ['mistral-medium-latest', 'mistral-small-latest', 'pixtral-12b-2409'],
+  // v137: grok-2-vision-1212 fully retired (July 2026 docs). Grok 4 family
+  // is multimodal. 4.3 = universal + cheapest ($1.25/$2.50 per M); 4.5 has
+  // image input but is EU-restricted; 4.6 = newest flagship ($2/$6).
+  grok:       ['grok-4.3', 'grok-4.5', 'grok-4.6'],
   // v127: OpenAI vision. gpt-4o-mini is the cheap workhorse (~$0.002/scan);
   // if OpenAI retires an ID, the rot auto-advance walks this list.
   openai:     ['gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini'],
@@ -15867,8 +15873,8 @@ const AI_MODEL_DEFAULTS = {
   gemini:     'gemini-flash-latest',
   groq:       'qwen/qwen3.6-27b',
   openrouter: 'minimax/minimax-m3:free',
-  mistral:    'pixtral-large-latest',
-  grok:       'grok-2-vision-1212',
+  mistral:    'mistral-medium-latest',
+  grok:       'grok-4.3',
   openai:     'gpt-4o-mini',
   anthropic:  'claude-sonnet-4-5'
 };
@@ -16117,7 +16123,10 @@ function _aiIsQuotaError(msg) {
 // distinct from quota/auth/network failures. Matches the phrasings Groq,
 // OpenRouter, xAI, and Gemini actually use for retired or unknown models.
 function _aiIsModelRotError(msg) {
-  return /model_not_found|model[_\s]?decommissioned|does not exist|No endpoints found|has been decommissioned|is not found|unknown model|model not supported/i.test(String(msg || ''));
+  // v137: added "Model not found:" (xAI 400 phrasing), "Invalid model"
+  // (Mistral invalid_model 400), and image-capability rejections so a
+  // text-only model in a vision slot auto-advances too.
+  return /model_not_found|model[_\s]?decommissioned|does not exist|No endpoints found|has been decommissioned|is not found|model not found|invalid model|unknown model|model not supported|does not support image|image input is not supported/i.test(String(msg || ''));
 }
 // Per-run memory of models already attempted per provider, so the rot
 // auto-advance never loops on the same dead ID. Reset at each run start.
@@ -16205,6 +16214,26 @@ async function aiAnalyzeWithFallback(frontImg, backImg, onStatus) {
       // Quota exhaustion → cool this provider down for 8 minutes so later
       // steps and subsequent runs stop stalling on doomed retries.
       if (_aiIsQuotaError(err.message)) {
+        // v137: OpenRouter's :free models draw from DIFFERENT upstream
+        // pools — one being rate-limited says nothing about the others.
+        // Advance to the provider's next model instead of ending the run;
+        // only cool the provider down when the list is exhausted.
+        if (step.provider === 'openrouter' && AI_MODELS.openrouter) {
+          _aiTriedModels.openrouter = _aiTriedModels.openrouter || new Set();
+          _aiTriedModels.openrouter.add(step.model);
+          const orNext = AI_MODELS.openrouter.find(function(m){
+            return !_aiTriedModels.openrouter.has(m);
+          });
+          if (orNext) {
+            _aiTriedModels.openrouter.add(orNext);
+            chain.splice(i + 1, 0, {
+              provider: 'openrouter', model: orNext,
+              _quotaAdvance: true, _replacedModel: step.model
+            });
+            errors.push({ step: step, message: err.message.slice(0, 200) + ' \u2014 free pool rate-limited; trying ' + orNext });
+            continue;
+          }
+        }
         _aiQuotaCooldown[step.provider] = Date.now() + 8 * 60 * 1000;
       }
       // Network-level failure on repeat = almost certainly CORS-blocked
