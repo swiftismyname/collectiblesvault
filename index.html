@@ -2003,7 +2003,7 @@ body.theme-modern-dark select option{
 // Bump this on every deploy so the user can see at a glance which build is
 // running in their browser. Surfaced in three places: the sidebar footer
 // (desktop), the mobile header badge, and the Settings → About section.
-const APP_VERSION = 'v140';
+const APP_VERSION = 'v141';
 const APP_BUILD_DATE = '2026-08-28';
 // Boot banner — makes the running build unambiguous in any console log or
 // screenshot, since stale-deploy confusion has bitten more than once.
@@ -14172,7 +14172,7 @@ function renderSettings(){
           keyUrl: 'https://aistudio.google.com/app/apikey',
           keyHost: 'aistudio.google.com',
           keyPrefix: 'AIza… or AQ…',
-          keyHelp: 'Sign in with any Google account, click "Create API key", copy and paste below.',
+          keyHelp: 'Sign in with any Google account at aistudio.google.com, click "Create API key", paste below. RELIABILITY TIP: paste TWO OR MORE keys separated by commas \u2014 create each in a different Google Cloud project and every free-quota bucket doubles. The app rotates keys automatically when one rate-limits, then walks a 6-model Gemini ladder (flash \u2192 flash-lite \u2192 2.0 \u2192 pro), each model its own quota bucket, before ever leaving Gemini.',
           models: (typeof AI_MODELS !== 'undefined' ? AI_MODELS.gemini : ['gemini-flash-latest'])
         },
         // v101: Groq — fast free vision via Llama models
@@ -15912,7 +15912,13 @@ function lockAppNow() {
 // ═══════════════════════════════════════════════════════════════════
 const AI_PROVIDER_DEFAULT = 'gemini';
 const AI_MODELS = {
-  gemini:     ['gemini-flash-latest', 'gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash'],
+  // v141: RELIABILITY LADDER. Google's free-tier quotas are PER MODEL —
+  // each entry below is a separate daily/minute bucket, and the -lite
+  // models carry the LARGEST free allowances. When flash rate-limits, the
+  // chain walks down this ladder before ever leaving Gemini, so the best
+  // identifier keeps answering. Pro sits last: highest accuracy, smallest
+  // free quota — the closer.
+  gemini:     ['gemini-flash-latest', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-2.5-pro'],
   // Groq vision models (verified Aug 2026). Groq retired Llama 4 Scout
   // (June 17 2026) and Maverick (Mar 9 2026) for free/dev tiers; their
   // gpt-oss replacements are TEXT-ONLY. qwen3.6-27b is the current
@@ -15964,12 +15970,15 @@ const AI_PROVIDER_LABELS = {
 // Order for auto-building the fallback chain. Free providers come first so
 // users on free tiers don't accidentally hit a paid provider unless they
 // configured Anthropic themselves.
-// v134: chain ordered by ACCURACY, not just cost. Gemini and Pixtral Large
-// (Mistral) read slabs best among the free tiers; Groq's qwen is decent;
-// OpenRouter's rotating free models respond reliably but read WORST, so
-// they run dead last — the "at least give me something" tier. Paid slots
-// (openai via proxy, anthropic) sit before it and are skipped when keyless.
-const AI_PROVIDER_FALLBACK_ORDER = ['gemini', 'mistral', 'groq', 'grok', 'openai', 'anthropic', 'openrouter'];
+// v141: SIMPLIFIED. Four providers, all browser-workable, ordered by how
+// accurately they read this user's coins: Gemini (best — now a 6-model
+// quota ladder with multi-key rotation), Groq (fast, decent), Mistral
+// (hit-or-miss), OpenRouter (responds but reads worst — last resort).
+// Grok/OpenAI/Anthropic are removed from the flow entirely: the first two
+// are browser-blocked without a proxy and Anthropic is paid — dropping
+// them also drops them from the Settings dropdown, which shrinks the UI
+// to what actually matters. Their code stays dormant for the future.
+const AI_PROVIDER_FALLBACK_ORDER = ['gemini', 'groq', 'mistral', 'openrouter'];
 let AI_FRONT_IMG = null;   // data URL
 let AI_BACK_IMG  = null;
 let AI_LAST_RESULT = null;
@@ -16436,6 +16445,17 @@ async function _aiImagesForProvider(provider, front, back, forceTiny) {
 // exhaustion, skip its remaining chain steps for a while instead of
 // burning 5 slow retries per step (Gemini's two models were adding ~10
 // pointless attempts to every failed run).
+// v141: multiple API keys per provider (Gemini especially). Google's free
+// quota is PER PROJECT — a second key from a second Google Cloud project
+// doubles every bucket in the ladder. Keys are stored comma/space
+// separated in the same field; the chain rotates to the next key when one
+// rate-limits, before walking down the model ladder.
+function _aiKeysFor(provider) {
+  const raw = aiKeyFor(provider) || '';
+  if (/^https:\/\//i.test(raw)) return [raw];   // grok proxy value — never split
+  return raw.split(/[\s,]+/).filter(Boolean);
+}
+
 let _aiQuotaCooldown = {};
 // v131: providers whose API doesn't send CORS headers hard-fail from a
 // browser with a network-level error (Failed to fetch). Once seen, skip
@@ -16476,7 +16496,8 @@ async function aiAnalyzeWithFallback(frontImg, backImg, onStatus) {
 
   for (let i = 0; i < chain.length; i++) {
     const step = chain[i];
-    const stepKey = aiKeyFor(step.provider);
+    const _stepKeys = _aiKeysFor(step.provider);
+    const stepKey = _stepKeys[step._keyIdx || 0];
     if (!stepKey) {
       // Skip silently — no key means user hasn't enabled this provider.
       // Don't log to errors; that would clutter the "all failed" message.
@@ -16543,26 +16564,36 @@ async function aiAnalyzeWithFallback(frontImg, backImg, onStatus) {
       // Quota exhaustion → cool this provider down for 8 minutes so later
       // steps and subsequent runs stop stalling on doomed retries.
       if (_aiIsQuotaError(err.message)) {
-        // v137: OpenRouter's :free models draw from DIFFERENT upstream
-        // pools — one being rate-limited says nothing about the others.
-        // Advance to the provider's next model instead of ending the run;
-        // only cool the provider down when the list is exhausted.
-        if (step.provider === 'openrouter' && AI_MODELS.openrouter) {
-          _aiTriedModels.openrouter = _aiTriedModels.openrouter || new Set();
-          _aiTriedModels.openrouter.add(step.model);
-          const orNext = AI_MODELS.openrouter.find(function(m){
-            return !_aiTriedModels.openrouter.has(m);
+        // v141: three-stage quota recovery, provider-generic.
+        // Stage 1 — NEXT KEY, same model: free quotas are per project/key,
+        //   so a second Gemini key resets every bucket.
+        const _qKeys = _aiKeysFor(step.provider);
+        const _kIdx = step._keyIdx || 0;
+        if (_kIdx + 1 < _qKeys.length) {
+          chain.splice(i + 1, 0, Object.assign({}, step, { _keyIdx: _kIdx + 1, _quotaAdvance: true }));
+          errors.push({ step: step, message: err.message.slice(0, 160) + ' \u2014 rotating to key #' + (_kIdx + 2) });
+          continue;
+        }
+        // Stage 2 — NEXT MODEL, same provider: Gemini's quotas are also
+        //   per MODEL (the -lite ladder), and OpenRouter's :free entries
+        //   draw from different upstream pools.
+        if (AI_MODELS[step.provider]) {
+          _aiTriedModels[step.provider] = _aiTriedModels[step.provider] || new Set();
+          _aiTriedModels[step.provider].add(step.model);
+          const qNext = AI_MODELS[step.provider].find(function(m){
+            return !_aiTriedModels[step.provider].has(m);
           });
-          if (orNext) {
-            _aiTriedModels.openrouter.add(orNext);
+          if (qNext) {
+            _aiTriedModels[step.provider].add(qNext);
             chain.splice(i + 1, 0, {
-              provider: 'openrouter', model: orNext,
+              provider: step.provider, model: qNext,
               _quotaAdvance: true, _replacedModel: step.model
             });
-            errors.push({ step: step, message: err.message.slice(0, 200) + ' \u2014 free pool rate-limited; trying ' + orNext });
+            errors.push({ step: step, message: err.message.slice(0, 160) + ' \u2014 quota bucket empty; trying ' + qNext });
             continue;
           }
         }
+        // Stage 3 — provider exhausted: cool it down, move on.
         _aiQuotaCooldown[step.provider] = Date.now() + 8 * 60 * 1000;
       }
       // Network-level failure on repeat = almost certainly CORS-blocked
@@ -17492,7 +17523,7 @@ function saveAIKey() {
   const keyEl = document.getElementById('ai-key-input');
   const modelEl = document.getElementById('ai-model-input');
   const msg = document.getElementById('ai-key-msg');
-  const key = (keyEl && keyEl.value || '').trim();
+  let key = (keyEl && keyEl.value || '').trim();   // let: gemini branch normalizes multi-key lists
   const model = (modelEl && modelEl.value || AI_MODEL_DEFAULTS[provider]).trim();
   if (!key) {
     if (msg) { msg.textContent = 'API key cannot be empty.'; msg.style.color = 'var(--red)'; }
@@ -17503,9 +17534,16 @@ function saveAIKey() {
     if (msg) { msg.textContent = 'Anthropic key should start with "sk-ant-".'; msg.style.color = 'var(--red)'; }
     return;
   }
-  if (provider === 'gemini' && !key.startsWith('AIza') && !key.startsWith('AQ.')) {
-    if (msg) { msg.textContent = 'Gemini key should start with "AIza" or "AQ.".'; msg.style.color = 'var(--red)'; }
-    return;
+  if (provider === 'gemini') {
+    // v141: multiple keys allowed, comma/space separated — each Google
+    // Cloud project has its own free quota and the chain rotates.
+    const parts = key.split(/[\s,]+/).filter(Boolean);
+    const bad = parts.filter(function(p){ return !p.startsWith('AIza') && !p.startsWith('AQ.'); });
+    if (bad.length) {
+      if (msg) { msg.textContent = 'Each Gemini key should start with "AIza" or "AQ." \u2014 separate multiple keys with commas. Problem with: ' + bad[0].slice(0, 12) + '\u2026'; msg.style.color = 'var(--red)'; }
+      return;
+    }
+    key = parts.join(',');
   }
   // v129: catch the classic wrong-credential mistakes before they burn a
   // scan with a confusing 401. Most common: pasting the key ID (a UUID
