@@ -2003,7 +2003,7 @@ body.theme-modern-dark select option{
 // Bump this on every deploy so the user can see at a glance which build is
 // running in their browser. Surfaced in three places: the sidebar footer
 // (desktop), the mobile header badge, and the Settings → About section.
-const APP_VERSION = 'v141';
+const APP_VERSION = 'v142';
 const APP_BUILD_DATE = '2026-08-28';
 // Boot banner — makes the running build unambiguous in any console log or
 // screenshot, since stale-deploy confusion has bitten more than once.
@@ -3061,6 +3061,9 @@ const MAX_EDIT_RETRIES = 5;
 // Local deletes that haven't been confirmed in Google Sheets yet
 let PENDING_DELETES = _initPendingVar('deletes', 'cv_pending_deletes', []);
 // Value history tracking — snapshots of collection value over time
+// v142: snapshot gating — when Supabase is the data source, snapshots may
+// not be recorded until the paginated load completes (see loadFromSupabase).
+window._CV_DATA_READY = !(typeof SB_URL !== 'undefined' && SB_URL);
 let VALUE_HISTORY = JSON.parse(localStorage.getItem('cv_value_history') || '[]');
 function saveValueHistory() { localStorage.setItem('cv_value_history', JSON.stringify(VALUE_HISTORY)); }
 
@@ -3070,9 +3073,31 @@ function savePendingSnapshots() { _savePendingState(); }
 
 // Record a value snapshot (called on each dashboard render)
 function recordValueSnapshot() {
+  // v142 GUARD 1: never snapshot before the full dataset is loaded.
+  if (!window._CV_DATA_READY) {
+    console.warn('[snapshot] skipped \u2014 data not fully loaded yet');
+    return;
+  }
   const T = computeTotals();
   const now = new Date();
   const today = now.toISOString().split('T')[0]; // YYYY-MM-DD
+
+  // v142 GUARD 2: plausibility vs the trailing week. A collection worth
+  // ~$70k does not become $-5,669 for one day — that shape is always a
+  // partial/garbage compute. Reject rather than overwrite a good value.
+  const _hist = VALUE_HISTORY.filter(function(s){ return s.date !== today; }).slice(-7);
+  if (_hist.length >= 3) {
+    const _med = function(a){ const b = a.slice().sort(function(x,y){ return x-y; }); return b[Math.floor(b.length/2)]; };
+    const mVal = _med(_hist.map(function(s){ return +s.value || 0; }));
+    const mCnt = _med(_hist.map(function(s){ return +s.count || 0; }));
+    if (T.totVal <= 0 || (mVal > 0 && T.totVal < mVal * 0.25) || (mCnt > 0 && T.totCount < mCnt * 0.5)) {
+      console.warn('[snapshot] REJECTED implausible snapshot', { value: T.totVal, count: T.totCount, medianValue: mVal, medianCount: mCnt }, '\u2014 keeping previous value');
+      return;
+    }
+  } else if (T.totVal <= 0 || T.totCount <= 0) {
+    console.warn('[snapshot] skipped zero/negative snapshot');
+    return;
+  }
 
   // Check if we already have a snapshot for today
   const existing = VALUE_HISTORY.find(s => s.date === today);
@@ -3108,6 +3133,120 @@ function recordValueSnapshot() {
   if (typeof SB_URL !== 'undefined' && SB_URL && SB_KEY) {
     pushSnapshotToSupabase(snap);
   }
+}
+
+// ── VALUE-HISTORY REPAIR (v142) ─────────────────────────────────────────
+// Finds chart artifacts: snapshots that are ≤ 0, or single-day collapses
+// where both neighbors agree with each other but the point craters below
+// 30% of them. Repair = delete the bad snapshots locally AND from the
+// value_snapshots table so they never resync from another device.
+function _vhFindAnomalies() {
+  const sorted = (VALUE_HISTORY || []).slice().sort(function(a,b){ return a.date.localeCompare(b.date); });
+  const out = [];
+  for (let i = 0; i < sorted.length; i++) {
+    const s = sorted[i], v = +s.value || 0;
+    const prev = sorted[i-1], next = sorted[i+1];
+    if (v <= 0) { out.push({ date: s.date, value: v, count: s.count, reason: 'zero/negative' }); continue; }
+    if (prev && next) {
+      const pv = +prev.value || 0, nv = +next.value || 0;
+      const neighborsAgree = pv > 0 && nv > 0 && Math.abs(pv - nv) < 0.25 * Math.max(pv, nv);
+      if (neighborsAgree && v < 0.3 * Math.min(pv, nv)) {
+        out.push({ date: s.date, value: v, count: s.count, reason: 'single-day collapse (neighbors ~$' + Math.round(pv).toLocaleString() + ')' });
+      }
+    }
+  }
+  return out;
+}
+
+async function deleteSnapshotFromSupabase(date) {
+  if (!SB_URL || !SB_KEY) return false;
+  try {
+    const url = SB_URL.replace(/\/+$/, '') + '/rest/v1/' + SB_SNAPSHOT_TABLE + '?date=eq.' + encodeURIComponent(date);
+    const r = await fetch(url, { method: 'DELETE', headers: { 'apikey': SB_KEY, 'Authorization': 'Bearer ' + SB_KEY } });
+    return r.ok;
+  } catch (e) { return false; }
+}
+
+function showValueHistoryRepair() {
+  const ex = document.getElementById('vhr-modal');
+  if (ex) ex.remove();
+  const modal = document.createElement('div');
+  modal.id = 'vhr-modal';
+  modal.className = 'ref-modal';
+  modal.onclick = function(ev){ if (ev.target === modal) modal.remove(); };
+  document.body.appendChild(modal);
+  const anomalies = _vhFindAnomalies();
+  window._vhrAnomalies = anomalies;
+  const _td = 'padding:7px 8px;border-bottom:1px solid var(--border);font-size:12px;vertical-align:middle;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+  modal.innerHTML = ''
+    + '<div class="ref-modal-panel" style="background:var(--bg2);border:1px solid var(--gold3);border-radius:10px;width:min(640px,95vw);max-height:88vh;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 16px 48px rgba(0,0,0,.7)">'
+    +   '<div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--border)">'
+    +     '<div>'
+    +       '<h2 style="margin:0;font-family:var(--font-display);font-size:17px;color:var(--gold)">\ud83e\ude7a Chart History Repair</h2>'
+    +       '<div style="font-size:11px;color:var(--muted);margin-top:2px">Remove bad portfolio-value snapshots \u2014 locally and from the cloud, so they never come back</div>'
+    +     '</div>'
+    +     '<button onclick="document.getElementById(\'vhr-modal\').remove()" style="background:transparent;border:1px solid var(--border);color:var(--muted);padding:6px 14px;border-radius:4px;cursor:pointer;font-size:12px">Close</button>'
+    +   '</div>'
+    +   '<div style="padding:16px 20px;overflow-y:auto;flex:1;min-height:0">'
+    +     (anomalies.length === 0
+          ? '<div style="padding:18px;text-align:center;color:var(--green);font-size:12px">\u2713 No anomalies detected \u2014 the value history looks clean.</div>'
+          : '<table style="width:100%;border-collapse:collapse;table-layout:fixed">'
+            + '<colgroup><col style="width:30px"><col style="width:96px"><col style="width:110px"><col></colgroup>'
+            + '<thead><tr>'
+            +   '<th style="' + _td + '"></th>'
+            +   '<th style="' + _td + ';font-size:9px;color:var(--dim);text-transform:uppercase;text-align:left">Date</th>'
+            +   '<th style="' + _td + ';font-size:9px;color:var(--dim);text-transform:uppercase;text-align:left">Recorded</th>'
+            +   '<th style="' + _td + ';font-size:9px;color:var(--dim);text-transform:uppercase;text-align:left">Why flagged</th>'
+            + '</tr></thead><tbody>'
+            + anomalies.map(function(a, i){
+                return '<tr>'
+                  + '<td style="' + _td + ';text-align:center"><input type="checkbox" class="vhr-check" data-i="' + i + '" checked></td>'
+                  + '<td style="' + _td + ';font-family:DM Mono,monospace">' + e(a.date) + '</td>'
+                  + '<td style="' + _td + ';color:var(--red);font-family:DM Mono,monospace">$' + Number(a.value).toLocaleString() + '</td>'
+                  + '<td style="' + _td + ';color:var(--dim)">' + e(a.reason) + '</td>'
+                  + '</tr>';
+              }).join('')
+            + '</tbody></table>'
+            + '<div style="display:flex;justify-content:flex-end;margin-top:12px">'
+            +   '<button class="bp" onclick="_vhrDeleteChecked()">Delete Checked Snapshots</button>'
+            + '</div>')
+    +     '<div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border)">'
+    +       '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin-bottom:6px">Manual delete (any date)</div>'
+    +       '<div style="display:flex;gap:8px">'
+    +         '<input type="date" id="vhr-manual-date" style="padding:8px 10px;background:var(--bg3);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:12px">'
+    +         '<button class="bg" onclick="_vhrDeleteManual()" style="font-size:11px">Delete that day\u2019s snapshot</button>'
+    +       '</div>'
+    +     '</div>'
+    +     '<div style="font-size:10px;color:var(--dim);margin-top:12px;line-height:1.5;font-style:italic">Why this happens: a snapshot recorded while the data was still loading (slow connection, mid-sync) can overwrite the day\u2019s real value. Since v142 those are rejected automatically \u2014 this tool cleans up history from before the guard existed.</div>'
+    +   '</div>'
+    + '</div>';
+}
+
+async function _vhrDeleteDates(dates) {
+  if (!dates.length) return 0;
+  VALUE_HISTORY = VALUE_HISTORY.filter(function(s){ return dates.indexOf(s.date) < 0; });
+  saveValueHistory();
+  let cloudOk = 0;
+  for (const d of dates) { if (await deleteSnapshotFromSupabase(d)) cloudOk++; }
+  if (typeof cvToast === 'function') cvToast('\ud83e\ude7a Removed ' + dates.length + ' snapshot' + (dates.length===1?'':'s') + (SB_URL ? ' (' + cloudOk + ' cloud-deleted)' : ''), 'ok');
+  if (typeof ST !== 'undefined' && ST.view === 'dash' && typeof renderDash === 'function') renderDash();
+  showValueHistoryRepair();   // refresh the list
+  return dates.length;
+}
+
+function _vhrDeleteChecked() {
+  const checked = Array.prototype.slice.call(document.querySelectorAll('.vhr-check:checked'));
+  const dates = checked.map(function(cb){ const a = (window._vhrAnomalies || [])[parseInt(cb.dataset.i, 10)]; return a && a.date; }).filter(Boolean);
+  if (!dates.length) { alert('Nothing checked.'); return; }
+  _vhrDeleteDates(dates);
+}
+
+function _vhrDeleteManual() {
+  const d = (document.getElementById('vhr-manual-date') || {}).value;
+  if (!d) { alert('Pick a date.'); return; }
+  if (!VALUE_HISTORY.some(function(s){ return s.date === d; })) { alert('No snapshot exists for ' + d + '.'); return; }
+  if (!confirm('Delete the ' + d + ' snapshot locally and from the cloud?')) return;
+  _vhrDeleteDates([d]);
 }
 
 // #endregion [PENDING-STATE]
@@ -7085,6 +7224,11 @@ async function loadFromSupabase() {
     }
 
     buildFlat();
+    // v142: signal that the FULL dataset is in memory. Value snapshots are
+    // refused before this point — the "portfolio cliff" artifact was a
+    // snapshot recorded from a partially-loaded dataset overwriting the
+    // day's good value and syncing everywhere.
+    window._CV_DATA_READY = true;
     updateBadges();            // updates the inventory count badge
     refreshSidebarTotal();     // updates sidebar value total
 
@@ -12563,6 +12707,22 @@ function _healthChecks() {
   // value across grade tiers: line chart of value vs. grade, example image
   // from Wikipedia, and the full tier price list. Powered by the existing
   // PriceCharting integration (paid token required).
+  // v142: value-history repair — fix portfolio-chart artifacts
+  (function(){
+    let n = 0;
+    try { n = (typeof _vhFindAnomalies === 'function') ? _vhFindAnomalies().length : 0; } catch (e) {}
+    checks.push({
+      id: 'value-history-repair',
+      label: 'Portfolio Chart Repair',
+      desc: (n > 0 ? '\u26a0 ' + n + ' bad snapshot' + (n===1?'':'s') + ' detected in the value history (zero/negative or single-day collapse). ' : 'Value history looks clean. ')
+            + 'Removes chart artifacts locally and from the cloud; new bad snapshots are auto-rejected since v142.',
+      icon: '\ud83e\ude7a',
+      count: n > 0 ? n : null,
+      action: function(){ if (typeof showValueHistoryRepair === 'function') showValueHistoryRepair(); },
+      countable: n > 0
+    });
+  })();
+
   // v138: AI Provider Test Bench — diagnose accuracy per provider
   checks.push({
     id: 'ai-provider-test',
