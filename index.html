@@ -2012,7 +2012,7 @@ body.theme-modern-dark select option{
 // Bump this on every deploy so the user can see at a glance which build is
 // running in their browser. Surfaced in three places: the sidebar footer
 // (desktop), the mobile header badge, and the Settings → About section.
-const APP_VERSION = 'v144';
+const APP_VERSION = 'v145';
 const APP_BUILD_DATE = '2026-08-28';
 // Boot banner — makes the running build unambiguous in any console log or
 // screenshot, since stale-deploy confusion has bitten more than once.
@@ -2196,7 +2196,14 @@ async function ksPush() {
                  'Content-Type': 'application/json', 'Prefer': 'resolution=merge-duplicates' },
       body: JSON.stringify({ id: 'default', blob: blob, updated_at: new Date().toISOString() })
     });
-    if (!r.ok) { console.warn('[keysync] push failed HTTP', r.status, '\u2014 is the app_settings table created?'); return false; }
+    if (!r.ok) {
+      let code = '';
+      try { const j = await r.json(); code = j.code || j.message || ''; } catch (e) {}
+      window._ksLastErr = { status: r.status, code: String(code) };
+      console.warn('[keysync] push failed HTTP', r.status, code);
+      return false;
+    }
+    window._ksLastErr = null;
     console.log('[keysync] settings pushed (encrypted)');
     return true;
   } catch (e) { console.warn('[keysync] push error:', e.message); return false; }
@@ -2255,9 +2262,16 @@ async function ksEnableFromUI() {
   if (msg) { msg.textContent = 'Encrypting & pushing\u2026'; msg.style.color = 'var(--dim)'; }
   const ok = await ksPush();
   if (msg) {
+    const le = window._ksLastErr || {};
+    let failText = '\u2717 Push failed (HTTP ' + (le.status || '?') + ').';
+    if (le.status === 404 || /PGRST205|does not exist|Could not find the table/i.test(le.code || '')) {
+      failText = '\u2717 The app_settings table does not exist yet \u2014 open Supabase \u2192 SQL Editor, run the SQL below, then Re-push.';
+    } else if (le.status === 401 || le.status === 403 || /42501|row-level security|permission denied/i.test(le.code || '')) {
+      failText = '\u2717 The table exists but Row Level Security is blocking writes (Supabase\u2019s Table Editor enables RLS by default). Run in SQL Editor: alter table app_settings disable row level security; \u2014 then Re-push. The blob is ciphertext, so this is safe.';
+    }
     msg.textContent = ok
       ? '\u2713 Pushed. On your other device: same section \u2192 enter this passphrase \u2192 Pull to This Device.'
-      : '\u2717 Push failed \u2014 create the app_settings table (SQL below), then try again.';
+      : failText;
     msg.style.color = ok ? 'var(--green)' : 'var(--red)';
   }
 }
@@ -14724,7 +14738,7 @@ function renderSettings(){
         + '</div>'
         + '<div id="ks-msg" style="font-size:11px;min-height:14px;margin-bottom:8px"></div>'
         + '<details><summary style="font-size:11px;color:var(--dim);cursor:pointer">One-time table setup (Supabase SQL)</summary>'
-        + '<pre style="font-size:10px;background:var(--bg4);padding:10px;border-radius:5px;overflow-x:auto;margin-top:6px;color:var(--muted)">create table if not exists app_settings (\n  id text primary key,\n  blob text,\n  updated_at timestamptz default now()\n);</pre>'
+        + '<pre style="font-size:10px;background:var(--bg4);padding:10px;border-radius:5px;overflow-x:auto;margin-top:6px;color:var(--muted)">create table if not exists app_settings (\n  id text primary key,\n  blob text,\n  updated_at timestamptz default now()\n);\nalter table app_settings disable row level security;</pre>'
         + '<div style="font-size:10px;color:var(--dim);margin-top:4px">Run once in Supabase \u2192 SQL Editor. The stored blob is ciphertext \u2014 unreadable without your passphrase even with full table access.</div>'
         + '</details>'
         + '</div>';
