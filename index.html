@@ -1246,6 +1246,12 @@ body.theme-modern-dark select option{
   /* Bottom tab bar */
   #mobile-tabs {
     display: flex !important;
+    /* v143: 8 tabs now — the bar scrolls horizontally on narrow screens
+       instead of crushing labels into unreadable slivers. Scrollbar is
+       hidden; the half-visible last button is the scroll affordance. */
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
     position: fixed; bottom: 0; left: 0; right: 0;
     background: var(--bg2);
     border-top: 1px solid var(--border);
@@ -1260,9 +1266,12 @@ body.theme-modern-dark select option{
     transform: translateY(110%);
     pointer-events: none;
   }
+  #mobile-tabs::-webkit-scrollbar { display: none; }
   #mobile-tabs button {
-    flex: 1 1 0;
-    min-width: 0;                /* allow buttons to shrink past content width */
+    /* v143: fixed floor so 8 tabs stay tappable; extra width still shared
+       out on larger phones via flex-grow. */
+    flex: 1 0 auto;
+    min-width: 58px;
     background: transparent; border: 0; color: var(--muted);
     padding: 8px 2px; font-size: 10px;
     text-transform: uppercase; letter-spacing: .03em;
@@ -2003,7 +2012,7 @@ body.theme-modern-dark select option{
 // Bump this on every deploy so the user can see at a glance which build is
 // running in their browser. Surfaced in three places: the sidebar footer
 // (desktop), the mobile header badge, and the Settings → About section.
-const APP_VERSION = 'v142';
+const APP_VERSION = 'v144';
 const APP_BUILD_DATE = '2026-08-28';
 // Boot banner — makes the running build unambiguous in any console log or
 // screenshot, since stale-deploy confusion has bitten more than once.
@@ -2129,6 +2138,158 @@ const SYNC_KEYS = [
   'cv_pricecharting_token',   // v109 — PriceCharting API token
   'cv_sheet_overrides'
 ];
+
+// ═══════════════════════════════════════════════════════════════════════
+// ENCRYPTED CLOUD SETTINGS SYNC (v144)
+// Goal: enter API keys ONCE (any device) and have every device pick them
+// up automatically — WITHOUT ever putting plaintext keys in this public
+// file or in a table readable via the public anon key. Everything in
+// SYNC_KEYS is bundled, encrypted ON-DEVICE (AES-256-GCM, key derived
+// from a passphrase via PBKDF2/SHA-256 × 150k), and only the ciphertext
+// is stored in Supabase. A device that knows the passphrase (asked once,
+// then remembered) decrypts and applies. No passphrase → the blob is
+// noise, even to someone holding the anon key or this public file.
+// ═══════════════════════════════════════════════════════════════════════
+const KEYSYNC_TABLE = 'app_settings';
+
+function _ksBufToB64(buf) { return btoa(String.fromCharCode.apply(null, new Uint8Array(buf))); }
+function _ksB64ToBuf(b64) { const s = atob(b64); const a = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) a[i] = s.charCodeAt(i); return a; }
+
+async function _ksDeriveKey(pass, saltBuf) {
+  const mat = await crypto.subtle.importKey('raw', new TextEncoder().encode(pass), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt: saltBuf, iterations: 150000, hash: 'SHA-256' },
+    mat, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']
+  );
+}
+
+async function ksEncrypt(pass, plaintext) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv   = crypto.getRandomValues(new Uint8Array(12));
+  const key  = await _ksDeriveKey(pass, salt);
+  const ct   = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv }, key, new TextEncoder().encode(plaintext));
+  return JSON.stringify({ v: 1, salt: _ksBufToB64(salt), iv: _ksBufToB64(iv), ct: _ksBufToB64(ct) });
+}
+
+async function ksDecrypt(pass, blobStr) {
+  const b = JSON.parse(blobStr);
+  const key = await _ksDeriveKey(pass, _ksB64ToBuf(b.salt));
+  const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: _ksB64ToBuf(b.iv) }, key, _ksB64ToBuf(b.ct));
+  return new TextDecoder().decode(pt);
+}
+
+function _ksGatherSettings() {
+  const out = {};
+  SYNC_KEYS.forEach(function(k){ const v = localStorage.getItem(k); if (v != null) out[k] = v; });
+  return out;
+}
+
+async function ksPush() {
+  const pass = localStorage.getItem('cv_keysync_pass');
+  if (!pass || !SB_URL || !SB_KEY) return false;
+  try {
+    const blob = await ksEncrypt(pass, JSON.stringify(_ksGatherSettings()));
+    const url = SB_URL.replace(/\/+$/, '') + '/rest/v1/' + KEYSYNC_TABLE + '?on_conflict=id';
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'apikey': SB_KEY, 'Authorization': 'Bearer ' + SB_KEY,
+                 'Content-Type': 'application/json', 'Prefer': 'resolution=merge-duplicates' },
+      body: JSON.stringify({ id: 'default', blob: blob, updated_at: new Date().toISOString() })
+    });
+    if (!r.ok) { console.warn('[keysync] push failed HTTP', r.status, '\u2014 is the app_settings table created?'); return false; }
+    console.log('[keysync] settings pushed (encrypted)');
+    return true;
+  } catch (e) { console.warn('[keysync] push error:', e.message); return false; }
+}
+
+async function _ksFetchBlob() {
+  if (!SB_URL || !SB_KEY) return null;
+  try {
+    const url = SB_URL.replace(/\/+$/, '') + '/rest/v1/' + KEYSYNC_TABLE + '?id=eq.default&select=blob,updated_at';
+    const r = await fetch(url, { headers: { 'apikey': SB_KEY, 'Authorization': 'Bearer ' + SB_KEY } });
+    if (!r.ok) return null;
+    const rows = await r.json();
+    return rows && rows[0] ? rows[0] : null;
+  } catch (e) { return null; }
+}
+
+async function ksPull(interactivePass) {
+  const row = await _ksFetchBlob();
+  if (!row || !row.blob) return 'no-blob';
+  const pass = interactivePass || localStorage.getItem('cv_keysync_pass');
+  if (!pass) return 'no-pass';
+  let json;
+  try { json = await ksDecrypt(pass, row.blob); }
+  catch (e) { return 'bad-pass'; }
+  if (interactivePass) localStorage.setItem('cv_keysync_pass', interactivePass);
+  let changed = 0;
+  try {
+    const obj = JSON.parse(json);
+    Object.keys(obj).forEach(function(k){
+      if (SYNC_KEYS.indexOf(k) < 0) return;              // allowlist only
+      if (localStorage.getItem(k) !== obj[k]) { localStorage.setItem(k, obj[k]); changed++; }
+    });
+  } catch (e) { return 'error'; }
+  if (changed > 0) { console.log('[keysync] applied ' + changed + ' synced setting(s)'); return 'applied'; }
+  return 'unchanged';
+}
+
+async function ksBootPull() {
+  if (!SB_URL || !SB_KEY) return;
+  const res = await ksPull(null);
+  if (res === 'applied') {
+    if (typeof cvToast === 'function') cvToast('\u2601 Settings synced from cloud (keys up to date)', 'ok');
+    if (typeof ST !== 'undefined' && ST.view === 'settings' && typeof renderSettings === 'function') renderSettings();
+  } else if (res === 'no-pass') {
+    console.log('[keysync] encrypted settings exist \u2014 enter the sync passphrase in Settings \u2192 Cloud Key Sync');
+    if (typeof cvToast === 'function') cvToast('\u2601 Encrypted settings found \u2014 enter your sync passphrase in Settings to pull keys onto this device', 'warn');
+  }
+}
+
+async function ksEnableFromUI() {
+  const passEl = document.getElementById('ks-pass');
+  const msg = document.getElementById('ks-msg');
+  const pass = (passEl && passEl.value || '').trim() || localStorage.getItem('cv_keysync_pass') || '';
+  if (pass.length < 6) { if (msg) { msg.textContent = 'Passphrase must be at least 6 characters.'; msg.style.color = 'var(--red)'; } return; }
+  localStorage.setItem('cv_keysync_pass', pass);
+  if (msg) { msg.textContent = 'Encrypting & pushing\u2026'; msg.style.color = 'var(--dim)'; }
+  const ok = await ksPush();
+  if (msg) {
+    msg.textContent = ok
+      ? '\u2713 Pushed. On your other device: same section \u2192 enter this passphrase \u2192 Pull to This Device.'
+      : '\u2717 Push failed \u2014 create the app_settings table (SQL below), then try again.';
+    msg.style.color = ok ? 'var(--green)' : 'var(--red)';
+  }
+}
+
+async function ksPullFromUI() {
+  const passEl = document.getElementById('ks-pass');
+  const msg = document.getElementById('ks-msg');
+  const pass = (passEl && passEl.value || '').trim() || localStorage.getItem('cv_keysync_pass') || '';
+  if (!pass) { if (msg) { msg.textContent = 'Enter the passphrase you used on the other device.'; msg.style.color = 'var(--red)'; } return; }
+  if (msg) { msg.textContent = 'Pulling\u2026'; msg.style.color = 'var(--dim)'; }
+  const res = await ksPull(pass);
+  const texts = {
+    'applied':   '\u2713 Settings & keys applied on this device.',
+    'unchanged': '\u2713 Already in sync \u2014 nothing to change.',
+    'no-blob':   'No cloud settings found yet \u2014 push from the device that has your keys first.',
+    'bad-pass':  '\u2717 Wrong passphrase \u2014 it must match exactly what you set on the other device.',
+    'error':     '\u2717 Blob unreadable \u2014 re-push from the source device.',
+    'no-pass':   'Enter the passphrase first.'
+  };
+  if (msg) { msg.textContent = texts[res] || res; msg.style.color = (res === 'applied' || res === 'unchanged') ? 'var(--green)' : 'var(--red)'; }
+  if (res === 'applied') setTimeout(function(){ renderSettings(); }, 800);
+}
+
+async function ksDisableFromUI() {
+  if (!confirm('Disable cloud key sync?\n\nThis deletes the encrypted blob from Supabase and forgets the passphrase on THIS device. Keys already applied to devices stay in place.')) return;
+  localStorage.removeItem('cv_keysync_pass');
+  try {
+    const url = SB_URL.replace(/\/+$/, '') + '/rest/v1/' + KEYSYNC_TABLE + '?id=eq.default';
+    await fetch(url, { method: 'DELETE', headers: { 'apikey': SB_KEY, 'Authorization': 'Bearer ' + SB_KEY } });
+  } catch (e) {}
+  renderSettings();
+}
 
 function b64UrlEncode(str) {
   return btoa(unescape(encodeURIComponent(str)))
@@ -3721,6 +3882,9 @@ function updateBadges(){
     const dupCount = countDupGroups();
     dupBadge.textContent = dupCount;
     dupBadge.style.display = dupCount > 0 ? '' : 'none';
+    // v143: mirror onto the mobile tab bar
+    const mDup = document.getElementById('m-b-dups');
+    if (mDup) { mDup.textContent = dupCount; mDup.style.display = dupCount > 0 ? '' : 'none'; }
   }
   // v94: Data Health badge — sums all countable checks (missing cost / desc
   // / images + dup groups + pending sync). Skip during initial load to avoid
@@ -3730,6 +3894,9 @@ function updateBadges(){
     const healthCount = _healthBadgeCount();
     healthBadge.textContent = healthCount > 9999 ? '9999+' : healthCount.toLocaleString();
     healthBadge.style.display = healthCount > 0 ? '' : 'none';
+    // v143: mirror onto the mobile tab bar
+    const mHealth = document.getElementById('m-b-health');
+    if (mHealth) { mHealth.textContent = healthBadge.textContent; mHealth.style.display = healthCount > 0 ? '' : 'none'; }
   }
   // Note: checkSyncState() intentionally NOT called here.
   // Badges reflect local UI state only. Connection status is managed by the sync banner.
@@ -7229,6 +7396,8 @@ async function loadFromSupabase() {
     // snapshot recorded from a partially-loaded dataset overwriting the
     // day's good value and syncing everywhere.
     window._CV_DATA_READY = true;
+    // v144: encrypted settings auto-pull (silent when passphrase known)
+    if (typeof ksBootPull === 'function') ksBootPull();
     updateBadges();            // updates the inventory count badge
     refreshSidebarTotal();     // updates sidebar value total
 
@@ -14541,6 +14710,26 @@ function renderSettings(){
         +'</div>';
     })(),
 
+    // ── Cloud Key Sync (v144: encrypted, automatic across devices) ────
+    (function(){
+      const hasPass = !!localStorage.getItem('cv_keysync_pass');
+      return '<div class="stt">Cloud Key Sync' + (hasPass ? ' <span style="color:var(--green)">\u2713 on</span>' : '') + '</div>'
+        + '<div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:18px">'
+        + '<div style="font-size:12px;color:var(--muted);line-height:1.7;margin-bottom:12px">Enter your API keys on ONE device and every other device picks them up automatically at launch. The whole settings bundle (AI keys, database config, preferences) is encrypted <em>on this device</em> \u2014 AES-256-GCM with a passphrase only you know; only ciphertext ever touches the cloud. Keys are never hardcoded in the app file: the repo is public and public repos are scraped for keys within minutes.</div>'
+        + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">'
+        +   '<input type="password" id="ks-pass" placeholder="' + (hasPass ? 'Passphrase saved on this device' : 'Sync passphrase (6+ chars)') + '" style="flex:1;min-width:180px;padding:9px 12px;background:var(--bg4);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:13px">'
+        +   '<button class="bp" onclick="ksEnableFromUI()" style="font-size:12px">' + (hasPass ? 'Re-push Now' : 'Enable & Push') + '</button>'
+        +   '<button class="bg" onclick="ksPullFromUI()" style="font-size:12px">Pull to This Device</button>'
+        +   (hasPass ? '<button class="bg" onclick="ksDisableFromUI()" style="font-size:12px;color:var(--red)">Disable</button>' : '')
+        + '</div>'
+        + '<div id="ks-msg" style="font-size:11px;min-height:14px;margin-bottom:8px"></div>'
+        + '<details><summary style="font-size:11px;color:var(--dim);cursor:pointer">One-time table setup (Supabase SQL)</summary>'
+        + '<pre style="font-size:10px;background:var(--bg4);padding:10px;border-radius:5px;overflow-x:auto;margin-top:6px;color:var(--muted)">create table if not exists app_settings (\n  id text primary key,\n  blob text,\n  updated_at timestamptz default now()\n);</pre>'
+        + '<div style="font-size:10px;color:var(--dim);margin-top:4px">Run once in Supabase \u2192 SQL Editor. The stored blob is ciphertext \u2014 unreadable without your passphrase even with full table access.</div>'
+        + '</details>'
+        + '</div>';
+    })(),
+
     // ── Sync Settings (transfer config between devices) ──────────────
     (function() {
       const out = syncBuildExport();
@@ -17742,6 +17931,7 @@ function saveAIKey() {
   }
   localStorage.setItem('cv_ai_provider', provider);
   localStorage.setItem('cv_ai_key_' + provider, key);
+  if (typeof ksPush === 'function') ksPush();   // v144: keep other devices current (no-op without passphrase)
   localStorage.setItem('cv_ai_model_' + provider, model);
   // Persist fallback config (v77) — these inputs only exist after the user
   // opens Settings, so defensively check before reading.
@@ -18255,6 +18445,8 @@ async function syncShowQRCode() {
   <button data-v="inv" onclick="nav('inv')"><span class="ic">📋</span><span>Inventory</span><span class="bdg" id="m-b-total">0</span></button>
   <button data-v="add" onclick="nav('add')"><span class="ic">＋</span><span>Add</span></button>
   <button data-v="labels" onclick="nav('labels')"><span class="ic">🏷️</span><span>Labels</span><span class="bdg" id="m-b-labels">0</span></button>
+  <button data-v="dups" onclick="nav('dups')"><span class="ic">🔁</span><span>Dups</span><span class="bdg" id="m-b-dups" style="display:none">0</span></button>
+  <button data-v="health" onclick="nav('health')"><span class="ic">🩺</span><span>Health</span><span class="bdg" id="m-b-health" style="display:none">0</span></button>
   <button data-v="breakdown" onclick="nav('breakdown')"><span class="ic">📊</span><span>Breakdown</span></button>
   <button data-v="settings" onclick="nav('settings')"><span class="ic">⚙️</span><span>Settings</span></button>
 </div>
