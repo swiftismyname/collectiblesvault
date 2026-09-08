@@ -2012,7 +2012,7 @@ body.theme-modern-dark select option{
 // Bump this on every deploy so the user can see at a glance which build is
 // running in their browser. Surfaced in three places: the sidebar footer
 // (desktop), the mobile header badge, and the Settings → About section.
-const APP_VERSION = 'v145';
+const APP_VERSION = 'v146';
 const APP_BUILD_DATE = '2026-08-28';
 // Boot banner — makes the running build unambiguous in any console log or
 // screenshot, since stale-deploy confusion has bitten more than once.
@@ -2122,14 +2122,12 @@ const SYNC_KEYS = [
   'cv_ai_key_anthropic',
   'cv_ai_key_groq',           // v101
   'cv_ai_key_openrouter',     // v101
-  'cv_ai_key_grok',           // v124
   'cv_ai_key_openai',         // v127
   'cv_ai_key_mistral',        // v131
   'cv_ai_model_gemini',
   'cv_ai_model_anthropic',
   'cv_ai_model_groq',         // v101
   'cv_ai_model_openrouter',   // v101
-  'cv_ai_model_grok',         // v124
   'cv_ai_model_openai',       // v131
   'cv_ai_model_mistral',      // v131
   'cv_ai_fallback_provider',  // legacy single-fallback (v77+)
@@ -14548,16 +14546,6 @@ function renderSettings(){
           keyHelp: 'Sign up at console.mistral.ai, activate the free Experiment plan (phone verification required), then create a key under API Keys. The free tier includes ALL Mistral models \u2014 mistral-medium-latest (Medium 3, their frontier multimodal) is the strongest slab/label reader. Rate limit is ~2 requests/min, fine for single scans; batch runs may occasionally wait.',
           models: (typeof AI_MODELS !== 'undefined' ? AI_MODELS.mistral : ['pixtral-large-latest'])
         },
-        // v124: xAI Grok — OpenAI-compatible API at api.x.ai
-        grok: {
-          label: 'xAI Grok',
-          cost: 'Paid API \u00b7 xAI periodically offers <strong style="color:var(--green)">free promotional credits</strong> (e.g. monthly credit with data sharing opt-in) via console.x.ai \u2014 check your account',
-          keyUrl: 'https://console.x.ai',
-          keyHost: 'console.x.ai',
-          keyPrefix: 'xai-\u2026',
-          keyHelp: '\u26a0 api.x.ai blocks browser calls (no CORS) \u2014 a raw xai- key cannot work here. WORKING PATH: deploy the grok-proxy Supabase Edge Function (30 lines, ships with the app docs), set your xai- key as a server secret there, then paste the proxy address into THIS field as: https://YOUR-REF.supabase.co/functions/v1/grok-proxy|YOUR_SHARED_TOKEN \u2014 the app detects the https:// prefix and routes through your proxy; your xai- key never touches the browser. Grok\u2019s vision model reads coin/currency photos well and slots in as another fallback before any paid Anthropic calls.',
-          models: (typeof AI_MODELS !== 'undefined' ? AI_MODELS.grok : ['grok-2-vision-1212'])
-        },
         // v127: OpenAI — cheapest reliable paid vision via gpt-4o-mini
         openai: {
           label: 'OpenAI',
@@ -16281,7 +16269,7 @@ const AI_MODELS = {
   // chain walks down this ladder before ever leaving Gemini, so the best
   // identifier keeps answering. Pro sits last: highest accuracy, smallest
   // free quota — the closer.
-  gemini:     ['gemini-flash-latest', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-2.5-pro'],
+  gemini:     ['gemini-flash-latest', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-2.5-pro'],
   // Groq vision models (verified Aug 2026). Groq retired Llama 4 Scout
   // (June 17 2026) and Maverick (Mar 9 2026) for free/dev tiers; their
   // gpt-oss replacements are TEXT-ONLY. qwen3.6-27b is the current
@@ -16295,18 +16283,12 @@ const AI_MODELS = {
   // entries behind it are the current free vision models if the user
   // prefers a fixed choice.
   openrouter: ['minimax/minimax-m3:free', 'google/gemma-4-31b-it:free', 'google/gemma-4-26b-a4b-it:free', 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free', 'openrouter/free'],
-  // v124: xAI Grok vision models. grok-2-vision-1212 is the stable vision
-  // model; keys start with "xai-". The API is OpenAI-compatible.
   // v137: Pixtral Large DEPRECATED per Mistral's own docs (the -latest
   // alias now 400s as invalid_model). Current vision-capable IDs:
   // mistral-medium-latest = Medium 3, their frontier multimodal — the
   // accuracy pick; small-latest has vision too; pixtral-12b-2409 remains
   // served as the Apache-2 open model.
   mistral:    ['mistral-medium-latest', 'mistral-small-latest', 'pixtral-12b-2409'],
-  // v137: grok-2-vision-1212 fully retired (July 2026 docs). Grok 4 family
-  // is multimodal. 4.3 = universal + cheapest ($1.25/$2.50 per M); 4.5 has
-  // image input but is EU-restricted; 4.6 = newest flagship ($2/$6).
-  grok:       ['grok-4.3', 'grok-4.5', 'grok-4.6'],
   // v127: OpenAI vision. gpt-4o-mini is the cheap workhorse (~$0.002/scan);
   // if OpenAI retires an ID, the rot auto-advance walks this list.
   openai:     ['gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini'],
@@ -16317,7 +16299,6 @@ const AI_MODEL_DEFAULTS = {
   groq:       'qwen/qwen3.6-27b',
   openrouter: 'minimax/minimax-m3:free',
   mistral:    'mistral-medium-latest',
-  grok:       'grok-4.3',
   openai:     'gpt-4o-mini',
   anthropic:  'claude-sonnet-4-5'
 };
@@ -16326,7 +16307,6 @@ const AI_PROVIDER_LABELS = {
   groq:       'Groq (free tier, fast)',
   openrouter: 'OpenRouter (free models)',
   mistral:    'Mistral (free tier)',
-  grok:       'xAI Grok',
   openai:     'OpenAI (paid, cheap)',
   anthropic:  'Anthropic Claude (paid)'
 };
@@ -16342,6 +16322,9 @@ const AI_PROVIDER_LABELS = {
 // them also drops them from the Settings dropdown, which shrinks the UI
 // to what actually matters. Their code stays dormant for the future.
 const AI_PROVIDER_FALLBACK_ORDER = ['gemini', 'groq', 'mistral', 'openrouter'];
+// v146: grok removed entirely — scrub any stale saved values so nothing
+// lingers in storage or settings backups going forward.
+try { localStorage.removeItem('cv_ai_key_grok'); localStorage.removeItem('cv_ai_model_grok'); } catch (e) {}
 let AI_FRONT_IMG = null;   // data URL
 let AI_BACK_IMG  = null;
 let AI_LAST_RESULT = null;
@@ -16634,7 +16617,14 @@ function aiSetMode(mode) {
 }
 
 function aiCurrentProvider() {
-  return localStorage.getItem('cv_ai_provider') || AI_PROVIDER_DEFAULT;
+  // v146: heal stale selections (e.g. a removed provider like grok saved
+  // as primary) — Gemini is the primary, always in the chain's pole spot.
+  const p = localStorage.getItem('cv_ai_provider') || AI_PROVIDER_DEFAULT;
+  if (AI_PROVIDER_FALLBACK_ORDER.indexOf(p) < 0) {
+    localStorage.setItem('cv_ai_provider', 'gemini');
+    return 'gemini';
+  }
+  return p;
 }
 function aiCurrentModel() {
   const p = aiCurrentProvider();
@@ -16754,7 +16744,6 @@ function _aiDispatch(provider, key, model, frontImg, backImg, onStatus) {
     case 'groq':       return aiAnalyzeGroq(key, model, frontImg, backImg, onStatus);
     case 'openrouter': return aiAnalyzeOpenRouter(key, model, frontImg, backImg, onStatus);
     case 'mistral':    return aiAnalyzeMistral(key, model, frontImg, backImg, onStatus);
-    case 'grok':       return aiAnalyzeGrok(key, model, frontImg, backImg, onStatus);
     case 'openai':     return aiAnalyzeOpenAI(key, model, frontImg, backImg, onStatus);
     case 'gemini':
     default:           return aiAnalyzeGemini(key, model, frontImg, backImg, onStatus);
@@ -16815,7 +16804,7 @@ async function _aiImagesForProvider(provider, front, back, forceTiny) {
 // rate-limits, before walking down the model ladder.
 function _aiKeysFor(provider) {
   const raw = aiKeyFor(provider) || '';
-  if (/^https:\/\//i.test(raw)) return [raw];   // grok proxy value — never split
+  if (/^https:\/\//i.test(raw)) return [raw];   // URL-style values — never split
   return raw.split(/[\s,]+/).filter(Boolean);
 }
 
@@ -16826,6 +16815,11 @@ let _aiQuotaCooldown = {};
 let _aiNetBlocked = {};
 function _aiIsNetworkBlocked(msg) {
   return /network error|Failed to fetch|Load failed|NetworkError|CORS/i.test(String(msg || ''));
+}
+// v146: Google capacity-shed (503) — distinct from quota. Key rotation
+// is pointless (same serving pool per key); the MODEL ladder is the fix.
+function _aiIsOverloaded(msg) {
+  return /overloaded|\b503\b|UNAVAILABLE|timed out after 35s/i.test(String(msg || ''));
 }
 function _aiIsQuotaError(msg) {
   return /rate-limited|quota|RESOURCE_EXHAUSTED|429/i.test(String(msg || ''));
@@ -16926,13 +16920,14 @@ async function aiAnalyzeWithFallback(frontImg, backImg, onStatus) {
       // model from AI_MODELS before falling through to the next provider.
       // Quota exhaustion → cool this provider down for 8 minutes so later
       // steps and subsequent runs stop stalling on doomed retries.
-      if (_aiIsQuotaError(err.message)) {
-        // v141: three-stage quota recovery, provider-generic.
-        // Stage 1 — NEXT KEY, same model: free quotas are per project/key,
-        //   so a second Gemini key resets every bucket.
+      if (_aiIsQuotaError(err.message) || _aiIsOverloaded(err.message)) {
+        // v141/v146: staged recovery. Quota → rotate key first (per-project
+        // buckets). Overloaded → SKIP key rotation (same capacity pool for
+        // every key) and go straight to the model ladder.
+        const _overload = _aiIsOverloaded(err.message) && !_aiIsQuotaError(err.message);
         const _qKeys = _aiKeysFor(step.provider);
         const _kIdx = step._keyIdx || 0;
-        if (_kIdx + 1 < _qKeys.length) {
+        if (!_overload && _kIdx + 1 < _qKeys.length) {
           chain.splice(i + 1, 0, Object.assign({}, step, { _keyIdx: _kIdx + 1, _quotaAdvance: true }));
           errors.push({ step: step, message: err.message.slice(0, 160) + ' \u2014 rotating to key #' + (_kIdx + 2) });
           continue;
@@ -16957,7 +16952,9 @@ async function aiAnalyzeWithFallback(frontImg, backImg, onStatus) {
           }
         }
         // Stage 3 — provider exhausted: cool it down, move on.
-        _aiQuotaCooldown[step.provider] = Date.now() + 8 * 60 * 1000;
+        // Overload cools briefly (capacity recovers in minutes); quota
+        // cools the full 8 (a burned minute/day bucket doesn't).
+        _aiQuotaCooldown[step.provider] = Date.now() + (_overload ? 3 : 8) * 60 * 1000;
       }
       // Network-level failure on repeat = almost certainly CORS-blocked
       // (grok/openai from a browser). Mark for session skip and annotate.
@@ -17255,7 +17252,22 @@ async function _aiFetchWithRetry(url, opts, providerLabel, onStatus) {
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     let r;
     try {
-      r = await fetch(url, opts);
+      // v146: hard 35s timeout — a hung request is indistinguishable from
+      // "the AI stopped working". Aborts are treated like overload: one
+      // more try, then throw into the model ladder.
+      const _tc = new AbortController();
+      const _tt = setTimeout(function(){ _tc.abort(); }, 35000);
+      try {
+        r = await fetch(url, Object.assign({}, opts, { signal: _tc.signal }));
+      } catch (fe) {
+        clearTimeout(_tt);
+        if (fe && fe.name === 'AbortError') {
+          if (attempt < 2) { if (typeof onStatus === 'function') onStatus(providerLabel + ' timed out \u2014 retrying\u2026'); continue; }
+          throw new Error(providerLabel + ' timed out after 35s (no response) \u2014 treating as overloaded.');
+        }
+        throw fe;
+      }
+      clearTimeout(_tt);
     } catch (netErr) {
       // Network-level failure (DNS, offline, CORS preflight). Treat as retryable.
       lastErr = new Error(providerLabel + ' network error: ' + netErr.message);
@@ -17279,7 +17291,10 @@ async function _aiFetchWithRetry(url, opts, providerLabel, onStatus) {
     // throw so the fallback chain (and the v127 cooldown) take over. This
     // is the "Gemini keeps timing out" feel: it wasn't timing out, it was
     // burning 17 seconds of doomed backoff per model.
-    const _maxForStatus = (r.status === 429) ? 2 : MAX_ATTEMPTS;
+    // v146: 503 "overloaded" also fails fast — Google is capacity-shedding
+    // that MODEL; retrying the same pool is doomed, but the chain's model
+    // ladder (flash-lite, 2.0) is usually fine. 2 attempts, then ladder.
+    const _maxForStatus = (r.status === 429 || r.status === 503) ? 2 : MAX_ATTEMPTS;
     if (RETRY_CODES.has(r.status) && attempt < _maxForStatus) {
       const wait = BACKOFFS[attempt - 1];
       const friendly = r.status === 503 ? 'overloaded' :
@@ -17301,6 +17316,9 @@ async function _aiFetchWithRetry(url, opts, providerLabel, onStatus) {
       throw new Error(providerLabel + ' is overloaded (tried ' + MAX_ATTEMPTS + 'x over ' + Math.round(BACKOFFS.reduce((a,b)=>a+b,0)/1000) + 's). Servers are temporarily at capacity.');
     }
     if (r.status === 429) {
+      if (r.status === 503) {
+        throw new Error(providerLabel + ' overloaded (Google capacity, tried ' + _maxForStatus + 'x) \u2014 stepping down the model ladder.');
+      }
       throw new Error(providerLabel + ' rate-limited (tried ' + _maxForStatus + 'x \u2014 failing fast; exhausted quota won\u2019t clear in seconds). API quota for the current minute/day is exhausted.');
     }
     if (r.status === 401 || r.status === 403) {
@@ -17607,32 +17625,6 @@ async function aiAnalyzeMistral(key, model, frontImg, backImg, onStatus) {
   );
 }
 
-async function aiAnalyzeGrok(key, model, frontImg, backImg, onStatus) {
-  // v132: PROXY MODE. api.x.ai sends no CORS headers, so direct browser
-  // calls can never work. If the "key" field holds a URL in the form
-  //   https://<project>.supabase.co/functions/v1/grok-proxy|SHARED_TOKEN
-  // the app routes through the user's own Supabase Edge Function, which
-  // injects the real xai- key server-side (see grok-proxy-index.ts).
-  // The pipe-separated token authenticates the app to the proxy.
-  if (/^https:\/\//i.test(key)) {
-    const sep = key.indexOf('|');
-    const proxyUrl = sep > 0 ? key.slice(0, sep).trim() : key.trim();
-    const token    = sep > 0 ? key.slice(sep + 1).trim() : '';
-    return _aiAnalyzeOpenAICompatible(
-      proxyUrl,
-      token ? { 'x-cv-token': token } : {},
-      model, frontImg, backImg, 'xAI Grok', onStatus
-    );
-  }
-  // Direct mode kept for anyone running the app outside a browser context.
-  return _aiAnalyzeOpenAICompatible(
-    'https://api.x.ai/v1/chat/completions',
-    { 'Authorization': 'Bearer ' + key },
-    model, frontImg, backImg, 'xAI Grok', onStatus
-  );
-}
-
-// \u2500\u2500 OpenAI (v127) \u2500\u2500 gpt-4o-mini: cheap, reliable JSON + vision \u2500\u2500\u2500\u2500\u2500\u2500
 async function aiAnalyzeOpenAI(key, model, frontImg, backImg, onStatus) {
   return _aiAnalyzeOpenAICompatible(
     'https://api.openai.com/v1/chat/completions',
@@ -17913,23 +17905,6 @@ function saveAIKey() {
   // shown in the console's key LIST) instead of the secret itself, which
   // is displayed exactly once at creation.
   const _uuidLike = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(key);
-  if (provider === 'grok' && /^https:\/\//i.test(key)) {
-    // v132: proxy-mode value — "https://…/grok-proxy|SHARED_TOKEN". Light
-    // sanity check only; the function itself validates the token.
-    if (key.indexOf('|') < 8 && msg) {
-      msg.textContent = 'Proxy format: https://\u2026/grok-proxy|YOUR_SHARED_TOKEN (URL, pipe, token).';
-      msg.style.color = 'var(--red)';
-      return;
-    }
-  } else if (provider === 'grok' && !key.startsWith('xai-')) {
-    if (msg) {
-      msg.textContent = _uuidLike
-        ? 'That looks like a key ID, not the secret. xAI secrets start with "xai-" and are shown once at creation \u2014 create a new key at console.x.ai and copy the xai-\u2026 value.'
-        : 'xAI Grok keys start with "xai-".';
-      msg.style.color = 'var(--red)';
-    }
-    return;
-  }
   if (provider === 'openai' && !key.startsWith('sk-')) {
     if (msg) {
       msg.textContent = _uuidLike
