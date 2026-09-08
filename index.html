@@ -1854,6 +1854,7 @@ body.theme-modern-dark select option{
       <div class="ai-mode-toggle" role="tablist" aria-label="Scan mode">
         <button type="button" class="ai-mode-btn on" data-mode="coin"     onclick="aiSetMode('coin')"     role="tab"><span class="mode-glyph">⊙</span> Coin</button>
         <button type="button" class="ai-mode-btn"    data-mode="currency" onclick="aiSetMode('currency')" role="tab"><span class="mode-glyph">▭</span> Currency</button>
+        <button type="button" class="ai-mode-btn"    data-mode="multi"    onclick="aiSetMode('multi')"    role="tab"><span class="mode-glyph">⊙⊙</span> Multi-Coin</button>
       </div>
 
       <div class="ai-slots" id="ai-slots-container" data-mode="coin">
@@ -2012,7 +2013,7 @@ body.theme-modern-dark select option{
 // Bump this on every deploy so the user can see at a glance which build is
 // running in their browser. Surfaced in three places: the sidebar footer
 // (desktop), the mobile header badge, and the Settings → About section.
-const APP_VERSION = 'v147';
+const APP_VERSION = 'v150';
 const APP_BUILD_DATE = '2026-08-28';
 // Boot banner — makes the running build unambiguous in any console log or
 // screenshot, since stale-deploy confusion has bitten more than once.
@@ -2130,6 +2131,7 @@ const SYNC_KEYS = [
   'cv_ai_model_openrouter',   // v101
   'cv_ai_model_openai',       // v131
   'cv_ai_model_mistral',      // v131
+  'cv_ai_chain_order',        // v150: drag-card chain order
   'cv_ai_fallback_provider',  // legacy single-fallback (v77+)
   'cv_ai_fallback_model',     // legacy single-fallback (v77+)
   'cv_ai_fallback_chain',     // v101 — JSON array, supersedes legacy keys if set
@@ -14558,12 +14560,12 @@ function renderSettings(){
         },
         anthropic: {
           label: 'Anthropic Claude',
-          cost: 'Paid · roughly <strong>$0.01–0.03</strong> per scan · pay-as-you-go after free credits',
+          cost: '<strong style="color:var(--green)">~$5 FREE credit on new Console accounts</strong> (no card required) \u2014 on the Haiku default that\u2019s roughly a thousand scans. After the credit: pay-as-you-go, about half a cent per Haiku scan. Runs only as the last accurate fallback, so the credit lasts.',
           keyUrl: 'https://console.anthropic.com/settings/keys',
           keyHost: 'console.anthropic.com',
-          keyPrefix: 'sk-ant-…',
-          keyHelp: 'Create an Anthropic account, generate a key in Settings → API Keys.',
-          models: (typeof AI_MODELS !== 'undefined' ? AI_MODELS.anthropic : ['claude-sonnet-4-5'])
+          keyPrefix: 'sk-ant-\u2026',
+          keyHelp: 'Create a Console account at console.anthropic.com \u2014 new accounts include ~$5 of free API credit, no card needed. Settings \u2192 API Keys \u2192 Create Key (shown once, starts sk-ant-) \u2192 paste below. NOTE: a Claude Pro/Max chat subscription is a separate product and does not include API credit \u2014 the free credit comes with the Console account itself. Default model is Haiku 4.5: accurate on slab text and ~3\u00d7 cheaper than Sonnet, so the credit stretches furthest.',
+          models: (typeof AI_MODELS !== 'undefined' ? AI_MODELS.anthropic : ['claude-haiku-4-5'])
         }
       };
       const info = providerInfo[provider];
@@ -14606,11 +14608,14 @@ function renderSettings(){
         +'<div style="margin-bottom:14px">'
         +'<div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--dim);margin-bottom:5px">AI Provider</div>'
         +'<select id="ai-provider-input" onchange="aiSwitchProvider(this.value)" style="width:100%;padding:9px 12px;background:var(--bg4);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:13px">'
-        +AI_PROVIDER_FALLBACK_ORDER.map(function(p){
+        +aiChainOrder().map(function(p){
             return '<option value="'+p+'"'+(provider===p?' selected':'')+'>'+e(AI_PROVIDER_LABELS[p]||p)+'</option>';
           }).join('')
         +'</select>'
         +'</div>'
+
+        // v150: drag-to-reorder chain cards
+        +_aiOrderCardsHtml()
 
         // Cost note — color the left border by tier: green for free providers,
         // gold for paid. Provider check is explicit since we have 3 free now.
@@ -16297,7 +16302,7 @@ const AI_MODELS = {
   // v127: OpenAI vision. gpt-4o-mini is the cheap workhorse (~$0.002/scan);
   // if OpenAI retires an ID, the rot auto-advance walks this list.
   openai:     ['gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini'],
-  anthropic:  ['claude-sonnet-4-5', 'claude-opus-4-5', 'claude-haiku-4-5']
+  anthropic:  ['claude-haiku-4-5', 'claude-sonnet-4-6', 'claude-sonnet-4-5']
 };
 const AI_MODEL_DEFAULTS = {
   gemini:     'gemini-flash-latest',
@@ -16305,7 +16310,7 @@ const AI_MODEL_DEFAULTS = {
   openrouter: 'minimax/minimax-m3:free',
   mistral:    'mistral-medium-latest',
   openai:     'gpt-4o-mini',
-  anthropic:  'claude-sonnet-4-5'
+  anthropic:  'claude-haiku-4-5'
 };
 const AI_PROVIDER_LABELS = {
   gemini:     'Google Gemini (free tier)',
@@ -16313,7 +16318,7 @@ const AI_PROVIDER_LABELS = {
   openrouter: 'OpenRouter (free models)',
   mistral:    'Mistral (free tier)',
   openai:     'OpenAI (paid, cheap)',
-  anthropic:  'Anthropic Claude (paid)'
+  anthropic:  'Anthropic Claude ($5 free credit)'
 };
 // Order for auto-building the fallback chain. Free providers come first so
 // users on free tiers don't accidentally hit a paid provider unless they
@@ -16326,7 +16331,43 @@ const AI_PROVIDER_LABELS = {
 // are browser-blocked without a proxy and Anthropic is paid — dropping
 // them also drops them from the Settings dropdown, which shrinks the UI
 // to what actually matters. Their code stays dormant for the future.
-const AI_PROVIDER_FALLBACK_ORDER = ['gemini', 'groq', 'mistral', 'openrouter'];
+// v149: Anthropic re-added as the CLOSER — new Console accounts include
+// ~$5 free API credit (no card), and on Haiku that's ~1,000 scans. It
+// runs only when every free provider has failed, and reads accurately
+// when it does. OpenRouter stays dead last per accuracy ordering.
+const AI_PROVIDER_FALLBACK_ORDER = ['anthropic', 'gemini', 'groq', 'mistral', 'openrouter'];
+
+// ═══ USER-ORDERED CHAIN (v150) ═══════════════════════════════════════════
+// The drag-to-reorder cards in Settings persist here. The saved order IS
+// the scan chain: slot 1 is the primary, the rest are fallbacks in order.
+// Unknown providers are dropped; providers added in future versions are
+// appended automatically so they're never invisible. Synced across
+// devices via Cloud Key Sync (cv_ai_chain_order is in SYNC_KEYS).
+function aiChainOrder() {
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem('cv_ai_chain_order') || 'null'); } catch (e) {}
+  const registry = AI_PROVIDER_FALLBACK_ORDER;
+  if (!Array.isArray(saved)) return registry.slice();
+  const seen = new Set();
+  const out = [];
+  saved.forEach(function(p){ if (registry.indexOf(p) >= 0 && !seen.has(p)) { seen.add(p); out.push(p); } });
+  registry.forEach(function(p){ if (!seen.has(p)) { seen.add(p); out.push(p); } });
+  return out;
+}
+function _aiOrderPersist(arr) {
+  localStorage.setItem('cv_ai_chain_order', JSON.stringify(arr));
+  if (typeof ksPush === 'function') ksPush();   // keep other devices current
+}
+// Pure move helper (▲▼ buttons + unit tests)
+function _aiOrderMoved(arr, p, dir) {
+  const i = arr.indexOf(p);
+  if (i < 0) return arr.slice();
+  const j = i + (dir === 'up' ? -1 : 1);
+  if (j < 0 || j >= arr.length) return arr.slice();
+  const out = arr.slice();
+  out[i] = out[j]; out[j] = p;
+  return out;
+}
 // v146: grok removed entirely — scrub any stale saved values so nothing
 // lingers in storage or settings backups going forward.
 try { localStorage.removeItem('cv_ai_key_grok'); localStorage.removeItem('cv_ai_model_grok'); } catch (e) {}
@@ -16350,7 +16391,7 @@ function showAIProviderTest() {
   modal.className = 'ref-modal';
   modal.onclick = function(ev){ if (ev.target === modal) modal.remove(); };
   document.body.appendChild(modal);
-  const configured = AI_PROVIDER_FALLBACK_ORDER.filter(function(p){ return !!aiKeyFor(p); });
+  const configured = aiChainOrder().filter(function(p){ return !!aiKeyFor(p); });
   modal.innerHTML = ''
     + '<div class="ref-modal-panel" style="background:var(--bg2);border:1px solid var(--gold3);border-radius:10px;width:min(920px,95vw);max-height:90vh;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 16px 48px rgba(0,0,0,.7)">'
     +   '<div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--border)">'
@@ -16534,7 +16575,7 @@ async function _aiTestRun() {
 
   const prevMode = AI_CAPTURE_MODE;
   AI_CAPTURE_MODE = isCurrency ? 'currency' : 'coin';
-  const configured = AI_PROVIDER_FALLBACK_ORDER.filter(function(p){ return !!aiKeyFor(p); });
+  const configured = aiChainOrder().filter(function(p){ return !!aiKeyFor(p); });
   const rows = [];
   const _td = 'padding:7px 8px;border-bottom:1px solid var(--border);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;vertical-align:middle';
   const renderTable = function(done) {
@@ -16600,11 +16641,228 @@ const AI_MODE_LABELS = {
     intro: 'Capture the <strong style="color:var(--gold)">face</strong> (portrait side) and <strong style="color:var(--gold)">back</strong> (reverse). The AI analyzes both and pre-fills the Add form.',
     s1Icon: '▭', s1Label: 'Face · Front', s1Hint: 'Portrait / signature side',
     s2Icon: '▭', s2Label: 'Back · Reverse', s2Hint: 'Denomination / vignette side'
+  },
+  // v148: several coins in ONE photo → one record EACH, individual numbers
+  multi: {
+    intro: 'Lay <strong style="color:var(--gold)">2–12 coins</strong> flat with space between them, one photo. The AI identifies EACH coin and creates a <strong style="color:var(--gold)">separate record per coin</strong>, each with its own record number. Optional second photo: flip every coin <em>in place</em> (keep the layout) so backs can be matched by position.',
+    s1Icon: '⊙⊙', s1Label: 'Group · Fronts', s1Hint: 'All coins, heads up, spaced apart',
+    s2Icon: '⊚⊚', s2Label: 'Group · Backs (optional)', s2Hint: 'Same layout, coins flipped in place'
   }
 };
 
+// ═══════════════════════════════════════════════════════════════════════
+// MULTI-COIN GROUP SCAN (v148) — review each detected coin, tweak fields,
+// pick a category per coin, then add ALL as individual records with
+// sequential free record numbers. Photos: the group photo(s) attach to
+// every created record (they ARE the identification evidence).
+// ═══════════════════════════════════════════════════════════════════════
+function _aiMultiGuessSheet(c) {
+  const sc = parseFloat(c.silverContent);
+  const comp = String(c.composition || '').toLowerCase();
+  if ((!isNaN(sc) && sc > 0) || comp.indexOf('silver') >= 0) {
+    if (SHEET_MAP.rawSilver) return 'rawSilver';
+  }
+  // fall back to the Add form's currently selected category, else first sheet
+  const cur = (typeof ADD_SHEET !== 'undefined' && ADD_SHEET) ? ADD_SHEET : null;
+  if (cur && SHEET_MAP[cur]) return cur;
+  return Object.keys(SHEET_MAP)[0];
+}
+
+function showMultiCoinReview(result) {
+  const ex = document.getElementById('multi-modal');
+  if (ex) ex.remove();
+  const coins = (result.coins || []).slice(0, 12);
+  window._aiMulti = { coins: coins };
+  const modal = document.createElement('div');
+  modal.id = 'multi-modal';
+  modal.className = 'ref-modal';
+  modal.onclick = function(ev){ if (ev.target === modal) modal.remove(); };
+  document.body.appendChild(modal);
+
+  const sheetOpts = function(sel){
+    return Object.entries(SHEET_MAP).map(function(p){
+      return '<option value="' + p[0] + '"' + (p[0] === sel ? ' selected' : '') + '>' + e(p[1].label) + '</option>';
+    }).join('');
+  };
+  const inp = function(i, f, v, w){
+    return '<input data-mi="' + i + '" data-mf="' + f + '" value="' + e(String(v == null ? '' : v)) + '" style="width:' + w + ';box-sizing:border-box;background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:6px 8px;border-radius:4px;font-size:12px">';
+  };
+  const cards = coins.map(function(c, i){
+    const guess = _aiMultiGuessSheet(c);
+    const mid = c.estimatedValue && c.estimatedValue.mid != null ? c.estimatedValue.mid : '';
+    return '<div style="border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:10px;background:var(--bg3)">'
+      + '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">'
+      +   '<input type="checkbox" class="mi-include" data-mi="' + i + '" checked>'
+      +   '<span style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:#a78bfa">' + e(c.position || ('coin ' + (i+1))) + '</span>'
+      +   '<select data-mi="' + i + '" data-mf="__sheet" style="margin-left:auto;background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:6px 8px;border-radius:4px;font-size:12px;max-width:46%">' + sheetOpts(guess) + '</select>'
+      + '</div>'
+      + '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8px">'
+      +   '<div><div style="font-size:9px;color:var(--dim);text-transform:uppercase;margin-bottom:2px">Series</div>' + inp(i,'series',c.series,'100%') + '</div>'
+      +   '<div><div style="font-size:9px;color:var(--dim);text-transform:uppercase;margin-bottom:2px">Year</div>' + inp(i,'year',c.year,'100%') + '</div>'
+      +   '<div><div style="font-size:9px;color:var(--dim);text-transform:uppercase;margin-bottom:2px">Mint</div>' + inp(i,'mint',c.mint,'100%') + '</div>'
+      +   '<div><div style="font-size:9px;color:var(--dim);text-transform:uppercase;margin-bottom:2px">Denomination</div>' + inp(i,'denomination',c.denomination,'100%') + '</div>'
+      +   '<div><div style="font-size:9px;color:var(--dim);text-transform:uppercase;margin-bottom:2px">Silver 0\u20131</div>' + inp(i,'silverContent',c.silverContent,'100%') + '</div>'
+      +   '<div><div style="font-size:9px;color:var(--dim);text-transform:uppercase;margin-bottom:2px">Grade</div>' + inp(i,'grade',c.grade,'100%') + '</div>'
+      +   '<div><div style="font-size:9px;color:var(--dim);text-transform:uppercase;margin-bottom:2px">Value $</div>' + inp(i,'value',mid,'100%') + '</div>'
+      +   '<div style="grid-column:1/-1"><div style="font-size:9px;color:var(--dim);text-transform:uppercase;margin-bottom:2px">Features / notes</div>' + inp(i,'features',c.features,'100%') + '</div>'
+      + '</div>'
+      + '</div>';
+  }).join('');
+
+  modal.innerHTML = ''
+    + '<div class="ref-modal-panel" style="background:var(--bg2);border:1px solid var(--gold3);border-radius:10px;width:min(720px,95vw);max-height:90vh;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 16px 48px rgba(0,0,0,.7)">'
+    +   '<div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--border)">'
+    +     '<div>'
+    +       '<h2 style="margin:0;font-family:var(--font-display);font-size:17px;color:var(--gold)">\u2299\u2299 Multi-Coin Review \u2014 ' + coins.length + ' detected</h2>'
+    +       '<div style="font-size:11px;color:var(--muted);margin-top:2px">One record per checked coin \u00b7 each gets its own next free record number in its category \u00b7 group photo attaches to every record</div>'
+    +     '</div>'
+    +     '<button onclick="document.getElementById(\'multi-modal\').remove()" style="background:transparent;border:1px solid var(--border);color:var(--muted);padding:6px 14px;border-radius:4px;cursor:pointer;font-size:12px">Close</button>'
+    +   '</div>'
+    +   '<div style="padding:16px 20px;overflow-y:auto;flex:1;min-height:0">'
+    +     cards
+    +     '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:6px">'
+    +       '<button class="bg" onclick="document.getElementById(\'multi-modal\').remove()">Cancel</button>'
+    +       '<button class="bp" onclick="_aiMultiAdd()">Add Checked as Individual Records</button>'
+    +     '</div>'
+    +   '</div>'
+    + '</div>';
+}
+
+async function _aiMultiAdd() {
+  const S = window._aiMulti;
+  if (!S || !S.coins) return;
+  const modal = document.getElementById('multi-modal');
+  // Collect edited values
+  const edited = S.coins.map(function(c, i){
+    const row = Object.assign({}, c);
+    modal.querySelectorAll('[data-mi="' + i + '"][data-mf]').forEach(function(el){
+      row[el.getAttribute('data-mf')] = el.value;
+    });
+    row.__include = !!modal.querySelector('.mi-include[data-mi="' + i + '"]:checked');
+    return row;
+  }).filter(function(r){ return r.__include; });
+  if (edited.length === 0) { alert('Nothing checked.'); return; }
+
+  const scanGroup = 'grp-' + Date.now();
+  const provider = (AI_LAST_RESULT && AI_LAST_RESULT._aiProvider) || aiCurrentProvider();
+  const today = new Date().toISOString().split('T')[0];
+  const made = [];
+
+  for (const r of edited) {
+    const sheet = SHEET_MAP[r.__sheet] ? r.__sheet : _aiMultiGuessSheet(r);
+    if (!D[sheet]) D[sheet] = [];
+    const id = _nextFreeIdInSheet(sheet);
+    const rec = { id: id };
+    ['series','year','mint','denomination','grade','features'].forEach(function(f){
+      if (r[f] != null && r[f] !== '') rec[f] = r[f];
+    });
+    if (r.country) rec.country = r.country;
+    if (r.type && !rec.series) rec.type = r.type;
+    if (r.composition) rec.composition = r.composition;
+    const sc = parseFloat(r.silverContent);
+    if (!isNaN(sc) && sc > 0) rec.silverContent = sc;
+    const val = parseFloat(r.value);
+    if (!isNaN(val) && val > 0) rec.value = val;
+    rec.aiSource = provider + ' (group scan)';
+    rec.aiScanDate = today;
+    rec.scanGroup = scanGroup;
+    if (r.position) rec.scanPosition = r.position;
+    if (AI_FRONT_IMG) rec.imageFrontUrl = AI_FRONT_IMG;
+    if (AI_BACK_IMG)  rec.imageBackUrl  = AI_BACK_IMG;
+
+    // Local + queues (mirrors the single-add pipeline incl. v125 label sync)
+    D[sheet].push(rec);
+    NEW_RECORDS.push(Object.assign({ sheet: sheet }, rec));
+    try {
+      const _lk = sheet + '|' + cn(id);
+      if (!MANUAL_LABELS.has(_lk)) { MANUAL_LABELS.add(_lk); pushLabelToSupabase(sheet, cn(id)); }
+    } catch (e) {}
+    // Cloud
+    if (SB_URL && SB_KEY) { try { await insertInSupabase(sheet, rec); } catch (e) { console.warn('[multi-add] supabase insert failed for #' + id, e.message); } }
+    if (GSHEETS_URL) {
+      try { fetch(GSHEETS_URL + '?action=addRecord&sheet=' + encodeURIComponent(sheet) + '&data=' + encodeURIComponent(JSON.stringify(rec))).catch(function(){}); } catch (e) {}
+    }
+    made.push({ sheet: sheet, id: id });
+  }
+
+  saveNR();
+  saveManualLabels();
+  buildFlat();
+  updateBadges();
+  if (modal) modal.remove();
+  const summary = made.map(function(m){ return SHEET_MAP[m.sheet].label + ' #' + m.id; }).join(', ');
+  if (typeof cvToast === 'function') cvToast('\u2713 Added ' + made.length + ' record' + (made.length===1?'':'s') + ': ' + summary, 'ok');
+  else alert('\u2713 Added ' + made.length + ' records: ' + summary);
+  // Reset capture state so the next scan starts clean
+  AI_FRONT_IMG = null; AI_BACK_IMG = null; AI_LAST_RESULT = null;
+  if (typeof renderAdd === 'function' && ST.view === 'add') renderAdd();
+}
+
+// ═══ CHAIN ORDER CARDS (v150) ═══════════════════════════════════════════
+// Drag the ≡ grip (works on TOUCH via Pointer Events — HTML5 drag/drop is
+// dead on phones) or tap ▲▼. Order persists instantly, syncs via Cloud
+// Key Sync, and IS the scan chain: slot 1 = primary.
+function _aiOrderCardsHtml() {
+  const ord = aiChainOrder();
+  return '<div style="margin-bottom:14px">'
+    + '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--dim);margin-bottom:5px">Scan Order \u2014 drag \u2261 or tap \u25b2\u25bc \u00b7 slot 1 runs first</div>'
+    + '<div id="ai-order-list">'
+    + ord.map(function(p, i){
+        const hasKey = !!aiKeyFor(p);
+        return '<div class="ai-order-card" data-p="' + p + '" style="display:flex;align-items:center;gap:10px;background:var(--bg4);border:1px solid var(--border);border-radius:6px;padding:9px 12px;margin-bottom:6px;user-select:none">'
+          + '<span class="ai-order-grip" data-p="' + p + '" style="cursor:grab;touch-action:none;color:var(--dim);font-size:15px;padding:2px 4px">\u2261</span>'
+          + '<span style="width:18px;text-align:center;font-family:DM Mono,monospace;font-size:11px;color:var(--gold)">' + (i+1) + '</span>'
+          + '<span style="flex:1;font-size:13px;color:var(--text)">' + e(AI_PROVIDER_LABELS[p] || p) + '</span>'
+          + '<span style="font-size:10px;color:' + (hasKey ? 'var(--green)' : 'var(--dim)') + '">' + (hasKey ? '\u2713 key' : 'no key \u2014 skipped') + '</span>'
+          + '<button onclick="_aiOrderMove(\'' + p + '\',\'up\')" style="background:var(--bg2);border:1px solid var(--border);color:var(--muted);border-radius:4px;padding:2px 7px;cursor:pointer;font-size:11px">\u25b2</button>'
+          + '<button onclick="_aiOrderMove(\'' + p + '\',\'down\')" style="background:var(--bg2);border:1px solid var(--border);color:var(--muted);border-radius:4px;padding:2px 7px;cursor:pointer;font-size:11px">\u25bc</button>'
+          + '</div>';
+      }).join('')
+    + '</div>'
+    + '</div>';
+}
+
+function _aiOrderMove(p, dir) {
+  _aiOrderPersist(_aiOrderMoved(aiChainOrder(), p, dir));
+  renderSettings();
+}
+
+// Pointer-based drag: capture on the grip, live-reorder cards as the
+// pointer crosses their midlines, persist on release.
+document.addEventListener('pointerdown', function(ev) {
+  const grip = ev.target.closest && ev.target.closest('.ai-order-grip');
+  if (!grip) return;
+  ev.preventDefault();
+  const card = grip.closest('.ai-order-card');
+  const list = document.getElementById('ai-order-list');
+  if (!card || !list) return;
+  card.style.opacity = '0.6';
+  card.style.borderColor = 'var(--gold3)';
+  const move = function(mv) {
+    const el = document.elementFromPoint(mv.clientX, mv.clientY);
+    const over = el && el.closest && el.closest('.ai-order-card');
+    if (!over || over === card || over.parentNode !== list) return;
+    const r = over.getBoundingClientRect();
+    if (mv.clientY < r.top + r.height / 2) list.insertBefore(card, over);
+    else list.insertBefore(card, over.nextSibling);
+  };
+  const up = function() {
+    document.removeEventListener('pointermove', move);
+    document.removeEventListener('pointerup', up);
+    document.removeEventListener('pointercancel', up);
+    card.style.opacity = '';
+    card.style.borderColor = '';
+    const order = Array.prototype.map.call(list.querySelectorAll('.ai-order-card'), function(c){ return c.getAttribute('data-p'); });
+    _aiOrderPersist(order);
+    renderSettings();
+  };
+  document.addEventListener('pointermove', move);
+  document.addEventListener('pointerup', up);
+  document.addEventListener('pointercancel', up);
+});
+
 function aiSetMode(mode) {
-  if (mode !== 'coin' && mode !== 'currency') return;
+  if (mode !== 'coin' && mode !== 'currency' && mode !== 'multi') return;
   AI_CAPTURE_MODE = mode;
   const slots = document.getElementById('ai-slots-container');
   if (slots) slots.setAttribute('data-mode', mode);
@@ -16695,6 +16953,14 @@ function aiFallbackModel() {
 // cv_ai_fallback_model) still honored when no chain is stored — so users
 // upgrading from v77–v100 keep their existing single-fallback config.
 function aiBuildFallbackChain(primary) {
+  // v150: the user-ordered list overrides who goes FIRST. If its head is a
+  // configured provider different from the passed primary, the head takes
+  // pole position with its own saved model.
+  const _ord = aiChainOrder();
+  const _head = _ord.find(function(p){ return !!aiKeyFor(p); });
+  if (_head && _head !== primary.provider) {
+    primary = { provider: _head, model: aiModelFor(_head) };
+  }
   const chain = [primary];
   const seen = new Set([primary.provider + '|' + primary.model]);
   function _push(provider, model) {
@@ -16732,9 +16998,9 @@ function aiBuildFallbackChain(primary) {
     if (altModel) _push(primary.provider, altModel);
   }
 
-  // 4. Each OTHER configured provider (with their default model), in
-  //    AI_PROVIDER_FALLBACK_ORDER — free providers first, paid last
-  AI_PROVIDER_FALLBACK_ORDER.forEach(function(p){
+  // 4. Each OTHER configured provider (with their default model), in the
+  //    USER'S drag-card order from Settings (v150)
+  _ord.forEach(function(p){
     if (p === primary.provider) return;
     if (aiKeyFor(p)) _push(p, aiModelFor(p));
   });
@@ -17032,10 +17298,12 @@ async function aiAnalyzeWithFallback(frontImg, backImg, onStatus) {
     return '\u2022 ' + _aiProviderLabel(e.step.provider) + ' (' + e.step.model + '): ' + e.message;
   });
   // Suggest a free fallback the user hasn't enabled yet, if any
-  const unconfigured = AI_PROVIDER_FALLBACK_ORDER.filter(function(p){
+  const unconfigured = aiChainOrder().filter(function(p){
     // paid (anthropic/openai) and browser-blocked (grok/openai) providers
     // don't belong in a "free things to add" tip
-    return p !== 'anthropic' && p !== 'openai' && p !== 'grok' && !aiKeyFor(p);
+    // v149: anthropic rejoins the tip (new Console accounts carry ~$5
+    // free credit); openai stays out (browser-blocked without a proxy).
+    return p !== 'openai' && !aiKeyFor(p);
   });
   let tip = '';
   if (unconfigured.length) {
@@ -17132,6 +17400,20 @@ function aiBuildPrompt() {
   // must be grounded in transcribed text, not pattern-matched guesses.
   const transcribeFirst =
     'STEP 1 \u2014 TRANSCRIBE FIRST: before filling any field, read out (to yourself) ALL text visible on any slab/holder label, the coin surfaces, or the note itself \u2014 grading service, grade, certification number, series, date, mint mark, signatures. Every field you output MUST be grounded in text or features actually visible in the photos. If a detail is not clearly legible, leave that field empty rather than guessing. Never invent a grading service or certification number.\n\n';
+  // v148: multi-coin group scan has its OWN contract — an array, one
+  // entry per coin, each with a POSITION label so the user can match
+  // table rows to physical coins on the table.
+  if (AI_CAPTURE_MODE === 'multi') {
+    return transcribeFirst
+      + 'The photo shows MULTIPLE separate coins (2\u201312) laid out together. Identify EVERY coin individually. '
+      + 'If a second photo is provided, it shows the same coins flipped in place \u2014 match front/back by position. '
+      + 'Respond ONLY with JSON, no prose, in exactly this shape: '
+      + '{"coinCount": N, "coins": [ {"position": "top left", "series": "", "type": "", "year": "", "mint": "", "country": "", "denomination": "", "composition": "", "silverContent": 0, "grade": "", "features": "", "estimatedValue": {"low": 0, "mid": 0, "high": 0} } ] } '
+      + 'Rules per coin: order the array left-to-right, top-to-bottom; "position" is a short human label like "top left", "center", "bottom right"; '
+      + 'silverContent is a 0\u20131 purity fraction (0.9 for 90% silver coinage, 0 for clad/copper); '
+      + 'leave "grade" EMPTY unless a graded slab label is actually visible for that specific coin; '
+      + 'transcribe dates and mint marks per coin \u2014 never copy one coin\u2019s date onto another; if a detail is illegible on a particular coin, leave that field empty for that coin only.';
+  }
   return transcribeFirst + (AI_CAPTURE_MODE === 'currency' ? noteprefix : coinPrefix) + AI_PROMPT;
 }
 
@@ -17239,6 +17521,13 @@ async function aiAnalyze() {
     const result = await aiAnalyzeWithFallback(AI_FRONT_IMG, AI_BACK_IMG, onStatus);
     AI_LAST_RESULT = result;
     const _fbNote = result._aiFellBack ? ' \u00b7 via ' + _aiProviderLabel(result._aiProvider) + ' fallback' : '';
+    // v148: group scan → per-coin review modal instead of the single form
+    if (AI_CAPTURE_MODE === 'multi' && Array.isArray(result.coins)) {
+      statusEl.innerHTML = '✓ ' + result.coins.length + ' coin' + (result.coins.length===1?'':'s') + ' detected' + _fbNote + ' \u2014 review & add below';
+      statusEl.className = 'ai-status ok';
+      showMultiCoinReview(result);
+      return;
+    }
     statusEl.innerHTML = '✓ Analysis complete · confidence: ' + (result.confidence || 'medium') + _fbNote;
     statusEl.className = 'ai-status ok';
     renderAIResults(result);
@@ -17448,6 +17737,11 @@ async function aiAnalyzeGemini(key, model, frontImg, backImg, onStatus) {
 // so the user catches it in review).
 function _aiNormalizeResult(ai) {
   if (!ai || typeof ai !== 'object') return ai;
+  // v148: multi-coin result — normalize each coin, keep the array shape.
+  if (Array.isArray(ai.coins)) {
+    ai.coins = ai.coins.map(function(c){ return _aiNormalizeResult(c); });
+    return ai;
+  }
   // silverContent: must be a 0–1 purity FRACTION
   const sc = parseFloat(ai.silverContent);
   if (!isNaN(sc) && sc > 1 && sc <= 100) {
