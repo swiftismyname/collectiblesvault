@@ -2012,7 +2012,7 @@ body.theme-modern-dark select option{
 // Bump this on every deploy so the user can see at a glance which build is
 // running in their browser. Surfaced in three places: the sidebar footer
 // (desktop), the mobile header badge, and the Settings → About section.
-const APP_VERSION = 'v146';
+const APP_VERSION = 'v147';
 const APP_BUILD_DATE = '2026-08-28';
 // Boot banner — makes the running build unambiguous in any console log or
 // screenshot, since stale-deploy confusion has bitten more than once.
@@ -14523,8 +14523,8 @@ function renderSettings(){
           keyUrl: 'https://console.groq.com/keys',
           keyHost: 'console.groq.com',
           keyPrefix: 'gsk_…',
-          keyHelp: 'Sign up at console.groq.com (Google/GitHub login), navigate to API Keys, create one and paste below. Groq runs vision models very fast — ideal as a Gemini fallback.',
-          models: (typeof AI_MODELS !== 'undefined' ? AI_MODELS.groq : ['meta-llama/llama-4-scout-17b-16e-instruct'])
+          keyHelp: 'Sign up at console.groq.com (Google/GitHub login), navigate to API Keys, create one and paste below. Groq runs vision models very fast — ideal as a Gemini fallback. IF SCANS SAY 401: the saved key is invalid or was revoked \u2014 delete it at console.groq.com/keys, create a fresh gsk_ key, and re-save here.',
+          models: (typeof AI_MODELS !== 'undefined' ? AI_MODELS.groq : ['qwen/qwen3.6-27b'])
         },
         // v101: OpenRouter — gateway to many free vision models
         openrouter: {
@@ -16275,7 +16275,12 @@ const AI_MODELS = {
   // gpt-oss replacements are TEXT-ONLY. qwen3.6-27b is the current
   // vision-capable model (served as preview). Scout kept as a secondary
   // for enterprise committed-spend accounts, which were exempted.
-  groq:       ['qwen/qwen3.6-27b', 'meta-llama/llama-4-scout-17b-16e-instruct'],
+  // v147 (verified Sep 2026 vs Groq's own vision docs): qwen3.6-27b is
+  // their flagship multimodal — image+text, OCR-capable, JSON mode, 2048
+  // tokens/image. Llama-4 Scout was DEPRECATED for free/dev tiers June 17
+  // 2026 (dead ladder weight, removed). Qwen 3.8 27B is the documented
+  // sibling and serves as the ladder step.
+  groq:       ['qwen/qwen3.6-27b', 'qwen/qwen3.8-27b'],
   // OpenRouter free vision (verified Aug 2026). The ":free" roster rotates
   // weekly, so the DEFAULT is 'openrouter/free' — OpenRouter's own
   // capability-aware auto-router, which picks a live free model that
@@ -16813,6 +16818,13 @@ let _aiQuotaCooldown = {};
 // browser with a network-level error (Failed to fetch). Once seen, skip
 // that provider for the whole session — no key can fix server-side CORS.
 let _aiNetBlocked = {};
+// v147: a rejected API key (401) never fixes itself mid-session. Skip the
+// provider after the first rejection and tell the user exactly how to fix
+// it, instead of failing the same way on every scan.
+let _aiAuthBad = {};
+function _aiIsAuthError(msg) {
+  return /\b401\b|invalid[_\s]?api[_\s]?key|unauthorized|invalid key|API key not valid|rejected your API key/i.test(String(msg || ''));
+}
 function _aiIsNetworkBlocked(msg) {
   return /network error|Failed to fetch|Load failed|NetworkError|CORS/i.test(String(msg || ''));
 }
@@ -16873,6 +16885,10 @@ async function aiAnalyzeWithFallback(frontImg, backImg, onStatus) {
     }
 
     // Browser-blocked provider (no CORS): skip every step this session.
+    if (_aiAuthBad[step.provider]) {
+      console.log('[ai-fallback] skipping ' + step.provider + ' (key rejected earlier this session)');
+      continue;
+    }
     if (_aiNetBlocked[step.provider]) {
       console.log('[ai-fallback] skipping ' + step.provider + ' (browser-blocked \u2014 API sends no CORS headers)');
       continue;
@@ -16892,6 +16908,11 @@ async function aiAnalyzeWithFallback(frontImg, backImg, onStatus) {
         _imgs.front, _imgs.back, onStatus);
       if (isFallback) {
         result._aiProvider      = step.provider;
+        // v147: be honest when a weak fallback answered — the user can
+        // \u2728 re-scan later for Gemini-grade accuracy.
+        if ((step.provider === 'mistral' || step.provider === 'openrouter') && typeof cvToast === 'function') {
+          cvToast('\u26a0 Identified by ' + (AI_PROVIDER_LABELS[step.provider] || step.provider) + ' (backup AI) \u2014 accuracy may be lower. \u2728 Re-scan later for best results.', 'warn');
+        }
         result._aiFallbackModel = step.model;
         result._aiFellBack      = true;
       }
@@ -16958,6 +16979,13 @@ async function aiAnalyzeWithFallback(frontImg, backImg, onStatus) {
       }
       // Network-level failure on repeat = almost certainly CORS-blocked
       // (grok/openai from a browser). Mark for session skip and annotate.
+      if (_aiIsAuthError(err.message)) {
+        _aiAuthBad[step.provider] = true;
+        const _lbl = AI_PROVIDER_LABELS[step.provider] || step.provider;
+        errors.push({ step: step, message: err.message.slice(0, 140)
+          + ' \u2014 FIX: the saved ' + _lbl + ' key is invalid/revoked. Generate a fresh key and paste it in Settings \u2192 AI Vision \u2192 ' + _lbl + '. Skipping this provider for the session.' });
+        continue;
+      }
       if (_aiIsNetworkBlocked(err.message)) {
         _aiNetBlocked[step.provider] = true;
         errors.push({ step: step, message: err.message + ' \u2014 this API appears browser-blocked (no CORS); a client-side app cannot call it. Skipping for this session.' });
@@ -17560,6 +17588,12 @@ async function _aiAnalyzeOpenAICompatible(endpoint, extraHeaders, model, frontIm
     // so this is a "best-effort hint" not a hard requirement.
     response_format: { type: 'json_object' }
   };
+  // v147: Qwen on Groq defaults to THINKING mode — reasoning tokens wrap
+  // the output (polluting JSON extraction) and burn the small per-minute
+  // token budget. Groq's documented switch-off for extraction workloads:
+  if (providerLabel === 'Groq' && /qwen/i.test(model)) {
+    body.reasoning_effort = 'none';
+  }
   // v127: OpenRouter-specific hardening. require_parameters makes their
   // router send the request ONLY to endpoints that actually honor
   // response_format — this is what stops reasoning models from returning
