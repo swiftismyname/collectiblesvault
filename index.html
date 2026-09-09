@@ -1855,6 +1855,7 @@ body.theme-modern-dark select option{
         <button type="button" class="ai-mode-btn on" data-mode="coin"     onclick="aiSetMode('coin')"     role="tab"><span class="mode-glyph">⊙</span> Coin</button>
         <button type="button" class="ai-mode-btn"    data-mode="currency" onclick="aiSetMode('currency')" role="tab"><span class="mode-glyph">▭</span> Currency</button>
         <button type="button" class="ai-mode-btn"    data-mode="multi"    onclick="aiSetMode('multi')"    role="tab"><span class="mode-glyph">⊙⊙</span> Multi-Coin</button>
+        <button type="button" class="ai-mode-btn"    data-mode="errorhunt" onclick="aiSetMode('errorhunt')" role="tab"><span class="mode-glyph">🔍</span> Error Hunt</button>
       </div>
 
       <div class="ai-slots" id="ai-slots-container" data-mode="coin">
@@ -2013,7 +2014,7 @@ body.theme-modern-dark select option{
 // Bump this on every deploy so the user can see at a glance which build is
 // running in their browser. Surfaced in three places: the sidebar footer
 // (desktop), the mobile header badge, and the Settings → About section.
-const APP_VERSION = 'v150';
+const APP_VERSION = 'v151';
 const APP_BUILD_DATE = '2026-08-28';
 // Boot banner — makes the running build unambiguous in any console log or
 // screenshot, since stale-deploy confusion has bitten more than once.
@@ -16643,6 +16644,14 @@ const AI_MODE_LABELS = {
     s2Icon: '▭', s2Label: 'Back · Reverse', s2Hint: 'Denomination / vignette side'
   },
   // v148: several coins in ONE photo → one record EACH, individual numbers
+  // v151: triage mode for roll-hunting — verdict FIRST. If a genuine mint
+  // error is found, one tap runs full identification and opens the Add
+  // form; if not, "put it back" is the answer and the next coin loads.
+  errorhunt: {
+    intro: 'Hunting for <strong style="color:var(--gold)">mint errors & varieties</strong> in raw coins. The AI checks doubled dies, off-centers, clips, cuds, RPMs, wrong planchets, laminations and more \u2014 and is trained to say <strong style="color:var(--gold)">NO</strong> to machine doubling, post-mint damage, and worn dies. Error found \u2192 one tap identifies it fully and adds a record. No error \u2192 back in the pile it goes.',
+    s1Icon: '🔍', s1Label: 'Obverse \u00b7 Close-up', s1Hint: 'Fill the frame \u2014 doubling lives in the details',
+    s2Icon: '🔍', s2Label: 'Reverse \u00b7 Close-up (recommended)', s2Hint: 'Many errors show only on the back'
+  },
   multi: {
     intro: 'Lay <strong style="color:var(--gold)">2–12 coins</strong> flat with space between them, one photo. The AI identifies EACH coin and creates a <strong style="color:var(--gold)">separate record per coin</strong>, each with its own record number. Optional second photo: flip every coin <em>in place</em> (keep the layout) so backs can be matched by position.',
     s1Icon: '⊙⊙', s1Label: 'Group · Fronts', s1Hint: 'All coins, heads up, spaced apart',
@@ -16862,7 +16871,7 @@ document.addEventListener('pointerdown', function(ev) {
 });
 
 function aiSetMode(mode) {
-  if (mode !== 'coin' && mode !== 'currency' && mode !== 'multi') return;
+  if (mode !== 'coin' && mode !== 'currency' && mode !== 'multi' && mode !== 'errorhunt') return;
   AI_CAPTURE_MODE = mode;
   const slots = document.getElementById('ai-slots-container');
   if (slots) slots.setAttribute('data-mode', mode);
@@ -17403,6 +17412,19 @@ function aiBuildPrompt() {
   // v148: multi-coin group scan has its OWN contract — an array, one
   // entry per coin, each with a POSITION label so the user can match
   // table rows to physical coins on the table.
+  // v151: ERROR HUNT — verdict-first triage. The accuracy REQUIREMENT is
+  // saying NO correctly: the three classic false positives (machine
+  // doubling, post-mint damage, die deterioration) must come back
+  // errorFound:false, with the reason, so bulk coins go back in the pile.
+  if (AI_CAPTURE_MODE === 'errorhunt') {
+    return transcribeFirst
+      + 'TASK: examine this raw coin STRICTLY for genuine MINT ERRORS and die VARIETIES. This is a triage decision: should the owner keep this coin out for cataloging, or return it to bulk? '
+      + 'CHECK FOR (true mint errors/varieties): hub doubled dies (DDO/DDR \u2014 rounded, notched doubling with split serifs), repunched mint marks (RPM), overdates, off-center strikes (estimate %), clipped planchets (curved/straight/ragged), cuds and major die breaks, wrong planchet or off-metal strikes, laminations and planchet cracks, struck-through errors, broadstrikes, brockages, rotated dies (estimate degrees), and notable named varieties (e.g. 1955 DDO cent, 1937-D 3-legged buffalo, common VAM classes on Morgan/Peace dollars). '
+      + 'YOU MUST ANSWER NO \u2014 errorFound false \u2014 FOR: machine doubling / strike doubling (flat, shelf-like, sheared look), post-mint damage (scratches, dents, gouges, environmental damage, cleaning), die deterioration doubling and orange-peel texture on worn dies, ordinary grease-filled letters, common zinc plating blisters, and plain wear. These are worth face value \u2014 flagging them wastes the owner\u2019s time. '
+      + 'IMAGE QUALITY RULE: if the photos are too blurry, small, or glary to distinguish hub doubling from machine doubling, answer errorFound false with an imageQualityNote asking for a closer macro shot \u2014 NEVER guess an error into existence. '
+      + 'Respond ONLY with JSON: {"errorFound": true|false, "confidence": "high"|"medium"|"low", "coinContext": {"series": "", "year": "", "mint": "", "denomination": ""}, "findings": [{"type": "", "description": "", "location": "", "significance": "major"|"minor"}], "notError": [{"observation": "", "why": ""}], "verdict": "", "imageQualityNote": ""} '
+      + 'Rules: findings only for GENUINE errors/varieties; put machine doubling / PMD observations in notError with the why; verdict is ONE plain sentence a collector can act on; when errorFound is false and nothing notable exists, findings is an empty array.';
+  }
   if (AI_CAPTURE_MODE === 'multi') {
     return transcribeFirst
       + 'The photo shows MULTIPLE separate coins (2\u201312) laid out together. Identify EVERY coin individually. '
@@ -17521,6 +17543,17 @@ async function aiAnalyze() {
     const result = await aiAnalyzeWithFallback(AI_FRONT_IMG, AI_BACK_IMG, onStatus);
     AI_LAST_RESULT = result;
     const _fbNote = result._aiFellBack ? ' \u00b7 via ' + _aiProviderLabel(result._aiProvider) + ' fallback' : '';
+    // v151: error hunt → verdict panel (keep-or-return decision)
+    if (AI_CAPTURE_MODE === 'errorhunt') {
+      window._ehLast = result;
+      window._ehTally = window._ehTally || { checked: 0, errors: 0 };
+      window._ehTally.checked++;
+      if (result.errorFound) window._ehTally.errors++;
+      statusEl.innerHTML = (result.errorFound ? '\u26a0 Possible error found' : '\u2713 No mint error') + _fbNote + ' \u00b7 session: ' + window._ehTally.errors + ' error' + (window._ehTally.errors===1?'':'s') + ' in ' + window._ehTally.checked + ' checked';
+      statusEl.className = 'ai-status ' + (result.errorFound ? 'warn' : 'ok');
+      renderErrorHuntVerdict(result);
+      return;
+    }
     // v148: group scan → per-coin review modal instead of the single form
     if (AI_CAPTURE_MODE === 'multi' && Array.isArray(result.coins)) {
       statusEl.innerHTML = '✓ ' + result.coins.length + ' coin' + (result.coins.length===1?'':'s') + ' detected' + _fbNote + ' \u2014 review & add below';
@@ -17976,6 +18009,101 @@ async function aiAnalyzeOpenRouter(key, model, frontImg, backImg, onStatus) {
     },
     model, frontImg, backImg, 'OpenRouter', onStatus
   );
+}
+
+// ═══ ERROR HUNT VERDICT (v151) ══════════════════════════════════════════
+// Pure classifier for testability: turns a hunt result into render parts.
+function _ehVerdictParts(r) {
+  const found = !!(r && r.errorFound && Array.isArray(r.findings) && r.findings.length);
+  const conf = (r && r.confidence) || 'medium';
+  const ctx = (r && r.coinContext) || {};
+  const coinLine = [ctx.year, ctx.mint ? ctx.mint + '-mint' : '', ctx.series || ctx.denomination].filter(Boolean).join(' ');
+  return {
+    found: found,
+    conf: conf,
+    coinLine: coinLine,
+    headline: found
+      ? '\u26a0 POSSIBLE ERROR: ' + (r.findings[0].type || 'unidentified anomaly')
+      : '\u2713 No mint error detected \u2014 safe to return to bulk',
+    findings: found ? r.findings : [],
+    notError: (r && Array.isArray(r.notError)) ? r.notError : [],
+    verdict: (r && r.verdict) || '',
+    iq: (r && r.imageQualityNote) || ''
+  };
+}
+
+function renderErrorHuntVerdict(r) {
+  const el = document.getElementById('ai-results');
+  if (!el) return;
+  const p = _ehVerdictParts(r);
+  const accent = p.found ? '#f59e0b' : 'var(--green)';
+  el.innerHTML = ''
+    + '<div style="border:1px solid ' + accent + ';border-radius:8px;padding:16px;background:var(--bg3)">'
+    +   '<div style="font-size:15px;font-weight:600;color:' + accent + ';margin-bottom:4px">' + e(p.headline) + '</div>'
+    +   (p.coinLine ? '<div style="font-size:11px;color:var(--muted);margin-bottom:8px">' + e(p.coinLine) + ' \u00b7 confidence: ' + e(p.conf) + '</div>' : '<div style="font-size:11px;color:var(--muted);margin-bottom:8px">confidence: ' + e(p.conf) + '</div>')
+    +   (p.verdict ? '<div style="font-size:13px;color:var(--text);line-height:1.6;margin-bottom:10px">' + e(p.verdict) + '</div>' : '')
+    +   (p.findings.length
+        ? '<div style="margin-bottom:10px">' + p.findings.map(function(f){
+            return '<div style="padding:8px 10px;background:var(--bg4);border-left:3px solid ' + accent + ';border-radius:4px;margin-bottom:6px">'
+              + '<div style="font-size:12px;color:var(--gold)">' + e(f.type || '') + (f.significance ? ' <span style="font-size:10px;color:var(--dim)">(' + e(f.significance) + ')</span>' : '') + '</div>'
+              + '<div style="font-size:11px;color:var(--muted);line-height:1.5">' + e(f.description || '') + (f.location ? ' \u2014 ' + e(f.location) : '') + '</div>'
+              + '</div>';
+          }).join('') + '</div>'
+        : '')
+    +   (p.notError.length
+        ? '<details style="margin-bottom:10px"><summary style="font-size:11px;color:var(--dim);cursor:pointer">Looked at but NOT an error (' + p.notError.length + ')</summary>'
+          + p.notError.map(function(n){ return '<div style="font-size:11px;color:var(--dim);padding:4px 0">' + e(n.observation || '') + ' \u2014 <em>' + e(n.why || '') + '</em></div>'; }).join('')
+          + '</details>'
+        : '')
+    +   (p.iq ? '<div style="font-size:11px;color:#f59e0b;margin-bottom:10px">\ud83d\udcf7 ' + e(p.iq) + '</div>' : '')
+    +   '<div style="display:flex;gap:8px;flex-wrap:wrap">'
+    +     (p.found
+          ? '<button class="bp" onclick="_ehIdentifyAndAdd()" style="flex:1;min-width:170px">Identify Fully &amp; Add as Record</button>'
+          : '<button class="bp" onclick="_ehNextCoin()" style="flex:1;min-width:130px">Next Coin \u2192</button>')
+    +     (p.found ? '<button class="bg" onclick="_ehNextCoin()" style="min-width:110px">Skip \u00b7 Next Coin</button>'
+                   : '<button class="bg" onclick="_ehIdentifyAndAdd()" style="min-width:150px" title="No error, but catalog it anyway">Add Anyway</button>')
+    +   '</div>'
+    + '</div>';
+  el.classList.add('show');
+}
+
+// Stage 2: full identification on the SAME photos, then straight into the
+// normal Add flow with the error findings pre-baked into the form state.
+async function _ehIdentifyAndAdd() {
+  const statusEl = document.getElementById('ai-status');
+  const hunt = window._ehLast || {};
+  const prevMode = AI_CAPTURE_MODE;
+  AI_CAPTURE_MODE = 'coin';
+  try {
+    if (statusEl) { statusEl.textContent = 'Identifying coin details\u2026'; statusEl.className = 'ai-status'; }
+    const result = await aiAnalyzeWithFallback(AI_FRONT_IMG, AI_BACK_IMG, function(t){ if (statusEl) statusEl.textContent = t; });
+    AI_LAST_RESULT = result;
+    await aiApplyToForm();
+    // Bake the hunt findings into the pending record (editable in-form)
+    const f = (hunt.findings && hunt.findings[0]) || null;
+    if (f) {
+      const summary = (f.type || 'Mint error') + (f.location ? ' @ ' + f.location : '') + (f.description ? ' \u2014 ' + f.description : '');
+      ADD_FORM_STATE.features = (ADD_FORM_STATE.features ? ADD_FORM_STATE.features + '; ' : '') + summary;
+      if (f.type && !ADD_FORM_STATE.variety) ADD_FORM_STATE.variety = f.type;
+      ADD_FORM_STATE.errorHunt = 'error candidate (' + (hunt.confidence || 'medium') + ' confidence)';
+    }
+    if (hunt.verdict) ADD_FORM_STATE.notes = (ADD_FORM_STATE.notes ? ADD_FORM_STATE.notes + ' ' : '') + '[Error Hunt] ' + hunt.verdict;
+    if (typeof renderAdd === 'function') renderAdd();
+    if (statusEl) { statusEl.textContent = '\u2713 Details filled \u2014 review below, then Add to Collection'; statusEl.className = 'ai-status ok'; }
+  } catch (err) {
+    AI_CAPTURE_MODE = prevMode;
+    if (statusEl) { statusEl.textContent = '\u2717 Identification failed: ' + (err.message || 'unknown'); statusEl.className = 'ai-status err'; }
+  }
+}
+
+// Rapid-hunt loop: clear photos + result, back to the slots for the next coin.
+function _ehNextCoin() {
+  AI_FRONT_IMG = null; AI_BACK_IMG = null; AI_LAST_RESULT = null; window._ehLast = null;
+  const el = document.getElementById('ai-results');
+  if (el) { el.innerHTML = ''; el.classList.remove('show'); }
+  const statusEl = document.getElementById('ai-status');
+  if (statusEl) { statusEl.textContent = ''; statusEl.className = 'ai-status'; }
+  if (typeof renderAdd === 'function') renderAdd();
 }
 
 function renderAIResults(r) {
