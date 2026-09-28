@@ -2014,7 +2014,7 @@ body.theme-modern-dark select option{
 // Bump this on every deploy so the user can see at a glance which build is
 // running in their browser. Surfaced in three places: the sidebar footer
 // (desktop), the mobile header badge, and the Settings → About section.
-const APP_VERSION = 'v151';
+const APP_VERSION = 'v153';
 const APP_BUILD_DATE = '2026-08-28';
 // Boot banner — makes the running build unambiguous in any console log or
 // screenshot, since stale-deploy confusion has bitten more than once.
@@ -2450,7 +2450,11 @@ const COL_REGISTRY = {
   gradingAuth:   { label:'Grading Auth',   render:(r)=>e(r.gradingAuth||r['Grading Authority']||'\u2014') },
   serial:        { label:'Serial #',       render:(r)=>e(r.serial||'\u2014') },
   composition:   { label:'Composition',    render:(r)=>e(r.composition||'\u2014') },
-  weightG:       { label:'Weight (g)',     render:(r)=>r.weight?e(String(r.weight)):'\u2014', right:true },
+  weightG:       { label:'Weight (g)',     render:(r)=>{
+    // v153: was reading r.weight (the troy-oz field!) — unit-confusion bug.
+    const g = parseFloat(r.weightG);
+    return (!isNaN(g) && g > 0) ? e(String(g)) + ' g (' + (g/31.1035).toFixed(3) + ' oz)' : '\u2014';
+  }, right:true },
   totalCoinWeight:{ label:'Total Coin Weight (g)', render:(r)=>{
     const v = parseFloat(r.totalCoinWeight);
     return (!isNaN(v) && v > 0) ? e(String(v)) + ' g' : '\u2014';
@@ -3316,6 +3320,274 @@ function recordValueSnapshot() {
 // where both neighbors agree with each other but the point craters below
 // 30% of them. Repair = delete the bad snapshots locally AND from the
 // value_snapshots table so they never resync from another device.
+// ═══ FIELD CLEANUP (v152) ═══════════════════════════════════════════════
+// Records created before v152 can carry twin duplicates (silverContent +
+// purity, country + state, features + description). Scanner classifies:
+// EQUAL values → auto-fixable (drop the non-canonical twin, keep data);
+// DIFFERENT values → conflict, listed for a human keep-A / keep-B choice.
+// ═══ WEIGHT AUDIT (v153) ════════════════════════════════════════════════
+// Finds unit mistakes across every precious-metal record: troy oz typed
+// into the grams field (a "1 g" platinum bar that's really 1 oz), grams
+// typed into the oz field (a 31.1 "oz" silver round), and orphan oz
+// values on gram sheets left by older AI merges. Evidence-based: each
+// flag shows melt-as-entered vs melt-if-converted vs what you paid, so
+// the right answer is usually obvious. Fixes write locally + Supabase +
+// GAS; "correct as-is" stamps the record so it never re-flags (synced).
+const _WA_OZ_SHEETS   = ['gold', 'silver', 'copper'];
+const _WA_GRAM_SHEETS = ['platinum', 'palladium'];
+const _WA_COIN_SHEETS = ['gradedSilver', 'rawSilver'];
+
+function _waSpotFor(sheet) {
+  const sp = (typeof SPOTS !== 'undefined' && SPOTS) ? SPOTS : {};
+  if (sheet === 'platinum') return sp.platinum || 0;
+  if (sheet === 'palladium') return sp.palladium || 0;
+  if (sheet === 'gold') return sp.gold || 0;
+  if (sheet === 'silver' || sheet === 'gradedSilver' || sheet === 'rawSilver') return sp.silver || 0;
+  return 0;   // copper spot is per-lb; skip melt evidence there
+}
+
+function _waScan() {
+  const flags = [];
+  const scanSheets = _WA_GRAM_SHEETS.concat(_WA_OZ_SHEETS, _WA_COIN_SHEETS);
+  scanSheets.forEach(function(sheet){
+    (D[sheet] || []).forEach(function(r){
+      if (r._weightVerified) return;
+      const spot = _waSpotFor(sheet);
+      const cost = parseFloat(r.cost) || 0;
+      const ev = function(ozNow, ozFix) {
+        return {
+          meltNow: spot > 0 ? ozNow * spot : null,
+          meltFix: spot > 0 && ozFix != null ? ozFix * spot : null,
+          cost: cost > 0 ? cost : null
+        };
+      };
+      if (_WA_GRAM_SHEETS.indexOf(sheet) >= 0) {
+        const g  = parseFloat(r.weightG) || 0;
+        const oz = parseFloat(r.weight) || 0;
+        if (oz > 0) {
+          // orphan oz field on a grams sheet (older AI merges) — migrate it
+          flags.push(Object.assign({
+            sheet: sheet, id: r.id, kind: 'oz-orphan', cur: oz,
+            reason: 'has a value in the troy-oz field, but ' + sheet + ' stores grams (weightG)' + (g > 0 ? ' — record has BOTH fields' : ''),
+            fixLabel: 'It’s ' + oz + ' troy oz → store ' + (+(oz*31.1035).toFixed(3)) + ' g',
+            fix: { weightG: +(oz*31.1035).toFixed(3), weight: null },
+            altLabel: 'It’s already grams → move ' + oz + ' to the grams field',
+            alt: { weightG: oz, weight: null }
+          }, ev(oz, oz)));
+        } else if (g > 0 && g <= 2) {
+          flags.push(Object.assign({
+            sheet: sheet, id: r.id, kind: 'tiny-grams', cur: g,
+            reason: g + ' g of ' + sheet + ' is unusually small — a 1 oz item typed as "1"?',
+            fixLabel: 'It’s ' + g + ' troy oz → store ' + (+(g*31.1035).toFixed(3)) + ' g',
+            fix: { weightG: +(g*31.1035).toFixed(3) }
+          }, ev(g/31.1035, g)));
+        }
+      } else {
+        const oz = parseFloat(r.weight) || 0;
+        const limit = (_WA_COIN_SHEETS.indexOf(sheet) >= 0) ? 3 : 15;
+        if (oz >= limit) {
+          flags.push(Object.assign({
+            sheet: sheet, id: r.id, kind: 'grams-in-oz', cur: oz,
+            reason: oz + ' troy oz on one record looks like a GRAM weight typed into the oz field',
+            fixLabel: 'It’s ' + oz + ' grams → store ' + (+(oz/31.1035).toFixed(4)) + ' oz',
+            fix: { weight: +(oz/31.1035).toFixed(4) }
+          }, ev(oz, oz/31.1035)));
+        }
+      }
+    });
+  });
+  return flags;
+}
+
+async function _waWrite(sheet, id, changes) {
+  const arr = D[sheet] || [];
+  const rec = arr.find(function(r){ return normId(r.id) === normId(id); });
+  if (!rec) return false;
+  Object.keys(changes).forEach(function(k){
+    if (changes[k] === null) delete rec[k];
+    else rec[k] = changes[k];
+  });
+  rec._weightVerified = true;
+  try { if (SB_URL && SB_KEY) await insertInSupabase(sheet, rec); } catch (e) { console.warn('[weight-audit] cloud write failed for #' + id, e.message); return false; }
+  if (GSHEETS_URL) { try { fetch(GSHEETS_URL + '?action=updateRecord&sheet=' + encodeURIComponent(sheet) + '&id=' + encodeURIComponent(String(id)) + '&data=' + encodeURIComponent(JSON.stringify(rec))).catch(function(){}); } catch (e) {} }
+  return true;
+}
+
+async function _waFix(sheet, id, which) {
+  const flag = (window._waFlags || []).find(function(f){ return f.sheet === sheet && normId(f.id) === normId(id); });
+  if (!flag) return;
+  const changes = which === 'alt' ? flag.alt : flag.fix;
+  const ok = await _waWrite(sheet, id, changes);
+  if (typeof cvToast === 'function') cvToast(ok ? '⚖ #' + cn(id) + ' weight corrected' : '✗ Fix failed for #' + cn(id) + ' — check connection', ok ? 'ok' : 'warn');
+  buildFlat();
+  showWeightAudit();
+}
+
+async function _waVerify(sheet, id) {
+  await _waWrite(sheet, id, {});
+  if (typeof cvToast === 'function') cvToast('✓ #' + cn(id) + ' marked correct — won’t flag again', 'ok');
+  showWeightAudit();
+}
+
+function showWeightAudit() {
+  const ex = document.getElementById('wa-modal');
+  if (ex) ex.remove();
+  const modal = document.createElement('div');
+  modal.id = 'wa-modal';
+  modal.className = 'ref-modal';
+  modal.onclick = function(ev){ if (ev.target === modal) modal.remove(); };
+  document.body.appendChild(modal);
+  const flags = _waScan();
+  window._waFlags = flags;
+  const money = function(v){ return v == null ? '—' : '$' + v.toLocaleString(undefined, {maximumFractionDigits: 0}); };
+  modal.innerHTML = ''
+    + '<div class="ref-modal-panel" style="background:var(--bg2);border:1px solid var(--gold3);border-radius:10px;width:min(720px,95vw);max-height:88vh;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 16px 48px rgba(0,0,0,.7)">'
+    +   '<div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--border)">'
+    +     '<div>'
+    +       '<h2 style="margin:0;font-family:var(--font-display);font-size:17px;color:var(--gold)">⚖ Weight Audit</h2>'
+    +       '<div style="font-size:11px;color:var(--muted);margin-top:2px">Grams-vs-troy-oz mistakes across all precious metals · melt-vs-cost evidence per record · fixes sync everywhere</div>'
+    +     '</div>'
+    +     '<button onclick="document.getElementById(\'wa-modal\').remove()" style="background:transparent;border:1px solid var(--border);color:var(--muted);padding:6px 14px;border-radius:4px;cursor:pointer;font-size:12px">Close</button>'
+    +   '</div>'
+    +   '<div style="padding:16px 20px;overflow-y:auto;flex:1;min-height:0">'
+    +   (flags.length === 0
+        ? '<div style="padding:18px;text-align:center;color:var(--green);font-size:12px">✓ No suspicious weights — every metal record’s unit checks out.</div>'
+        : flags.map(function(f){
+            const evd = (f.meltNow != null || f.cost != null)
+              ? '<div style="font-size:11px;color:var(--muted);margin:6px 0 10px;line-height:1.6">'
+                + 'Melt as entered: <span style="color:' + ((f.cost && f.meltNow != null && (f.meltNow > f.cost*6 || f.meltNow < f.cost*0.15)) ? 'var(--red)' : 'var(--text)') + '">' + money(f.meltNow) + '</span>'
+                + (f.meltFix != null ? ' · if converted: <span style="color:var(--green)">' + money(f.meltFix) + '</span>' : '')
+                + (f.cost != null ? ' · you paid: ' + money(f.cost) : '')
+                + '</div>'
+              : '<div style="margin-bottom:10px"></div>';
+            return '<div style="border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:10px;background:var(--bg3)">'
+              + '<div style="font-size:12px;color:var(--gold);margin-bottom:2px">#' + e(cn(f.id)) + ' · ' + e(SHEET_MAP[f.sheet].label) + '</div>'
+              + '<div style="font-size:12px;color:var(--text);line-height:1.5">' + e(f.reason) + '</div>'
+              + evd
+              + '<div style="display:flex;gap:8px;flex-wrap:wrap">'
+              +   '<button class="bp" style="font-size:11px" onclick="_waFix(\'' + f.sheet + '\',\'' + f.id + '\',\'fix\')">' + e(f.fixLabel) + '</button>'
+              +   (f.altLabel ? '<button class="bg" style="font-size:11px" onclick="_waFix(\'' + f.sheet + '\',\'' + f.id + '\',\'alt\')">' + e(f.altLabel) + '</button>' : '')
+              +   '<button class="bg" style="font-size:11px;margin-left:auto" onclick="_waVerify(\'' + f.sheet + '\',\'' + f.id + '\')">✓ Correct as-is</button>'
+              + '</div>'
+              + '</div>';
+          }).join(''))
+    +   '</div>'
+    + '</div>';
+}
+
+function _fcScan() {
+  const auto = [], conflicts = [];
+  (ALL_ITEMS || []).forEach(function(item){
+    const raw = item.raw || {};
+    _FIELD_TWINS.forEach(function(pair){
+      const a = pair[0], b = pair[1];
+      const hasA = raw[a] != null && raw[a] !== '';
+      const hasB = raw[b] != null && raw[b] !== '';
+      if (!hasA || !hasB) return;
+      const canon = _twinCanonical(item.sheet, a, b);
+      const drop = canon === a ? b : a;
+      if (_twinValsEqual(raw[a], raw[b], pair[2])) {
+        auto.push({ sheet: item.sheet, id: item.id, drop: drop, keep: canon, val: raw[canon] });
+      } else {
+        conflicts.push({ sheet: item.sheet, id: item.id, a: a, b: b, va: raw[a], vb: raw[b], canon: canon });
+      }
+    });
+  });
+  return { auto: auto, conflicts: conflicts };
+}
+
+async function _fcApplyDrop(sheet, id, dropKey) {
+  const arr = D[sheet] || [];
+  const rec = arr.find(function(r){ return normId(r.id) === normId(id); });
+  if (!rec) return false;
+  delete rec[dropKey];
+  try { if (SB_URL && SB_KEY) await insertInSupabase(sheet, rec); } catch (e) { return false; }
+  if (GSHEETS_URL) { try { fetch(GSHEETS_URL + '?action=updateRecord&sheet=' + encodeURIComponent(sheet) + '&id=' + encodeURIComponent(String(id)) + '&data=' + encodeURIComponent(JSON.stringify(rec))).catch(function(){}); } catch (e) {} }
+  return true;
+}
+
+async function _fcAutoFix() {
+  const btn = document.getElementById('fc-autofix');
+  const prog = document.getElementById('fc-progress');
+  const scan = _fcScan();
+  if (!scan.auto.length) { if (prog) prog.textContent = 'Nothing to fix.'; return; }
+  if (!confirm('Remove ' + scan.auto.length + ' duplicate twin field(s)? Values are identical \\u2014 only the redundant name is dropped; data is kept under the canonical field. Cloud rows update too.')) return;
+  if (btn) btn.disabled = true;
+  let ok = 0;
+  for (let i = 0; i < scan.auto.length; i++) {
+    const t = scan.auto[i];
+    if (prog) prog.textContent = 'Fixing ' + (i+1) + ' / ' + scan.auto.length + ' \\u2014 #' + cn(t.id) + ' (' + t.drop + ')';
+    if (await _fcApplyDrop(t.sheet, t.id, t.drop)) ok++;
+    await new Promise(function(res){ setTimeout(res, 120); });
+  }
+  buildFlat();
+  if (typeof cvToast === 'function') cvToast('\ud83e\uddf9 Removed ' + ok + ' duplicate field' + (ok===1?'':'s'), 'ok');
+  showFieldCleanup();
+}
+
+async function _fcResolve(sheet, id, keepKey, dropKey, keepVal) {
+  const arr = D[sheet] || [];
+  const rec = arr.find(function(r){ return normId(r.id) === normId(id); });
+  if (!rec) return;
+  rec[keepKey] = keepVal;
+  await _fcApplyDrop(sheet, id, dropKey);
+  showFieldCleanup();
+}
+
+function showFieldCleanup() {
+  const ex = document.getElementById('fc-modal');
+  if (ex) ex.remove();
+  const modal = document.createElement('div');
+  modal.id = 'fc-modal';
+  modal.className = 'ref-modal';
+  modal.onclick = function(ev){ if (ev.target === modal) modal.remove(); };
+  document.body.appendChild(modal);
+  const scan = _fcScan();
+  const _td = 'padding:7px 8px;border-bottom:1px solid var(--border);font-size:12px;vertical-align:middle;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+  modal.innerHTML = ''
+    + '<div class="ref-modal-panel" style="background:var(--bg2);border:1px solid var(--gold3);border-radius:10px;width:min(700px,95vw);max-height:88vh;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 16px 48px rgba(0,0,0,.7)">'
+    +   '<div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--border)">'
+    +     '<div>'
+    +       '<h2 style="margin:0;font-family:var(--font-display);font-size:17px;color:var(--gold)">\ud83e\uddf9 Field Cleanup</h2>'
+    +       '<div style="font-size:11px;color:var(--muted);margin-top:2px">Duplicate twin fields (purity/silverContent, state/country, description/features) \\u2014 fixed locally and in the cloud</div>'
+    +     '</div>'
+    +     '<button onclick="document.getElementById(\'fc-modal\').remove()" style="background:transparent;border:1px solid var(--border);color:var(--muted);padding:6px 14px;border-radius:4px;cursor:pointer;font-size:12px">Close</button>'
+    +   '</div>'
+    +   '<div style="padding:16px 20px;overflow-y:auto;flex:1;min-height:0">'
+    +     (scan.auto.length === 0 && scan.conflicts.length === 0
+        ? '<div style="padding:18px;text-align:center;color:var(--green);font-size:12px">\\u2713 No duplicate twin fields anywhere \\u2014 records are clean.</div>'
+        : ''
+          + (scan.auto.length
+            ? '<div style="margin-bottom:16px">'
+              + '<div style="font-size:12px;color:var(--text);margin-bottom:8px"><strong style="color:var(--gold)">' + scan.auto.length + '</strong> identical duplicate' + (scan.auto.length===1?'':'s') + ' \\u2014 safe to auto-fix (data kept under the canonical name):</div>'
+              + '<div style="max-height:180px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;margin-bottom:8px">'
+              + scan.auto.slice(0, 200).map(function(t){
+                  return '<div style="' + _td + '">#' + e(cn(t.id)) + ' \\u00b7 ' + e(SHEET_MAP[t.sheet].label) + ' \\u2014 drop <span style="color:var(--red)">' + e(t.drop) + '</span>, keep <span style="color:var(--green)">' + e(t.keep) + '</span> = ' + e(String(t.val)) + '</div>';
+                }).join('')
+              + '</div>'
+              + '<button class="bp" id="fc-autofix" onclick="_fcAutoFix()">Auto-fix ' + scan.auto.length + ' Duplicate' + (scan.auto.length===1?'':'s') + '</button>'
+              + '<span id="fc-progress" style="font-size:11px;color:var(--dim);margin-left:10px"></span>'
+              + '</div>'
+            : '<div style="font-size:12px;color:var(--green);margin-bottom:14px">\\u2713 No identical duplicates.</div>')
+          + (scan.conflicts.length
+            ? '<div>'
+              + '<div style="font-size:12px;color:var(--text);margin-bottom:8px"><strong style="color:#f59e0b">' + scan.conflicts.length + '</strong> conflict' + (scan.conflicts.length===1?'':'s') + ' \\u2014 same field, DIFFERENT values; pick which to keep:</div>'
+              + scan.conflicts.map(function(c){
+                  return '<div style="border:1px solid var(--border);border-radius:6px;padding:10px;margin-bottom:8px;background:var(--bg3)">'
+                    + '<div style="font-size:11px;color:var(--muted);margin-bottom:6px">#' + e(cn(c.id)) + ' \\u00b7 ' + e(SHEET_MAP[c.sheet].label) + '</div>'
+                    + '<div style="display:flex;gap:8px;flex-wrap:wrap">'
+                    + '<button class="bg" style="flex:1;min-width:160px" onclick="_fcResolve(\'' + c.sheet + '\',\'' + c.id + '\',\'' + c.canon + '\',\'' + (c.canon===c.a?c.b:c.a) + '\',' + JSON.stringify(String(c.va)).replace(/"/g,'&quot;') + ')">Keep ' + e(c.a) + ' = ' + e(String(c.va)) + '</button>'
+                    + '<button class="bg" style="flex:1;min-width:160px" onclick="_fcResolve(\'' + c.sheet + '\',\'' + c.id + '\',\'' + c.canon + '\',\'' + (c.canon===c.a?c.b:c.a) + '\',' + JSON.stringify(String(c.vb)).replace(/"/g,'&quot;') + ')">Keep ' + e(c.b) + ' = ' + e(String(c.vb)) + '</button>'
+                    + '</div>'
+                    + '</div>';
+                }).join('')
+              + '</div>'
+            : '')
+        )
+    +   '</div>'
+    + '</div>';
+}
+
 function _vhFindAnomalies() {
   const sorted = (VALUE_HISTORY || []).slice().sort(function(a,b){ return a.date.localeCompare(b.date); });
   const out = [];
@@ -6399,13 +6671,17 @@ function showDetail(item){
     liveMelt = (w / 14.5833) * sp.copper;
     meltLabel = (w/14.5833).toFixed(4) + ' lb × $' + sp.copper.toFixed(2) + '/lb';
   } else if (item.sheet === 'platinum' && sp.platinum) {
-    const w = parseFloat(r.weightG) || 0;
-    liveMelt = (w / 31.1035) * sp.platinum;
-    meltLabel = (w/31.1035).toFixed(4) + ' oz × $' + sp.platinum.toFixed(2) + '/oz';
+    // v153: weightG (grams) is canonical; a record with ONLY the oz field
+    // (AI-appended orphan) is treated as troy oz — not misread as grams.
+    const g = parseFloat(r.weightG) || 0;
+    const oz = g > 0 ? g / 31.1035 : (parseFloat(r.weight) || 0);
+    liveMelt = oz * sp.platinum;
+    meltLabel = oz.toFixed(4) + ' oz × $' + sp.platinum.toFixed(2) + '/oz';
   } else if (item.sheet === 'palladium' && sp.palladium) {
-    const w = parseFloat(r.weightG) || 0;
-    liveMelt = (w / 31.1035) * sp.palladium;
-    meltLabel = (w/31.1035).toFixed(4) + ' oz × $' + sp.palladium.toFixed(2) + '/oz';
+    const g = parseFloat(r.weightG) || 0;
+    const oz = g > 0 ? g / 31.1035 : (parseFloat(r.weight) || 0);
+    liveMelt = oz * sp.palladium;
+    meltLabel = oz.toFixed(4) + ' oz × $' + sp.palladium.toFixed(2) + '/oz';
   } else if ((item.sheet === 'gradedSilver' || item.sheet === 'rawSilver') && sp.silver) {
     const w = parseFloat(r.weight) || 0;
     if (w > 0) {
@@ -6420,10 +6696,22 @@ function showDetail(item){
   // separate row below weight when present — it's grams of the whole coin
   // (informational, never used in melt).
   let displayWeight = '';
-  if (r.weight !== null && r.weight !== undefined && r.weight !== '' && parseFloat(r.weight) > 0) {
+  // v153: the SHEET decides the unit, not whichever field happens to be
+  // populated — platinum/palladium are gram sheets, so weightG wins there
+  // and a stray oz `weight` can no longer masquerade as the weight.
+  const _isGramSheet = (item.sheet === 'platinum' || item.sheet === 'palladium');
+  const _hasG  = r.weightG != null && r.weightG !== '' && parseFloat(r.weightG) > 0;
+  const _hasOz = r.weight  != null && r.weight  !== '' && parseFloat(r.weight)  > 0;
+  if (_isGramSheet && _hasG) {
+    const grams = parseFloat(r.weightG);
+    displayWeight = grams + ' g (' + (grams/31.1035).toFixed(4) + ' troy oz)';
+  } else if (_isGramSheet && _hasOz) {
+    const w = parseFloat(r.weight);
+    displayWeight = w + ' troy oz (\u26a0 in the oz field on a grams sheet \u2014 run Weight Audit)';
+  } else if (_hasOz) {
     const w = parseFloat(r.weight);
     displayWeight = w + ' troy oz';
-  } else if (r.weightG !== null && r.weightG !== undefined && r.weightG !== '' && parseFloat(r.weightG) > 0) {
+  } else if (_hasG) {
     const grams = parseFloat(r.weightG);
     displayWeight = grams + ' g (' + (grams/31.1035).toFixed(4) + ' troy oz)';
   }
@@ -12891,6 +13179,38 @@ function _healthChecks() {
   // value across grade tiers: line chart of value vs. grade, example image
   // from Wikipedia, and the full tier price list. Powered by the existing
   // PriceCharting integration (paid token required).
+  // v153: weight audit — grams vs troy oz across all metals
+  (function(){
+    let n = 0;
+    try { n = (typeof _waScan === 'function') ? _waScan().length : 0; } catch (e) {}
+    checks.push({
+      id: 'weight-audit',
+      label: 'Weight Audit (grams vs oz)',
+      desc: (n > 0 ? '\u26a0 ' + n + ' record' + (n===1?'':'s') + ' with suspicious weight units \u2014 oz typed as grams, grams typed as oz, or weight in the wrong field. ' : 'All metal weights pass the unit checks. ')
+            + 'Each flag shows melt-as-entered vs melt-if-converted vs cost, with one-tap conversion. Platinum/palladium store grams; gold/silver/copper store troy oz.',
+      icon: '\u2696',
+      count: n > 0 ? n : null,
+      action: function(){ if (typeof showWeightAudit === 'function') showWeightAudit(); },
+      countable: n > 0
+    });
+  })();
+
+  // v152: field cleanup — twin duplicates across all records
+  (function(){
+    let a = 0, c = 0;
+    try { const s = (typeof _fcScan === 'function') ? _fcScan() : null; if (s) { a = s.auto.length; c = s.conflicts.length; } } catch (e) {}
+    checks.push({
+      id: 'field-cleanup',
+      label: 'Field Cleanup (duplicate twins)',
+      desc: (a + c > 0 ? '\u26a0 ' + (a + c) + ' record' + ((a+c)===1?'':'s') + ' carry duplicate twin fields (' + a + ' identical, ' + c + ' conflicting). ' : 'No duplicate twin fields. ')
+            + 'Same data under two names \u2014 silverContent+purity, country+state, features+description \u2014 gets one canonical field per record type. New saves are already clean (v152).',
+      icon: '\ud83e\uddf9',
+      count: (a + c) > 0 ? (a + c) : null,
+      action: function(){ if (typeof showFieldCleanup === 'function') showFieldCleanup(); },
+      countable: (a + c) > 0
+    });
+  })();
+
   // v142: value-history repair — fix portfolio-chart artifacts
   (function(){
     let n = 0;
@@ -15427,19 +15747,19 @@ const SCHEMAS = {
   platinum:      [{f:'purity',l:'Purity',t:'number',ph:'0.9995'},{f:'weightG',l:'Weight (grams)',t:'number',ph:'31.1'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'meltValue',l:'Melt Value ($)',t:'number',ph:'optional — leave blank for live calc'}],
   palladium:     [{f:'purity',l:'Purity',t:'number',ph:'0.9995'},{f:'weightG',l:'Weight (grams)',t:'number',ph:'31.1'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'meltValue',l:'Melt Value ($)',t:'number',ph:'optional — leave blank for live calc'}],
   mintSets:      [{f:'year',l:'Year',t:'text',ph:'2024'},{f:'silver',l:'Silver?',t:'text',ph:'Y or N'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'uncertValue',l:'Uncertified Value ($)',t:'number',ph:'optional'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'notes',l:'Notes',t:'text',ph:'optional'}],
-  gradedSilver:  [{f:'country',l:'Country',t:'text',ph:'USA'},{f:'series',l:'Series',t:'text',ph:'Morgan Dollar'},{f:'type',l:'Type',t:'text',ph:'Kennedy Half'},{f:'weight',l:'Silver Weight (oz)',t:'number',ph:'0.773'},{f:'silverContent',l:'Silver Purity (0-1, e.g. 0.9 = 90%)',t:'number',ph:'0.9'},{f:'totalCoinWeight',l:'Total Coin Weight (g)',t:'number',ph:'26.73'},{f:'denomination',l:'Denomination',t:'text',ph:'$1'},{f:'serial',l:'Serial #',t:'text',ph:''},{f:'grade',l:'Grade',t:'text',ph:'MS 65'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'NGC'},{f:'mint',l:'Mint',t:'text',ph:'Philadelphia'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
-  rawSilver:     [{f:'series',l:'Series',t:'text',ph:'Morgan Dollar'},{f:'country',l:'Country',t:'text',ph:'USA'},{f:'type',l:'Type',t:'text',ph:'Kennedy Half'},{f:'weight',l:'Silver Weight (oz)',t:'number',ph:'0.773'},{f:'silverContent',l:'Silver Purity (0-1, e.g. 0.9 = 90%)',t:'number',ph:'0.9'},{f:'totalCoinWeight',l:'Total Coin Weight (g)',t:'number',ph:'26.73'},{f:'denomination',l:'Denomination',t:'text',ph:'$1'},{f:'grade',l:'Grade',t:'text',ph:'VF 20'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'Raw'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
-  gradedUS:      [{f:'type',l:'Type',t:'text',ph:'Cent, Nickel…'},{f:'series',l:'Series',t:'text',ph:'Lincoln Cent'},{f:'denomination',l:'Denomination',t:'text',ph:'$0.01'},{f:'serial',l:'Serial #',t:'text',ph:''},{f:'grade',l:'Grade',t:'text',ph:'MS 65'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'PCGS'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
-  rawUS:         [{f:'type',l:'Type',t:'text',ph:'Cent, Nickel…'},{f:'series',l:'Series',t:'text',ph:'Lincoln Cent'},{f:'denomination',l:'Denomination',t:'text',ph:'$0.01'},{f:'grade',l:'Grade',t:'text',ph:'VF 20'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'Raw'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
-  gradedForeign: [{f:'country',l:'Country',t:'text',ph:'UK'},{f:'series',l:'Series',t:'text',ph:'Sovereign'},{f:'denomination',l:'Denomination',t:'text',ph:'1 Pound'},{f:'grade',l:'Grade',t:'text',ph:'MS 63'},{f:'serial',l:'Serial #',t:'text',ph:''},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'NGC'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
-  rawForeign:    [{f:'country',l:'Country',t:'text',ph:'UK'},{f:'series',l:'Series',t:'text',ph:'Sovereign'},{f:'denomination',l:'Denomination',t:'text',ph:'1 Pound'},{f:'grade',l:'Grade',t:'text',ph:'VF 20'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'Raw'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
+  gradedSilver:  [{f:'country',l:'Country',t:'text',ph:'USA'},{f:'series',l:'Series',t:'text',ph:'Morgan Dollar'},{f:'year',l:'Year',t:'text',ph:'1921'},{f:'variety',l:'Variety / Error',t:'text',ph:'DDO, VAM…'},{f:'type',l:'Type',t:'text',ph:'Kennedy Half'},{f:'weight',l:'Silver Weight (oz)',t:'number',ph:'0.773'},{f:'silverContent',l:'Silver Purity (0-1, e.g. 0.9 = 90%)',t:'number',ph:'0.9'},{f:'totalCoinWeight',l:'Total Coin Weight (g)',t:'number',ph:'26.73'},{f:'denomination',l:'Denomination',t:'text',ph:'$1'},{f:'serial',l:'Serial #',t:'text',ph:''},{f:'grade',l:'Grade',t:'text',ph:'MS 65'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'NGC'},{f:'mint',l:'Mint',t:'text',ph:'Philadelphia'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
+  rawSilver:     [{f:'series',l:'Series',t:'text',ph:'Morgan Dollar'},{f:'year',l:'Year',t:'text',ph:'1921'},{f:'mint',l:'Mint Mark',t:'text',ph:'D, S, O…'},{f:'variety',l:'Variety / Error',t:'text',ph:'DDO, RPM…'},{f:'country',l:'Country',t:'text',ph:'USA'},{f:'type',l:'Type',t:'text',ph:'Kennedy Half'},{f:'weight',l:'Silver Weight (oz)',t:'number',ph:'0.773'},{f:'silverContent',l:'Silver Purity (0-1, e.g. 0.9 = 90%)',t:'number',ph:'0.9'},{f:'totalCoinWeight',l:'Total Coin Weight (g)',t:'number',ph:'26.73'},{f:'denomination',l:'Denomination',t:'text',ph:'$1'},{f:'grade',l:'Grade',t:'text',ph:'VF 20'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'Raw'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
+  gradedUS:      [{f:'type',l:'Type',t:'text',ph:'Cent, Nickel…'},{f:'series',l:'Series',t:'text',ph:'Lincoln Cent'},{f:'year',l:'Year',t:'text',ph:'1921'},{f:'mint',l:'Mint Mark',t:'text',ph:'D, S, O…'},{f:'variety',l:'Variety / Error',t:'text',ph:'DDO, RPM…'},{f:'denomination',l:'Denomination',t:'text',ph:'$0.01'},{f:'serial',l:'Serial #',t:'text',ph:''},{f:'grade',l:'Grade',t:'text',ph:'MS 65'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'PCGS'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
+  rawUS:         [{f:'type',l:'Type',t:'text',ph:'Cent, Nickel…'},{f:'series',l:'Series',t:'text',ph:'Lincoln Cent'},{f:'year',l:'Year',t:'text',ph:'1921'},{f:'mint',l:'Mint Mark',t:'text',ph:'D, S, O…'},{f:'variety',l:'Variety / Error',t:'text',ph:'DDO, RPM…'},{f:'denomination',l:'Denomination',t:'text',ph:'$0.01'},{f:'grade',l:'Grade',t:'text',ph:'VF 20'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'Raw'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
+  gradedForeign: [{f:'country',l:'Country',t:'text',ph:'UK'},{f:'series',l:'Series',t:'text',ph:'Sovereign'},{f:'year',l:'Year',t:'text',ph:'1921'},{f:'mint',l:'Mint Mark',t:'text',ph:'D, S, O…'},{f:'variety',l:'Variety / Error',t:'text',ph:'DDO, RPM…'},{f:'denomination',l:'Denomination',t:'text',ph:'1 Pound'},{f:'grade',l:'Grade',t:'text',ph:'MS 63'},{f:'serial',l:'Serial #',t:'text',ph:''},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'NGC'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
+  rawForeign:    [{f:'country',l:'Country',t:'text',ph:'UK'},{f:'series',l:'Series',t:'text',ph:'Sovereign'},{f:'year',l:'Year',t:'text',ph:'1921'},{f:'mint',l:'Mint Mark',t:'text',ph:'D, S, O…'},{f:'variety',l:'Variety / Error',t:'text',ph:'DDO, RPM…'},{f:'denomination',l:'Denomination',t:'text',ph:'1 Pound'},{f:'grade',l:'Grade',t:'text',ph:'VF 20'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'Raw'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
   usNotes:       [{f:'series',l:'Series',t:'text',ph:'1934A'},{f:'denomination',l:'Denomination',t:'text',ph:'$1'},{f:'noteType',l:'Note Type',t:'text',ph:'Federal Reserve Note, Silver Cert, Gold Cert, US Note, National…'},{f:'frNum',l:'Friedberg #',t:'text',ph:'Fr.1606'},{f:'signatures',l:'Signatures',t:'text',ph:'Tate / Mellon'},{f:'serial',l:'Serial #',t:'text',ph:''},{f:'blockLetter',l:'Block Letter',t:'text',ph:'B-A'},{f:'plate',l:'Plate Position',t:'text',ph:'A1, B2…'},{f:'sealColor',l:'Seal Color',t:'text',ph:'Blue, Green, Red, Brown'},{f:'frDistrict',l:'Federal Reserve District',t:'text',ph:'B2 / New York'},{f:'variety',l:'Variety',t:'text',ph:'Mule, Star, Web…'},{f:'charter',l:'Charter # (Nationals only)',t:'text',ph:'4321'},{f:'bankName',l:'Bank Name (Nationals)',t:'text',ph:'First National Bank of …'},{f:'city',l:'City (Nationals)',t:'text',ph:''},{f:'bankState',l:'State (Nationals)',t:'text',ph:'PA'},{f:'grade',l:'Grade',t:'text',ph:'VF 30 / CU 64'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'PMG, PCGS Banknote, raw…'},{f:'defects',l:'Defects',t:'text',ph:'Folds, pinholes, ink, tape…'},{f:'type',l:'Type (legacy)',t:'text',ph:'kept for backward compat'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
   confederate:   [{f:'state',l:'State/Issuer',t:'text',ph:'Confederate States'},{f:'series',l:'Type/Series',t:'text',ph:'T-68'},{f:'denomination',l:'Denomination',t:'text',ph:'$10'},{f:'criswell',l:'Criswell #',t:'text',ph:'Cr.540'},{f:'frNum',l:'Friedberg #',t:'text',ph:'Fr.CSA-68'},{f:'signatures',l:'Signatures',t:'text',ph:'Treasurer / Register'},{f:'serial',l:'Serial #',t:'text',ph:''},{f:'plate',l:'Plate Position',t:'text',ph:''},{f:'variety',l:'Variety',t:'text',ph:''},{f:'grade',l:'Grade',t:'text',ph:'VF 25'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'PMG'},{f:'defects',l:'Defects',t:'text',ph:'Folds, pinholes, repairs…'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
   obsolete:      [{f:'state',l:'State',t:'text',ph:'Georgia'},{f:'series',l:'Bank/Issuer',t:'text',ph:'Bank of Georgia'},{f:'denomination',l:'Denomination',t:'text',ph:'$5'},{f:'serial',l:'Serial #',t:'text',ph:''},{f:'signatures',l:'Signatures',t:'text',ph:'Cashier / President'},{f:'variety',l:'Variety',t:'text',ph:''},{f:'grade',l:'Grade',t:'text',ph:'Fine 12'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'PMG'},{f:'defects',l:'Defects',t:'text',ph:''},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
   foreignNotes:  [{f:'country',l:'Country',t:'text',ph:'Germany'},{f:'series',l:'Series',t:'text',ph:'Weimar Republic'},{f:'denomination',l:'Denomination',t:'text',ph:'1000 Mark'},{f:'pickNumber',l:'Pick # (P-#)',t:'text',ph:'P-75'},{f:'signatures',l:'Signatures',t:'text',ph:''},{f:'serial',l:'Serial #',t:'text',ph:''},{f:'variety',l:'Variety',t:'text',ph:''},{f:'grade',l:'Grade',t:'text',ph:'VF 30'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'PMG'},{f:'defects',l:'Defects',t:'text',ph:''},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
   fractional:    [{f:'denomination',l:'Denomination',t:'text',ph:'50 Cents'},{f:'series',l:'Issue',t:'text',ph:'5th Issue'},{f:'frNum',l:'Friedberg #',t:'text',ph:'Fr.1309'},{f:'signatures',l:'Signatures',t:'text',ph:'Colby / Spinner'},{f:'serial',l:'Serial #',t:'text',ph:''},{f:'variety',l:'Variety',t:'text',ph:''},{f:'grade',l:'Grade',t:'text',ph:'CH UNC 65'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'PMG'},{f:'defects',l:'Defects',t:'text',ph:''},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
-  ancient:       [{f:'country',l:'Country/Empire',t:'text',ph:'Roman'},{f:'type',l:'Type',t:'text',ph:'Denarius'},{f:'series',l:'Emperor/Issuer',t:'text',ph:'Augustus'},{f:'grade',l:'Grade',t:'text',ph:'VF'},{f:'serial',l:'Cert #',t:'text',ph:'optional'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'NGC'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
-  other:         [{f:'country',l:'Country',t:'text',ph:'USA'},{f:'type',l:'Type',t:'text',ph:'Token, Medal…'},{f:'series',l:'Series',t:'text',ph:''},{f:'denomination',l:'Denomination',t:'text',ph:'optional'},{f:'grade',l:'Grade',t:'text',ph:'optional'},{f:'serial',l:'Serial #',t:'text',ph:'optional'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
+  ancient:       [{f:'country',l:'Country/Empire',t:'text',ph:'Roman'},{f:'type',l:'Type',t:'text',ph:'Denarius'},{f:'series',l:'Emperor/Issuer',t:'text',ph:'Augustus'},{f:'year',l:'Year / Date',t:'text',ph:'c. 320 BC'},{f:'grade',l:'Grade',t:'text',ph:'VF'},{f:'serial',l:'Cert #',t:'text',ph:'optional'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'NGC'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
+  other:         [{f:'country',l:'Country',t:'text',ph:'USA'},{f:'type',l:'Type',t:'text',ph:'Token, Medal…'},{f:'series',l:'Series',t:'text',ph:''},{f:'year',l:'Year / Date',t:'text',ph:'1900'},{f:'denomination',l:'Denomination',t:'text',ph:'optional'},{f:'grade',l:'Grade',t:'text',ph:'optional'},{f:'serial',l:'Serial #',t:'text',ph:'optional'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
 };
 
 const SHEET_LABELS = {
@@ -15587,6 +15907,11 @@ function focusFirstInvResult() {
 function _aiAddExtrasHtml(schema) {
   const excl = new Set((schema || []).map(function(s){ return s.f; }));
   excl.add('id'); excl.add('quantity');
+  // v152: hide the redundant twin (it won't be saved either)
+  try {
+    const _sh = (typeof ADD_SHEET !== 'undefined' && ADD_SHEET) ? ADD_SHEET : null;
+    if (_sh) _twinSkipSet(ADD_FORM_STATE, _sh).forEach(function(k){ excl.add(k); });
+  } catch (e) {}
   const keys = Object.keys(ADD_FORM_STATE).filter(function(k){
     return !excl.has(k) && ADD_FORM_STATE[k] != null && ADD_FORM_STATE[k] !== '';
   });
@@ -15863,6 +16188,23 @@ async function submitAdd(){
     rec[f.f] = f.t==='number' ? (parseFloat(v)||0) : v;
   });
 
+  // v153: unit sanity at the door. Pt/Pd store GRAMS — a value ≤ 2 there is
+  // usually troy oz typed by habit (a 1 oz bar entered as "1"). Oz sheets
+  // storing ≥ 15 is usually grams (a 31.1 g coin typed into the oz field).
+  // Confirm offers the conversion; declining keeps the typed value.
+  if ((sheet === 'platinum' || sheet === 'palladium') && rec.weightG > 0 && rec.weightG <= 2) {
+    const asG = +(rec.weightG * 31.1035).toFixed(3);
+    if (confirm(rec.weightG + ' GRAMS of ' + sheet + ' is unusually small.\n\nDid you mean ' + rec.weightG + ' TROY OZ (= ' + asG + ' g)?\n\nOK = yes, store ' + asG + ' g\nCancel = no, it really is ' + rec.weightG + ' g')) {
+      rec.weightG = asG;
+    }
+  }
+  if ((sheet === 'gold' || sheet === 'silver' || sheet === 'copper') && rec.weight >= 15) {
+    const asOz = +(rec.weight / 31.1035).toFixed(4);
+    if (confirm(rec.weight + ' TROY OZ is unusually large for one record.\n\nDid you mean ' + rec.weight + ' GRAMS (= ' + asOz + ' oz)?\n\nOK = yes, store ' + asOz + ' oz\nCancel = no, it really is ' + rec.weight + ' oz')) {
+      rec.weight = asOz;
+    }
+  }
+
   // Attach AI-scanned image URLs uploaded earlier (if any)
   // v140 (supersedes v130's raw-result merge): the extras now live as
   // VISIBLE, EDITABLE inputs in the Add form, all persisted into
@@ -15873,6 +16215,10 @@ async function submitAdd(){
   {
     const _exclC = new Set((SCHEMAS[sheet] || []).map(function(s){ return s.f; }));
     _exclC.add('id'); _exclC.add('quantity');
+    // v152: never write the non-canonical twin of a field this sheet
+    // already carries under its canonical name (e.g. purity alongside
+    // silverContent) — kills duplicate fields at the source.
+    _twinSkipSet(ADD_FORM_STATE, sheet).forEach(function(k){ _exclC.add(k); });
     const _mk = [];
     Object.keys(ADD_FORM_STATE).forEach(function(k){
       if (_exclC.has(k)) return;
@@ -16425,6 +16771,59 @@ function showAIProviderTest() {
 // ═══════════════════════════════════════════════════════════════════════
 const _AI_METALS_SHEETS = new Set(['gold','silver','copper','platinum','palladium']);
 
+// ═══ TWIN-FIELD CANONICALIZATION (v152) ═════════════════════════════════
+// Three field pairs mean the same thing under different names on different
+// sheets. The AI map intentionally emits BOTH of each pair (so no sheet
+// ever loses data) — these helpers pick the ONE canonical name per sheet
+// so records never carry duplicates.
+const _FIELD_TWINS = [
+  ['silverContent', 'purity'],      // coin sheets ↔ metals sheets
+  ['country',       'state'],       // most sheets ↔ confederate/obsolete
+  ['features',      'description'], // coin/currency ↔ metals
+  // v153: weight twins carry a UNIT CONVERSION: weightG = weight × 31.1035
+  // (troy oz → grams). Pt/Pd sheets store grams; gold/silver/copper store
+  // troy oz. The factor makes "1 oz" and "31.1035 g" compare as EQUAL.
+  ['weight',        'weightG',  31.1035]
+];
+function _twinCanonical(sheet, a, b) {
+  const fields = new Set(((typeof SCHEMAS !== 'undefined' && SCHEMAS[sheet]) || []).map(function(x){ return x.f; }));
+  if (fields.has(a) && !fields.has(b)) return a;
+  if (fields.has(b) && !fields.has(a)) return b;
+  if (fields.has(a) && fields.has(b)) return a;
+  // neither declared: metals default to the metals-side name, others to a
+  return _AI_METALS_SHEETS.has(sheet) ? b : a;
+}
+function _twinValsEqual(x, y, factor) {
+  if (x == null || y == null) return false;
+  const nx = parseFloat(x), ny = parseFloat(y);
+  if (!isNaN(nx) && !isNaN(ny)) {
+    if (factor) {
+      // conversion pair: equal when y ≈ x·factor within 0.5% (rounding slack)
+      if (nx === 0 || ny === 0) return nx === ny;
+      return Math.abs(ny - nx * factor) / Math.abs(nx * factor) < 0.005;
+    }
+    return nx === ny;
+  }
+  return String(x).trim().toLowerCase() === String(y).trim().toLowerCase();
+}
+// Keys to SKIP when writing/showing `obj` for `sheet`: the non-canonical
+// twin, whenever its canonical partner is present with the same value.
+// Differing values are NEVER silently dropped — the cleanup tool surfaces
+// those as conflicts for a human decision.
+function _twinSkipSet(obj, sheet) {
+  const skip = new Set();
+  _FIELD_TWINS.forEach(function(pair){
+    const a = pair[0], b = pair[1];
+    const hasA = obj[a] != null && obj[a] !== '';
+    const hasB = obj[b] != null && obj[b] !== '';
+    if (!hasA || !hasB) return;
+    if (!_twinValsEqual(obj[a], obj[b], pair[2])) return;
+    const canon = _twinCanonical(sheet, a, b);
+    skip.add(canon === a ? b : a);
+  });
+  return skip;
+}
+
 // Review rows from a normalized result vs the record: drop alias keys when
 // their twin carries the same value (purity/silverContent, state/country,
 // description/features) so the table reads clean. Pure — unit-testable.
@@ -16433,10 +16832,7 @@ function _aiRecScanRows(map, raw, sheet) {
   Object.keys(map).forEach(function(k){
     const v = map[k];
     if (v == null || v === '' || v === 0) return;
-    if (k === 'purity' && map.silverContent === v && !_AI_METALS_SHEETS.has(sheet)) return;
-    if (k === 'silverContent' && map.purity === v && _AI_METALS_SHEETS.has(sheet)) return;
-    if (k === 'state' && map.country === v) return;
-    if (k === 'description' && map.features === v) return;
+    if (_twinSkipSet(map, sheet).has(k)) return;
     const cur = raw[k];
     const empty = (cur == null || cur === '');
     rows.push({ key: k, value: v, current: cur, fillable: empty });
@@ -18188,6 +18584,9 @@ function _aiFieldMapFromResult(r) {
     silverContent: r.silverContent,
     purity:        r.silverContent,      // bullion sheets name it 'purity'
     weight:        r.weight,
+    // v153: grams twin for Pt/Pd sheets — AI weight is troy oz; convert.
+    weightG:       (r.weight != null && r.weight !== '' && !isNaN(parseFloat(r.weight)))
+                     ? +(parseFloat(r.weight) * 31.1035).toFixed(3) : undefined,
     features:      r.features,
     notes:         r.notes,
     state:         r.country,
