@@ -2014,7 +2014,7 @@ body.theme-modern-dark select option{
 // Bump this on every deploy so the user can see at a glance which build is
 // running in their browser. Surfaced in three places: the sidebar footer
 // (desktop), the mobile header badge, and the Settings → About section.
-const APP_VERSION = 'v153';
+const APP_VERSION = 'v154';
 const APP_BUILD_DATE = '2026-08-28';
 // Boot banner — makes the running build unambiguous in any console log or
 // screenshot, since stale-deploy confusion has bitten more than once.
@@ -4745,10 +4745,15 @@ function getWeightOz(r) {
              r['weight(oz)'] ?? r['silverWeight(oz)'] ?? null);
 }
 function getWeightG(r) {
+  // v154: the bare r.weight fallback is GONE — it silently read troy-oz
+  // values as grams on Pt/Pd. A gram-sheet record with only an oz value
+  // now contributes no live gram weight (melt falls back to stored/avg)
+  // and is flagged by the Weight Audit for one-tap migration instead of
+  // being quietly wrong in every total.
   return nv(r.weightG        ?? r.weightGrams   ?? r.weightg       ??
              r.grams          ?? r.gram           ?? r.wtg           ??
              r['weight(grams)'] ?? r['weight(Grams)'] ?? r['weightingrams'] ??
-             r.weight          ?? null);
+             null);
 }
 // Per-item average oz from the embedded PRECOMPUTED snapshot.
 // Used as last-resort melt estimate when live Sheets weights aren't loading.
@@ -4934,6 +4939,52 @@ function nav(v){
 // ── DASHBOARD ─────────────────────────────────────────────────────────────────
 
 // ── Unified totals computation (used by sidebar + dashboard) ──────────────────
+// ═══ VALUATION POLICY (v154) ════════════════════════════════════════════
+// ONE function decides what a record is worth, used by every total on
+// every page. Policy:
+//   • Bullion sheets, GENERIC pieces (bar/round/ingot/nugget/shot/
+//     hand-poured…): worth MELT, full stop. Numismatic value doesn't
+//     exist for a nugget — a stale `value` entry can no longer pin the
+//     total when spot moves.
+//   • Bullion sheets, actual COINS (Eagles, Maples, premium proofs that
+//     live there): max(melt, numismatic) — premiums are real for them.
+//   • Coin sheets: max(numismatic, melt) — silver coins' melt floor comes
+//     from their silver weight × spot.
+//   • Cost is a FALLBACK when nothing else is known — never a floor. What
+//     you paid is not what it's worth; gain/loss may now go negative,
+//     which is the honest number.
+const _METAL_SHEETS_V = new Set(['gold','silver','copper','platinum','palladium']);
+// Same word-boundary pattern the error scanner uses (safe vs "Pound"/"Barber").
+const _GENERIC_BULLION_RE = /\b(bar|bars|round|rounds|ingot|shot|cube|square|bullet|grain|nugget|hand[\s-]?poured|junk)\b/i;
+function isGenericBullion(r) {
+  const hay = [r.type, r.description, r.series, r.features].filter(Boolean).join(' ');
+  return _GENERIC_BULLION_RE.test(hay);
+}
+
+// Per-record live melt — ADAPTER onto the single global liveMelt(item)
+// engine defined above (live weight × spot → stored meltValue →
+// PRECOMPUTED category average). One melt implementation, every caller.
+function liveMeltFor(sheetKey, r) {
+  return liveMelt({ sheet: sheetKey, raw: r });
+}
+
+function itemValueFor(sheetKey, r) {
+  const cost = nv(r.cost);
+  const num  = sheetKey === 'mintSets' ? nv(r.uncertValue) : nv(r.value);
+  const melt = liveMeltFor(sheetKey, r);
+  if (_METAL_SHEETS_V.has(sheetKey)) {
+    if (isGenericBullion(r)) {
+      // melt first; stored value only rescues records with no computable melt
+      if (melt > 0) return melt;
+      return num > 0 ? num : cost;
+    }
+    const best = Math.max(melt, num);
+    return best > 0 ? best : cost;
+  }
+  const best = Math.max(num, melt);
+  return best > 0 ? best : cost;
+}
+
 function computeTotals() {
   const sp = SPOTS || {};
   // nv, getWeightOz, getWeightG, avgOzPerItem are now global (defined above computeTotals)
@@ -4946,70 +4997,10 @@ function computeTotals() {
     'Other':           ['other'],
   };
 
-  // Pre-compute category average oz/item from PRECOMPUTED snapshot.
-  // Used as last-resort melt estimate when live Sheets weights aren't loading
-  // (e.g. column naming mismatch) and the spreadsheet has no stored meltValue.
-  // Scales up proportionally when the user has added new records since the snapshot.
-  function avgOzPerItem(key) {
-    const pre = PRECOMPUTED[key] || {};
-    const preOz  = pre.oz    || 0;
-    const preCnt = pre.count || 1;
-    const liveCnt = (D[key] || []).length || preCnt;
-    // scale: if 133 → 140 records, estimate 140/133 × 94.2 oz
-    return preOz / preCnt;   // per-item average from snapshot (scale applied at call site)
-  }
-
-  // Per-item live melt value — uses robust weight helpers on ALL sheet types.
-  // Priority: live weight × spot  →  stored meltValue  →  PRECOMPUTED avg × spot
-  function liveMelt(sheetKey, r) {
-    // ── Precious metal bullion ──────────────────────────────────────────
-    if (sheetKey === 'gold') {
-      const w = getWeightOz(r);
-      if (sp.gold && w > 0) return w * ((nv(r.karat)||24)/24) * sp.gold;
-      return nv(r.meltValue);
-    }
-    if (sheetKey === 'silver') {
-      const w = getWeightOz(r);
-      if (sp.silver && w > 0) return w * sp.silver;
-      return nv(r.meltValue);
-    }
-    if (sheetKey === 'copper') {
-      const w = getWeightOz(r);
-      if (sp.copper && w > 0) return (w / 14.5833) * sp.copper;
-      return nv(r.meltValue);
-    }
-    if (sheetKey === 'platinum') {
-      const g = getWeightG(r);
-      if (sp.platinum && g > 0) return (g / 31.1035) * sp.platinum;
-      return nv(r.meltValue);
-    }
-    if (sheetKey === 'palladium') {
-      const g = getWeightG(r);
-      if (sp.palladium && g > 0) return (g / 31.1035) * sp.palladium;
-      return nv(r.meltValue);
-    }
-    // ── Silver coins ────────────────────────────────────────────────────
-    // weight column = pure silver oz (user pre-calculated, not multiplied by silverContent)
-    if (sheetKey === 'gradedSilver' || sheetKey === 'rawSilver') {
-      const w = getWeightOz(r);
-      if (sp.silver && w > 0) return w * sp.silver;          // ① live weight × spot
-      const stored = nv(r.meltValue);
-      if (stored > 0) return stored;                          // ② stored melt in sheet
-      // ③ last resort: PRECOMPUTED category average oz × current spot
-      //    Better than 0 — restores melt contribution when column name mismatches
-      if (sp.silver) return avgOzPerItem(sheetKey) * sp.silver;
-      return 0;
-    }
-    return 0;
-  }
-
-  // Best-value-per-item: max(numismatic value, melt, cost)
-  function itemBest(sheetKey, r) {
-    const cost = nv(r.cost);
-    const num  = sheetKey === 'mintSets' ? nv(r.uncertValue) : nv(r.value);
-    const melt = liveMelt(sheetKey, r);
-    return Math.max(num, melt, cost);
-  }
+  // v154: valuation + melt now live in the GLOBAL itemValueFor/liveMeltFor
+  // (defined just above computeTotals) so every surface — dashboard, group
+  // table, Category Detail, snapshots — prices a record identically.
+  const itemBest = itemValueFor;
 
   const gstats = {};
   for (const [g, keys] of Object.entries(groups)) {
@@ -5858,7 +5849,7 @@ function renderDash(){
     <div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--dim);margin-bottom:4px">Gold (XAU)</div>
     <div style="font-size:22px;font-family:var(--font-display,\'Cormorant Garamond\',serif);color:var(--text);margin-bottom:12px">${SPOTS?fmt$(SPOTS.gold)+'<span style="font-size:12px;color:var(--dim)">/oz</span>':'<span style="color:var(--dim);font-size:14px">loading…</span>'}</div>
     <div style="font-size:11px;color:var(--muted);line-height:2;border-top:1px solid var(--border);padding-top:10px">
-      <div style="display:flex;justify-content:space-between"><span>All 24k (186 items)</span><span class="mono">${fmtOz(T.goldOzPure)}</span></div>
+      <div style="display:flex;justify-content:space-between"><span>Pure-gold equiv (${(D.gold||[]).length} items, karat-adj)</span><span class="mono">${fmtOz(T.goldOzPure)}</span></div>
       <div style="display:flex;justify-content:space-between;border-top:1px solid var(--border);margin-top:4px;padding-top:4px;color:var(--text)"><span><strong>Total</strong></span><span class="mono"><strong>${fmtOz(T.goldOzPure)}</strong></span></div>
       <div style="display:flex;justify-content:space-between;color:var(--gold);margin-top:4px"><span>Melt value</span><span class="mono">${SPOTS?fmt$(T.goldOzPure*SPOTS.gold):'—'}</span></div>
     </div>
@@ -5898,6 +5889,23 @@ function renderDash(){
   </div>
 
 </div>
+
+<!-- v154: reconciliation strip — makes the melt math tie out visibly.
+     The metal cards above include silver INSIDE coins; the group table
+     below holds that same silver in the Coins row. This line is the
+     bridge, so the two sections can be added up by a human. -->
+${(function(){
+  const sp = SPOTS || {};
+  const bullionMelt = (T.goldMelt||0) + (sp.silver ? (T.silverBulOz||0)*sp.silver : 0) + (T.platMelt||0) + (T.pallMelt||0) + (T.copperMelt||0);
+  const coinMelt    = sp.silver ? ((T.silverGradOz||0) + (T.silverRawOz||0)) * sp.silver : 0;
+  return `<div style="background:var(--bg3);border:1px solid var(--gold3);border-radius:7px;padding:12px 16px;margin-bottom:28px;font-size:12px;color:var(--muted);line-height:1.8">
+    <span style="color:var(--gold);text-transform:uppercase;font-size:10px;letter-spacing:.1em">Melt math check</span><br>
+    Metal in <strong style="color:var(--text)">bullion</strong> ${fmt$(bullionMelt)} (lives in the Precious Metals row below)
+    &nbsp;+&nbsp; metal <strong style="color:var(--text)">inside coins</strong> ${fmt$(coinMelt)} (lives in the Coins row below)
+    &nbsp;=&nbsp; <strong style="color:var(--gold)" class="mono">${fmt$(bullionMelt + coinMelt)}</strong> total metal at spot
+    — matching the card melts above${Math.abs((bullionMelt+coinMelt)-(T.totMelt||0)) < 1 ? '' : ' <span style="color:var(--red)">(⚠ drifts from totMelt — report this)</span>'}.
+  </div>`;
+})()}
 <div class="cr">
   <div class="cc">
     <div class="ct">Value by Group</div>
@@ -5989,8 +5997,8 @@ function renderDash(){
 
 <div class="stt">Breakdown by Category Group</div>
 <div style="font-size:11px;color:var(--dim);margin-bottom:10px;line-height:1.55;max-width:880px">
-  Each item is valued <strong style="color:var(--text)">once</strong>, at the higher of its numismatic value or melt value.
-  Bullion typically lands on melt; graded coins on numismatic. Category subtotals sum to the TOTAL row.
+  Each item is valued <strong style="color:var(--text)">once</strong>: generic bullion (bars, rounds, nuggets) at <strong style="color:var(--text)">melt only</strong>;
+  coins — including bullion-sheet coins like Eagles — at the higher of numismatic or melt; cost is used only when nothing else is known, never as a floor, so gain/loss can honestly go negative. Category subtotals sum to the TOTAL row.
   The <em>Metal Content</em> column shows the underlying melt value of any precious metal inside each group at current spot &mdash; informational only, already included in the Value column where it's the higher number.
 </div>
 <table style="margin-bottom:8px">
@@ -6050,12 +6058,19 @@ function renderDash(){
 <table>
   <thead><tr><th>Category</th><th>Group</th><th class="r">Records</th><th class="r">Cost Paid</th><th class="r">Value / Melt</th></tr></thead>
   <tbody>
-    ${SHEETS.filter(s=>P[s.key]&&P[s.key].count>0).map(s=>{
-      const st=P[s.key]; const gc=GC[s.group]||'#707070';
+    ${SHEETS.map(s=>{
+      /* v154: LIVE stats via the same itemValueFor every other table uses —
+         this table previously rendered PRECOMPUTED (a frozen snapshot from
+         the Sheets era) and could never agree with the live tables above. */
+      const arr = D[s.key] || [];
+      if (!arr.length) return '';
+      const st = { count: arr.length, cost: 0, value: 0 };
+      arr.forEach(r => { st.cost += nv(r.cost); st.value += itemValueFor(s.key, r); });
+      const gc=GC[s.group]||'#707070';
       return `<tr style="cursor:pointer" onclick="nav('inv');ST.filterSheet='${s.key}';renderInv()">
         <td><span class="pill" style="background:${gc}18;color:${gc};border-color:${gc}40;font-size:10px">${s.label}</span></td>
         <td style="color:var(--muted);font-size:12px">${s.group}</td>
-        <td class="r">${st.count}</td>
+        <td class="r">${st.count.toLocaleString()}</td>
         <td class="r">${fmt$(st.cost)}</td>
         <td class="r mono">${fmt$(st.value)}</td>
       </tr>`;
