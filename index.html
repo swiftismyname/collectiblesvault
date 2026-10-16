@@ -2014,7 +2014,7 @@ body.theme-modern-dark select option{
 // Bump this on every deploy so the user can see at a glance which build is
 // running in their browser. Surfaced in three places: the sidebar footer
 // (desktop), the mobile header badge, and the Settings → About section.
-const APP_VERSION = 'v154';
+const APP_VERSION = 'v155';
 const APP_BUILD_DATE = '2026-08-28';
 // Boot banner — makes the running build unambiguous in any console log or
 // screenshot, since stale-deploy confusion has bitten more than once.
@@ -2463,7 +2463,11 @@ const COL_REGISTRY = {
 
   // Pricing extras (cost/value/melt added v79 — see COL_DEFAULTS.recent)
   cost:          { label:'Cost',           render:(r,it)=>{const v=parseFloat(r.cost)||0;return v>0?fmt$(v):'\u2014';}, right:true },
-  value:         { label:'Value',          render:(r,it)=>{const v=parseFloat(r.value)||0;return v>0?fmt$(v):'\u2014';}, right:true },
+  value:         { label:'Value',          render:(r,it)=>{
+    // v155: kind-aware — generic bullion never displays a numismatic value
+    if (it && valueKindFor(it.sheet, r) === 'melt-only') return '<span style="color:var(--dim)" title="Generic bullion \u2014 melt applies, numismatic does not">melt-valued</span>';
+    const v=parseFloat(r.value)||0;return v>0?fmt$(v):'\u2014';
+  }, right:true },
   melt:          { label:'Melt',           render:(r,it)=>{
     // liveMelt is the per-item helper at line ~2967 that handles karat
     // adjustment, troy-ounce conversion, and weighted averages for sheets
@@ -3336,6 +3340,81 @@ function recordValueSnapshot() {
 const _WA_OZ_SHEETS   = ['gold', 'silver', 'copper'];
 const _WA_GRAM_SHEETS = ['platinum', 'palladium'];
 const _WA_COIN_SHEETS = ['gradedSilver', 'rawSilver'];
+
+// ═══ NUMIS-ON-BULLION CLEANUP (v155) ════════════════════════════════════
+// Finds generic-bullion records (bars, rounds, nuggets…) carrying a stored
+// numismatic `value` — a kind of worth they don't have. Totals already
+// ignore it (v154); this clears the field itself so exports, edit forms,
+// and All Fields stop carrying it. Bullion-sheet COINS are never listed.
+function _nbScan() {
+  const out = [];
+  _METAL_SHEETS_V.forEach(function(sheet){
+    (D[sheet] || []).forEach(function(r){
+      const v = nv(r.value);
+      if (v > 0 && isGenericBullion(r)) {
+        out.push({ sheet: sheet, id: r.id, value: v, melt: liveMeltFor(sheet, r),
+                   desc: String(r.description || r.type || r.series || '').slice(0, 44) });
+      }
+    });
+  });
+  return out;
+}
+
+async function _nbClearChecked() {
+  const rows = window._nbRows || [];
+  const checked = Array.prototype.slice.call(document.querySelectorAll('.nb-check:checked'))
+    .map(function(cb){ return rows[parseInt(cb.dataset.i, 10)]; }).filter(Boolean);
+  if (!checked.length) { alert('Nothing checked.'); return; }
+  if (!confirm('Clear the stored numismatic value on ' + checked.length + ' generic-bullion record' + (checked.length===1?'':'s') + '?\n\nMelt remains their value (unchanged). Cost is untouched. Syncs to cloud + backup.')) return;
+  let ok = 0;
+  for (const t of checked) { if (await _fcApplyDrop(t.sheet, t.id, 'value')) ok++; }
+  buildFlat();
+  if (typeof cvToast === 'function') cvToast('\ud83e\uddfd Cleared numismatic value on ' + ok + ' bullion record' + (ok===1?'':'s'), 'ok');
+  showNumisBullionCleanup();
+}
+
+function showNumisBullionCleanup() {
+  const ex = document.getElementById('nb-modal');
+  if (ex) ex.remove();
+  const modal = document.createElement('div');
+  modal.id = 'nb-modal';
+  modal.className = 'ref-modal';
+  modal.onclick = function(ev){ if (ev.target === modal) modal.remove(); };
+  document.body.appendChild(modal);
+  const rows = _nbScan();
+  window._nbRows = rows;
+  const _td = 'padding:7px 8px;border-bottom:1px solid var(--border);font-size:12px;vertical-align:middle;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+  modal.innerHTML = ''
+    + '<div class="ref-modal-panel" style="background:var(--bg2);border:1px solid var(--gold3);border-radius:10px;width:min(680px,95vw);max-height:88vh;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 16px 48px rgba(0,0,0,.7)">'
+    +   '<div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--border)">'
+    +     '<div>'
+    +       '<h2 style="margin:0;font-family:var(--font-display);font-size:17px;color:var(--gold)">\ud83e\uddfd Numis-on-Bullion Cleanup</h2>'
+    +       '<div style="font-size:11px;color:var(--muted);margin-top:2px">Generic bullion carrying a numismatic value it can\u2019t have \u00b7 clearing keeps melt + cost untouched</div>'
+    +     '</div>'
+    +     '<button onclick="document.getElementById(\'nb-modal\').remove()" style="background:transparent;border:1px solid var(--border);color:var(--muted);padding:6px 14px;border-radius:4px;cursor:pointer;font-size:12px">Close</button>'
+    +   '</div>'
+    +   '<div style="padding:16px 20px;overflow-y:auto;flex:1;min-height:0">'
+    +   (rows.length === 0
+        ? '<div style="padding:18px;text-align:center;color:var(--green);font-size:12px">\u2713 No generic bullion carries a numismatic value \u2014 taxonomy is clean.</div>'
+        : '<table style="width:100%;border-collapse:collapse;table-layout:fixed;margin-bottom:12px">'
+          + '<colgroup><col style="width:30px"><col style="width:70px"><col><col style="width:92px"><col style="width:92px"></colgroup>'
+          + '<thead><tr><th style="' + _td + '"></th>'
+          + ['#','Item','Stored value','Live melt'].map(function(h){ return '<th style="' + _td + ';font-size:9px;color:var(--dim);text-transform:uppercase;text-align:left">' + h + '</th>'; }).join('')
+          + '</tr></thead><tbody>'
+          + rows.map(function(t, i){
+              return '<tr>'
+                + '<td style="' + _td + ';text-align:center"><input type="checkbox" class="nb-check" data-i="' + i + '" checked></td>'
+                + '<td style="' + _td + ';font-family:DM Mono,monospace">' + e(cn(t.id)) + '</td>'
+                + '<td style="' + _td + '" title="' + e(SHEET_MAP[t.sheet].label) + '">' + e(t.desc || SHEET_MAP[t.sheet].label) + '</td>'
+                + '<td style="' + _td + ';color:var(--red)">$' + t.value.toLocaleString() + '</td>'
+                + '<td style="' + _td + ';color:var(--green)">' + (t.melt > 0 ? '$' + Math.round(t.melt).toLocaleString() : '\u2014') + '</td>'
+                + '</tr>';
+            }).join('')
+          + '</tbody></table>'
+          + '<button class="bp" onclick="_nbClearChecked()">Clear Checked Stored Values</button>')
+    +   '</div>'
+    + '</div>';
+}
 
 function _waSpotFor(sheet) {
   const sp = (typeof SPOTS !== 'undefined' && SPOTS) ? SPOTS : {};
@@ -4968,6 +5047,23 @@ function liveMeltFor(sheetKey, r) {
   return liveMelt({ sheet: sheetKey, raw: r });
 }
 
+// ═══ VALUE-KIND TAXONOMY (v155) ═════════════════════════════════════════
+// Four kinds of worth, per the owner's model — and each record gets ONLY
+// the ones that apply to what it is:
+//   cost        — what was paid (every record)
+//   melt        — anything made of precious metal (bullion AND coin silver)
+//   numismatic  — coins and paper currency ONLY
+//   regular     — everything else (sets, memorabilia, 'other')
+// Generic bullion (bars, rounds, nuggets…) has NO numismatic value — not
+// in totals (v154), and now not in labels, forms, exports, or AI writes.
+const _CURRENCY_SHEETS_V = new Set(['usNotes','confederate','obsolete','foreignNotes','fractional']);
+const _COIN_SHEETS_V     = new Set(['gradedSilver','rawSilver','gradedUS','rawUS','gradedForeign','rawForeign','ancient']);
+function valueKindFor(sheetKey, r) {
+  if (_METAL_SHEETS_V.has(sheetKey)) return isGenericBullion(r || {}) ? 'melt-only' : 'premium';
+  if (_COIN_SHEETS_V.has(sheetKey) || _CURRENCY_SHEETS_V.has(sheetKey)) return 'numismatic';
+  return 'regular';
+}
+
 function itemValueFor(sheetKey, r) {
   const cost = nv(r.cost);
   const num  = sheetKey === 'mintSets' ? nv(r.uncertValue) : nv(r.value);
@@ -6313,7 +6409,7 @@ function renderInv(){
       <th style="cursor:pointer" onclick="setSort('series')">${sh('series','Series / Year')}</th>
       <th>Grade</th>
       <th class="r" style="width:70px;cursor:pointer" onclick="setSort('cost')">${sh('cost','Cost')}</th>
-      <th class="r" style="width:80px;cursor:pointer" onclick="setSort('value')" title="Numismatic / market value (stored)">${sh('value','Numis.')}</th>
+      <th class="r" style="width:80px;cursor:pointer" onclick="setSort('value')" title="Numismatic value for coins &amp; currency / market premium for bullion-sheet coins / melt rules generic bullion / plain value for other items">${sh('value','Value')}</th>
       <th class="r" style="width:75px" title="Melt value at current spot price">Melt</th>
       <th class="r" style="width:65px">Gain</th>
       <th class="r" style="width:55px">OZ</th>
@@ -6360,7 +6456,7 @@ function renderInv(){
             ${e(item.grade||'—')}${item.raw.gradingAuth&&!isOfficialGrader(item.raw.gradingAuth)?`<span title="Self-graded / not officially certified" style="margin-left:3px;font-size:9px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.15);border-radius:3px;padding:1px 4px;color:var(--dim)">self</span>`:''}
           </td>
           <td class="r" data-label="Cost" style="color:var(--muted)">${item.cost>0?fmt$(item.cost):'—'}</td>
-          <td class="r mono" data-label="Numismatic">${item.value>0?fmt$(item.value):'—'}</td>
+          <td class="r mono" data-label="Value">${valueKindFor(item.sheet, item.raw)==='melt-only'?`<span title="Generic bullion — valued at melt; numismatic does not apply" style="color:var(--dim)">melt</span>`:(item.value>0?fmt$(item.value):'—')}</td>
           ${meltCellHtml(item)}
           <td class="r" data-label="Gain" style="font-size:12px;${gain>0?'color:var(--green)':gain<0?'color:var(--red)':''}">
             ${item.cost>0&&item.value>0?(gain>=0?'+':'')+fmt$(gain):'—'}
@@ -11803,7 +11899,11 @@ async function _saveImagesAndAI() {
       variety: ai.variety, charter: ai.charter, bankName: ai.bankName,
       city: ai.city, bankState: ai.bankState, defects: ai.defects
     };
-    if (ai.estimatedValue && ai.estimatedValue.mid) candidates.value = ai.estimatedValue.mid;
+    // v155: numismatic estimate only where it applies — never generic bullion
+    if (ai.estimatedValue && ai.estimatedValue.mid
+        && valueKindFor(item.sheet, Object.assign({}, item.raw, candidates)) !== 'melt-only') {
+      candidates.value = ai.estimatedValue.mid;
+    }
 
     const filledFields = [];
     Object.keys(candidates).forEach(function(k) {
@@ -13194,6 +13294,22 @@ function _healthChecks() {
   // value across grade tiers: line chart of value vs. grade, example image
   // from Wikipedia, and the full tier price list. Powered by the existing
   // PriceCharting integration (paid token required).
+  // v155: numismatic-on-bullion cleanup
+  (function(){
+    let n = 0;
+    try { n = (typeof _nbScan === 'function') ? _nbScan().length : 0; } catch (e) {}
+    checks.push({
+      id: 'numis-bullion-cleanup',
+      label: 'Numis Value on Bullion',
+      desc: (n > 0 ? '\u26a0 ' + n + ' generic-bullion record' + (n===1?'':'s') + ' (bars, rounds, nuggets) carry a stored numismatic value \u2014 a kind of worth they don\u2019t have. ' : 'No generic bullion carries a numismatic value. ')
+            + 'Totals already ignore it; this clears the field so forms and exports match the taxonomy: cost + melt for bullion, numismatic for coins & currency.',
+      icon: '\ud83e\uddfd',
+      count: n > 0 ? n : null,
+      action: function(){ if (typeof showNumisBullionCleanup === 'function') showNumisBullionCleanup(); },
+      countable: n > 0
+    });
+  })();
+
   // v153: weight audit — grams vs troy oz across all metals
   (function(){
     let n = 0;
@@ -14096,14 +14212,15 @@ function exportCSV(){
 
   if (items.length === 0) { alert('No items match the current filter. Nothing to export.'); return; }
 
-  const cols = ['Category','Record #','Description','Series','Grade','Cost','Numismatic Value','Melt Value','Gain','OZ','Sheet Key'];
+  const cols = ['Category','Record #','Description','Series','Grade','Cost','Numismatic/Market Value','Melt Value','Gain','OZ','Sheet Key'];
   const rows = [cols.join(',')];
 
   items.forEach(i => {
     const sm    = SHEET_MAP[i.sheet];
     const cat   = sm ? sm.label : i.sheet;
     const cost  = i.cost > 0 ? i.cost : '';
-    const value = i.value > 0 ? i.value : '';
+    // v155: generic bullion exports NO numismatic value — melt column carries its worth
+    const value = (valueKindFor(i.sheet, i.raw || {}) === 'melt-only') ? '' : (i.value > 0 ? i.value : '');
     const gain  = (i.cost > 0 && i.value > 0) ? (i.value - i.cost).toFixed(2) : '';
     const oz    = i.oz > 0 ? i.oz : '';
     const melt = liveMelt(i);
@@ -15762,19 +15879,19 @@ const SCHEMAS = {
   platinum:      [{f:'purity',l:'Purity',t:'number',ph:'0.9995'},{f:'weightG',l:'Weight (grams)',t:'number',ph:'31.1'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'meltValue',l:'Melt Value ($)',t:'number',ph:'optional — leave blank for live calc'}],
   palladium:     [{f:'purity',l:'Purity',t:'number',ph:'0.9995'},{f:'weightG',l:'Weight (grams)',t:'number',ph:'31.1'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'meltValue',l:'Melt Value ($)',t:'number',ph:'optional — leave blank for live calc'}],
   mintSets:      [{f:'year',l:'Year',t:'text',ph:'2024'},{f:'silver',l:'Silver?',t:'text',ph:'Y or N'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'uncertValue',l:'Uncertified Value ($)',t:'number',ph:'optional'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'notes',l:'Notes',t:'text',ph:'optional'}],
-  gradedSilver:  [{f:'country',l:'Country',t:'text',ph:'USA'},{f:'series',l:'Series',t:'text',ph:'Morgan Dollar'},{f:'year',l:'Year',t:'text',ph:'1921'},{f:'variety',l:'Variety / Error',t:'text',ph:'DDO, VAM…'},{f:'type',l:'Type',t:'text',ph:'Kennedy Half'},{f:'weight',l:'Silver Weight (oz)',t:'number',ph:'0.773'},{f:'silverContent',l:'Silver Purity (0-1, e.g. 0.9 = 90%)',t:'number',ph:'0.9'},{f:'totalCoinWeight',l:'Total Coin Weight (g)',t:'number',ph:'26.73'},{f:'denomination',l:'Denomination',t:'text',ph:'$1'},{f:'serial',l:'Serial #',t:'text',ph:''},{f:'grade',l:'Grade',t:'text',ph:'MS 65'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'NGC'},{f:'mint',l:'Mint',t:'text',ph:'Philadelphia'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
-  rawSilver:     [{f:'series',l:'Series',t:'text',ph:'Morgan Dollar'},{f:'year',l:'Year',t:'text',ph:'1921'},{f:'mint',l:'Mint Mark',t:'text',ph:'D, S, O…'},{f:'variety',l:'Variety / Error',t:'text',ph:'DDO, RPM…'},{f:'country',l:'Country',t:'text',ph:'USA'},{f:'type',l:'Type',t:'text',ph:'Kennedy Half'},{f:'weight',l:'Silver Weight (oz)',t:'number',ph:'0.773'},{f:'silverContent',l:'Silver Purity (0-1, e.g. 0.9 = 90%)',t:'number',ph:'0.9'},{f:'totalCoinWeight',l:'Total Coin Weight (g)',t:'number',ph:'26.73'},{f:'denomination',l:'Denomination',t:'text',ph:'$1'},{f:'grade',l:'Grade',t:'text',ph:'VF 20'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'Raw'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
-  gradedUS:      [{f:'type',l:'Type',t:'text',ph:'Cent, Nickel…'},{f:'series',l:'Series',t:'text',ph:'Lincoln Cent'},{f:'year',l:'Year',t:'text',ph:'1921'},{f:'mint',l:'Mint Mark',t:'text',ph:'D, S, O…'},{f:'variety',l:'Variety / Error',t:'text',ph:'DDO, RPM…'},{f:'denomination',l:'Denomination',t:'text',ph:'$0.01'},{f:'serial',l:'Serial #',t:'text',ph:''},{f:'grade',l:'Grade',t:'text',ph:'MS 65'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'PCGS'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
-  rawUS:         [{f:'type',l:'Type',t:'text',ph:'Cent, Nickel…'},{f:'series',l:'Series',t:'text',ph:'Lincoln Cent'},{f:'year',l:'Year',t:'text',ph:'1921'},{f:'mint',l:'Mint Mark',t:'text',ph:'D, S, O…'},{f:'variety',l:'Variety / Error',t:'text',ph:'DDO, RPM…'},{f:'denomination',l:'Denomination',t:'text',ph:'$0.01'},{f:'grade',l:'Grade',t:'text',ph:'VF 20'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'Raw'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
-  gradedForeign: [{f:'country',l:'Country',t:'text',ph:'UK'},{f:'series',l:'Series',t:'text',ph:'Sovereign'},{f:'year',l:'Year',t:'text',ph:'1921'},{f:'mint',l:'Mint Mark',t:'text',ph:'D, S, O…'},{f:'variety',l:'Variety / Error',t:'text',ph:'DDO, RPM…'},{f:'denomination',l:'Denomination',t:'text',ph:'1 Pound'},{f:'grade',l:'Grade',t:'text',ph:'MS 63'},{f:'serial',l:'Serial #',t:'text',ph:''},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'NGC'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
-  rawForeign:    [{f:'country',l:'Country',t:'text',ph:'UK'},{f:'series',l:'Series',t:'text',ph:'Sovereign'},{f:'year',l:'Year',t:'text',ph:'1921'},{f:'mint',l:'Mint Mark',t:'text',ph:'D, S, O…'},{f:'variety',l:'Variety / Error',t:'text',ph:'DDO, RPM…'},{f:'denomination',l:'Denomination',t:'text',ph:'1 Pound'},{f:'grade',l:'Grade',t:'text',ph:'VF 20'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'Raw'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
-  usNotes:       [{f:'series',l:'Series',t:'text',ph:'1934A'},{f:'denomination',l:'Denomination',t:'text',ph:'$1'},{f:'noteType',l:'Note Type',t:'text',ph:'Federal Reserve Note, Silver Cert, Gold Cert, US Note, National…'},{f:'frNum',l:'Friedberg #',t:'text',ph:'Fr.1606'},{f:'signatures',l:'Signatures',t:'text',ph:'Tate / Mellon'},{f:'serial',l:'Serial #',t:'text',ph:''},{f:'blockLetter',l:'Block Letter',t:'text',ph:'B-A'},{f:'plate',l:'Plate Position',t:'text',ph:'A1, B2…'},{f:'sealColor',l:'Seal Color',t:'text',ph:'Blue, Green, Red, Brown'},{f:'frDistrict',l:'Federal Reserve District',t:'text',ph:'B2 / New York'},{f:'variety',l:'Variety',t:'text',ph:'Mule, Star, Web…'},{f:'charter',l:'Charter # (Nationals only)',t:'text',ph:'4321'},{f:'bankName',l:'Bank Name (Nationals)',t:'text',ph:'First National Bank of …'},{f:'city',l:'City (Nationals)',t:'text',ph:''},{f:'bankState',l:'State (Nationals)',t:'text',ph:'PA'},{f:'grade',l:'Grade',t:'text',ph:'VF 30 / CU 64'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'PMG, PCGS Banknote, raw…'},{f:'defects',l:'Defects',t:'text',ph:'Folds, pinholes, ink, tape…'},{f:'type',l:'Type (legacy)',t:'text',ph:'kept for backward compat'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
-  confederate:   [{f:'state',l:'State/Issuer',t:'text',ph:'Confederate States'},{f:'series',l:'Type/Series',t:'text',ph:'T-68'},{f:'denomination',l:'Denomination',t:'text',ph:'$10'},{f:'criswell',l:'Criswell #',t:'text',ph:'Cr.540'},{f:'frNum',l:'Friedberg #',t:'text',ph:'Fr.CSA-68'},{f:'signatures',l:'Signatures',t:'text',ph:'Treasurer / Register'},{f:'serial',l:'Serial #',t:'text',ph:''},{f:'plate',l:'Plate Position',t:'text',ph:''},{f:'variety',l:'Variety',t:'text',ph:''},{f:'grade',l:'Grade',t:'text',ph:'VF 25'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'PMG'},{f:'defects',l:'Defects',t:'text',ph:'Folds, pinholes, repairs…'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
-  obsolete:      [{f:'state',l:'State',t:'text',ph:'Georgia'},{f:'series',l:'Bank/Issuer',t:'text',ph:'Bank of Georgia'},{f:'denomination',l:'Denomination',t:'text',ph:'$5'},{f:'serial',l:'Serial #',t:'text',ph:''},{f:'signatures',l:'Signatures',t:'text',ph:'Cashier / President'},{f:'variety',l:'Variety',t:'text',ph:''},{f:'grade',l:'Grade',t:'text',ph:'Fine 12'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'PMG'},{f:'defects',l:'Defects',t:'text',ph:''},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
-  foreignNotes:  [{f:'country',l:'Country',t:'text',ph:'Germany'},{f:'series',l:'Series',t:'text',ph:'Weimar Republic'},{f:'denomination',l:'Denomination',t:'text',ph:'1000 Mark'},{f:'pickNumber',l:'Pick # (P-#)',t:'text',ph:'P-75'},{f:'signatures',l:'Signatures',t:'text',ph:''},{f:'serial',l:'Serial #',t:'text',ph:''},{f:'variety',l:'Variety',t:'text',ph:''},{f:'grade',l:'Grade',t:'text',ph:'VF 30'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'PMG'},{f:'defects',l:'Defects',t:'text',ph:''},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
-  fractional:    [{f:'denomination',l:'Denomination',t:'text',ph:'50 Cents'},{f:'series',l:'Issue',t:'text',ph:'5th Issue'},{f:'frNum',l:'Friedberg #',t:'text',ph:'Fr.1309'},{f:'signatures',l:'Signatures',t:'text',ph:'Colby / Spinner'},{f:'serial',l:'Serial #',t:'text',ph:''},{f:'variety',l:'Variety',t:'text',ph:''},{f:'grade',l:'Grade',t:'text',ph:'CH UNC 65'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'PMG'},{f:'defects',l:'Defects',t:'text',ph:''},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
-  ancient:       [{f:'country',l:'Country/Empire',t:'text',ph:'Roman'},{f:'type',l:'Type',t:'text',ph:'Denarius'},{f:'series',l:'Emperor/Issuer',t:'text',ph:'Augustus'},{f:'year',l:'Year / Date',t:'text',ph:'c. 320 BC'},{f:'grade',l:'Grade',t:'text',ph:'VF'},{f:'serial',l:'Cert #',t:'text',ph:'optional'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'NGC'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
-  other:         [{f:'country',l:'Country',t:'text',ph:'USA'},{f:'type',l:'Type',t:'text',ph:'Token, Medal…'},{f:'series',l:'Series',t:'text',ph:''},{f:'year',l:'Year / Date',t:'text',ph:'1900'},{f:'denomination',l:'Denomination',t:'text',ph:'optional'},{f:'grade',l:'Grade',t:'text',ph:'optional'},{f:'serial',l:'Serial #',t:'text',ph:'optional'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
+  gradedSilver:  [{f:'country',l:'Country',t:'text',ph:'USA'},{f:'series',l:'Series',t:'text',ph:'Morgan Dollar'},{f:'year',l:'Year',t:'text',ph:'1921'},{f:'variety',l:'Variety / Error',t:'text',ph:'DDO, VAM…'},{f:'type',l:'Type',t:'text',ph:'Kennedy Half'},{f:'weight',l:'Silver Weight (oz)',t:'number',ph:'0.773'},{f:'silverContent',l:'Silver Purity (0-1, e.g. 0.9 = 90%)',t:'number',ph:'0.9'},{f:'totalCoinWeight',l:'Total Coin Weight (g)',t:'number',ph:'26.73'},{f:'denomination',l:'Denomination',t:'text',ph:'$1'},{f:'serial',l:'Serial #',t:'text',ph:''},{f:'grade',l:'Grade',t:'text',ph:'MS 65'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'NGC'},{f:'mint',l:'Mint',t:'text',ph:'Philadelphia'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Numismatic Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
+  rawSilver:     [{f:'series',l:'Series',t:'text',ph:'Morgan Dollar'},{f:'year',l:'Year',t:'text',ph:'1921'},{f:'mint',l:'Mint Mark',t:'text',ph:'D, S, O…'},{f:'variety',l:'Variety / Error',t:'text',ph:'DDO, RPM…'},{f:'country',l:'Country',t:'text',ph:'USA'},{f:'type',l:'Type',t:'text',ph:'Kennedy Half'},{f:'weight',l:'Silver Weight (oz)',t:'number',ph:'0.773'},{f:'silverContent',l:'Silver Purity (0-1, e.g. 0.9 = 90%)',t:'number',ph:'0.9'},{f:'totalCoinWeight',l:'Total Coin Weight (g)',t:'number',ph:'26.73'},{f:'denomination',l:'Denomination',t:'text',ph:'$1'},{f:'grade',l:'Grade',t:'text',ph:'VF 20'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'Raw'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Numismatic Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
+  gradedUS:      [{f:'type',l:'Type',t:'text',ph:'Cent, Nickel…'},{f:'series',l:'Series',t:'text',ph:'Lincoln Cent'},{f:'year',l:'Year',t:'text',ph:'1921'},{f:'mint',l:'Mint Mark',t:'text',ph:'D, S, O…'},{f:'variety',l:'Variety / Error',t:'text',ph:'DDO, RPM…'},{f:'denomination',l:'Denomination',t:'text',ph:'$0.01'},{f:'serial',l:'Serial #',t:'text',ph:''},{f:'grade',l:'Grade',t:'text',ph:'MS 65'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'PCGS'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Numismatic Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
+  rawUS:         [{f:'type',l:'Type',t:'text',ph:'Cent, Nickel…'},{f:'series',l:'Series',t:'text',ph:'Lincoln Cent'},{f:'year',l:'Year',t:'text',ph:'1921'},{f:'mint',l:'Mint Mark',t:'text',ph:'D, S, O…'},{f:'variety',l:'Variety / Error',t:'text',ph:'DDO, RPM…'},{f:'denomination',l:'Denomination',t:'text',ph:'$0.01'},{f:'grade',l:'Grade',t:'text',ph:'VF 20'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'Raw'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Numismatic Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
+  gradedForeign: [{f:'country',l:'Country',t:'text',ph:'UK'},{f:'series',l:'Series',t:'text',ph:'Sovereign'},{f:'year',l:'Year',t:'text',ph:'1921'},{f:'mint',l:'Mint Mark',t:'text',ph:'D, S, O…'},{f:'variety',l:'Variety / Error',t:'text',ph:'DDO, RPM…'},{f:'denomination',l:'Denomination',t:'text',ph:'1 Pound'},{f:'grade',l:'Grade',t:'text',ph:'MS 63'},{f:'serial',l:'Serial #',t:'text',ph:''},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'NGC'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Numismatic Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
+  rawForeign:    [{f:'country',l:'Country',t:'text',ph:'UK'},{f:'series',l:'Series',t:'text',ph:'Sovereign'},{f:'year',l:'Year',t:'text',ph:'1921'},{f:'mint',l:'Mint Mark',t:'text',ph:'D, S, O…'},{f:'variety',l:'Variety / Error',t:'text',ph:'DDO, RPM…'},{f:'denomination',l:'Denomination',t:'text',ph:'1 Pound'},{f:'grade',l:'Grade',t:'text',ph:'VF 20'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'Raw'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Numismatic Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
+  usNotes:       [{f:'series',l:'Series',t:'text',ph:'1934A'},{f:'denomination',l:'Denomination',t:'text',ph:'$1'},{f:'noteType',l:'Note Type',t:'text',ph:'Federal Reserve Note, Silver Cert, Gold Cert, US Note, National…'},{f:'frNum',l:'Friedberg #',t:'text',ph:'Fr.1606'},{f:'signatures',l:'Signatures',t:'text',ph:'Tate / Mellon'},{f:'serial',l:'Serial #',t:'text',ph:''},{f:'blockLetter',l:'Block Letter',t:'text',ph:'B-A'},{f:'plate',l:'Plate Position',t:'text',ph:'A1, B2…'},{f:'sealColor',l:'Seal Color',t:'text',ph:'Blue, Green, Red, Brown'},{f:'frDistrict',l:'Federal Reserve District',t:'text',ph:'B2 / New York'},{f:'variety',l:'Variety',t:'text',ph:'Mule, Star, Web…'},{f:'charter',l:'Charter # (Nationals only)',t:'text',ph:'4321'},{f:'bankName',l:'Bank Name (Nationals)',t:'text',ph:'First National Bank of …'},{f:'city',l:'City (Nationals)',t:'text',ph:''},{f:'bankState',l:'State (Nationals)',t:'text',ph:'PA'},{f:'grade',l:'Grade',t:'text',ph:'VF 30 / CU 64'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'PMG, PCGS Banknote, raw…'},{f:'defects',l:'Defects',t:'text',ph:'Folds, pinholes, ink, tape…'},{f:'type',l:'Type (legacy)',t:'text',ph:'kept for backward compat'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Numismatic Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
+  confederate:   [{f:'state',l:'State/Issuer',t:'text',ph:'Confederate States'},{f:'series',l:'Type/Series',t:'text',ph:'T-68'},{f:'denomination',l:'Denomination',t:'text',ph:'$10'},{f:'criswell',l:'Criswell #',t:'text',ph:'Cr.540'},{f:'frNum',l:'Friedberg #',t:'text',ph:'Fr.CSA-68'},{f:'signatures',l:'Signatures',t:'text',ph:'Treasurer / Register'},{f:'serial',l:'Serial #',t:'text',ph:''},{f:'plate',l:'Plate Position',t:'text',ph:''},{f:'variety',l:'Variety',t:'text',ph:''},{f:'grade',l:'Grade',t:'text',ph:'VF 25'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'PMG'},{f:'defects',l:'Defects',t:'text',ph:'Folds, pinholes, repairs…'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Numismatic Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
+  obsolete:      [{f:'state',l:'State',t:'text',ph:'Georgia'},{f:'series',l:'Bank/Issuer',t:'text',ph:'Bank of Georgia'},{f:'denomination',l:'Denomination',t:'text',ph:'$5'},{f:'serial',l:'Serial #',t:'text',ph:''},{f:'signatures',l:'Signatures',t:'text',ph:'Cashier / President'},{f:'variety',l:'Variety',t:'text',ph:''},{f:'grade',l:'Grade',t:'text',ph:'Fine 12'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'PMG'},{f:'defects',l:'Defects',t:'text',ph:''},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Numismatic Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
+  foreignNotes:  [{f:'country',l:'Country',t:'text',ph:'Germany'},{f:'series',l:'Series',t:'text',ph:'Weimar Republic'},{f:'denomination',l:'Denomination',t:'text',ph:'1000 Mark'},{f:'pickNumber',l:'Pick # (P-#)',t:'text',ph:'P-75'},{f:'signatures',l:'Signatures',t:'text',ph:''},{f:'serial',l:'Serial #',t:'text',ph:''},{f:'variety',l:'Variety',t:'text',ph:''},{f:'grade',l:'Grade',t:'text',ph:'VF 30'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'PMG'},{f:'defects',l:'Defects',t:'text',ph:''},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Numismatic Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
+  fractional:    [{f:'denomination',l:'Denomination',t:'text',ph:'50 Cents'},{f:'series',l:'Issue',t:'text',ph:'5th Issue'},{f:'frNum',l:'Friedberg #',t:'text',ph:'Fr.1309'},{f:'signatures',l:'Signatures',t:'text',ph:'Colby / Spinner'},{f:'serial',l:'Serial #',t:'text',ph:''},{f:'variety',l:'Variety',t:'text',ph:''},{f:'grade',l:'Grade',t:'text',ph:'CH UNC 65'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'PMG'},{f:'defects',l:'Defects',t:'text',ph:''},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Numismatic Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
+  ancient:       [{f:'country',l:'Country/Empire',t:'text',ph:'Roman'},{f:'type',l:'Type',t:'text',ph:'Denarius'},{f:'series',l:'Emperor/Issuer',t:'text',ph:'Augustus'},{f:'year',l:'Year / Date',t:'text',ph:'c. 320 BC'},{f:'grade',l:'Grade',t:'text',ph:'VF'},{f:'serial',l:'Cert #',t:'text',ph:'optional'},{f:'gradingAuth',l:'Grading Auth',t:'text',ph:'NGC'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Numismatic Value ($)',t:'number',ph:'optional — numismatic / market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
+  other:         [{f:'country',l:'Country',t:'text',ph:'USA'},{f:'type',l:'Type',t:'text',ph:'Token, Medal…'},{f:'series',l:'Series',t:'text',ph:''},{f:'year',l:'Year / Date',t:'text',ph:'1900'},{f:'denomination',l:'Denomination',t:'text',ph:'optional'},{f:'grade',l:'Grade',t:'text',ph:'optional'},{f:'serial',l:'Serial #',t:'text',ph:'optional'},{f:'cost',l:'Cost ($)',t:'number',ph:'0.00'},{f:'value',l:'Value ($)',t:'number',ph:'optional — market value'},{f:'soldPrice',l:'Sold Price ($)',t:'number',ph:'if sold'},{f:'features',l:'Features',t:'text',ph:'optional'}],
 };
 
 const SHEET_LABELS = {
@@ -15928,7 +16045,13 @@ function _aiAddExtrasHtml(schema) {
     if (_sh) _twinSkipSet(ADD_FORM_STATE, _sh).forEach(function(k){ excl.add(k); });
   } catch (e) {}
   const keys = Object.keys(ADD_FORM_STATE).filter(function(k){
-    return !excl.has(k) && ADD_FORM_STATE[k] != null && ADD_FORM_STATE[k] !== '';
+    if (excl.has(k) || ADD_FORM_STATE[k] == null || ADD_FORM_STATE[k] === '') return false;
+    // v155: don't offer a numismatic value input for generic bullion
+    try {
+      const _sh2 = (typeof ADD_SHEET !== 'undefined' && ADD_SHEET) ? ADD_SHEET : null;
+      if (k === 'value' && _sh2 && _METAL_SHEETS_V.has(_sh2) && isGenericBullion(ADD_FORM_STATE)) return false;
+    } catch (e) {}
+    return true;
   });
   if (keys.length === 0) return '';
   return '<div style="margin-top:14px;background:rgba(139,92,246,.07);border:1px solid rgba(139,92,246,.3);border-radius:7px;padding:14px">'
@@ -16237,6 +16360,8 @@ async function submitAdd(){
     const _mk = [];
     Object.keys(ADD_FORM_STATE).forEach(function(k){
       if (_exclC.has(k)) return;
+      // v155: a stray numismatic value never rides onto generic bullion
+      if (k === 'value' && _METAL_SHEETS_V.has(sheet) && isGenericBullion(Object.assign({}, rec, ADD_FORM_STATE))) return;
       const v = ADD_FORM_STATE[k];
       if (v == null || v === '') return;
       if (rec[k] == null || rec[k] === '') { rec[k] = v; _mk.push(k); }
@@ -17182,7 +17307,9 @@ async function _aiMultiAdd() {
     const sc = parseFloat(r.silverContent);
     if (!isNaN(sc) && sc > 0) rec.silverContent = sc;
     const val = parseFloat(r.value);
-    if (!isNaN(val) && val > 0) rec.value = val;
+    // v155: value is numismatic — skip it when this coin is being filed
+    // into a metals sheet as generic bullion (melt rules there)
+    if (!isNaN(val) && val > 0 && !(_METAL_SHEETS_V.has(sheet) && isGenericBullion(rec))) rec.value = val;
     rec.aiSource = provider + ' (group scan)';
     rec.aiScanDate = today;
     rec.scanGroup = scanGroup;
@@ -18703,7 +18830,12 @@ async function aiApplyToForm() {
     ADD_FORM_STATE.gradingAuth = 'AI-Estimated';
   }
   if (r.estimatedValue && r.estimatedValue.mid) {
-    ADD_FORM_STATE.value = r.estimatedValue.mid;
+    // v155: an AI value estimate is a NUMISMATIC/market figure — it never
+    // lands on generic bullion (bars, rounds, nuggets), whose worth is melt.
+    const _vProbe = { type: r.type, series: r.series, description: r.features, features: r.features };
+    if (!(_METAL_SHEETS_V.has(ADD_SHEET) && isGenericBullion(_vProbe))) {
+      ADD_FORM_STATE.value = r.estimatedValue.mid;
+    }
   }
 
   closeAIScan();
